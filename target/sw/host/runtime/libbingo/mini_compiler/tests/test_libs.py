@@ -465,7 +465,7 @@ _pd, _, _rd = _chain(32, demand=Layout.D)
 check("demand() pins the chain's last layout",
       _rd.chosen.outputs["y"].layout == Layout.D, _rd.chosen.describe())
 refuses("a demand nothing can produce is refused",
-        lambda: _chain(32, demand=Layout.MONOID), "no set of realisations")
+        lambda: _chain(32, demand=Layout.SOFTMAX_STATS), "no set of realisations")
 
 # x_in_place IS A PROMISE ABOUT ANOTHER BLOCK, so it is never a knob the resolver turns.
 check("x_in_place is not among the realisations",

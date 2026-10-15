@@ -565,23 +565,24 @@ static inline uint32_t xdma_elementwise_add_run(
 //
 // For FlashAttention this is the cross-cluster epilogue. Each cluster holds its own
 // (m, l) for the same query rows, and combining them is the online-softmax merge --
-// m* = max m_c, l* = sum exp(m_c - m*) l_c -- which is precisely what
-// WRITER_JCT_MONOIDJUNCTION computes. The O numerators then fold with the SAME chain
-// under WRITER_JCT_ELEMENTWISEJUNCTION (ADD, FP32), after each cluster has rescaled
-// its O by exp(m_c - m*). Two gathers and one rescale replace a gather-then-reduce
-// that would move every partial to one cluster first.
+// m* = max m_c, l* = sum exp(a (m_c - m*)) l_c -- which is precisely what
+// WRITER_JCT_SOFTMAXSTATSJUNCTION computes (a in its CSR(1)). The O numerators then fold
+// with the SAME chain under WRITER_JCT_ELEMENTWISEJUNCTION (ADD, FP32), after each cluster
+// has rescaled its O by exp(a (m_c - m*)). Two gathers and one rescale replace a
+// gather-then-reduce that would move every partial to one cluster first.
 //
 // Three things here are not optional, each learned from a failure that looked like
 // something else. They are cheap; keep them.
 // ==========================================================================
 // ==========================================================================
-// Pack a FlashAttention (m, l) partial into the monoid junction's lane geometry.
+// Pack a FlashAttention (m, l) partial into the softmax-statistics junction's groups.
 //
-// Plain scalar work, deliberately: it runs on the xDMA core so that the gather that
-// consumes it is the very next thing that core does, with no cross-core handoff for 256
-// bytes. That core is rv32ima with NO FPU, so the FP16 -> FP32 widening is done on the
-// bit pattern. It is the whole reason this is a kernel and not two lines in the caller.
+// The arena's m and l are two FP16 vectors with other state between them; the junction
+// reads a group as the key beat m[0..31] followed by the value beat l[0..31]. Plain scalar
+// copying on the xDMA core, so the gather that consumes it is the very next thing that core
+// does, with no cross-core handoff for 128 bytes.
 // ==========================================================================
+// FP16 -> FP32 on the bit pattern, for the cores with no FPU.
 static inline uint32_t bingo_f16_to_f32_bits(uint16_t h)
 {
     uint32_t s = (uint32_t)(h >> 15) << 31;
@@ -607,6 +608,9 @@ static inline uint32_t bingo_f16_to_f32_bits(uint16_t h)
     return s | ((e + 112u) << 23) | (m << 13);   // 127 - 15 = 112
 }
 
+#define BINGO_SSJ_ROWS 32u            // rows of one softmax-statistics group
+#define BINGO_SSJ_IDENTITY 0xFBFFu    // the lowest finite FP16: the group's identity row
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_pack_fa_partial(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_pack_fa_partial_args_t);
@@ -617,36 +621,30 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_pack_fa_partial(void *arg)
                                                                  a->src_m_addr_lo);
     const uint16_t *src_l = (const uint16_t *)(uintptr_t)make_u64(a->src_l_addr_hi,
                                                                  a->src_l_addr_lo);
-    uint32_t *dst = (uint32_t *)(uintptr_t)make_u64(a->dst_addr_hi, a->dst_addr_lo);
-    uint32_t n_rows = a->n_rows, S = a->slots;
+    uint16_t *dst = (uint16_t *)(uintptr_t)make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    uint32_t n_rows = a->n_rows;
     bingo_kernel_scratchpad_t *sp =
         BINGO_GET_SP(arg, __snax_bingo_kernel_pack_fa_partial_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    // F = 2 fields, so the beat holds 2*S lanes and a 512b FP32 beat has 16 of them.
-    // A larger S would run one field's slots into the next field's lanes with no fault
-    // and no wrong-looking address -- just a fold of the wrong operands.
-    if (S == 0u || S > 8u || (S & (S - 1u)) != 0u || n_rows == 0u || (n_rows % S) != 0u) {
-        printf_safe("[Cluster %d Core %d]: Error! pack_fa_partial slots=%u must be a "
-                    "power of two in 1..8 and must divide n_rows=%u\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx(), S, n_rows);
+    // CSR(0)'s nValid is one number for every group of a transfer, so a partial of more
+    // than one group must fill each one.
+    if (n_rows == 0u || (n_rows > BINGO_SSJ_ROWS && (n_rows % BINGO_SSJ_ROWS) != 0u)) {
+        printf_safe("[Cluster %d Core %d]: Error! pack_fa_partial n_rows=%u must be 1..%u "
+                    "or a multiple of %u\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    n_rows, BINGO_SSJ_ROWS, BINGO_SSJ_ROWS);
         return BINGO_RET_FAIL;
     }
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-    const uint32_t LANES = 16u;              // FP32 lanes in one 512b beat
-    for (uint32_t beat = 0; beat < n_rows / S; beat++) {
-        uint32_t *out = dst + beat * LANES;
-        for (uint32_t j = 0; j < S; j++) {
-            uint32_t row = beat * S + j;
-            out[j]     = bingo_f16_to_f32_bits(src_m[row]);   // field 0: the key
-            out[S + j] = bingo_f16_to_f32_bits(src_l[row]);   // field 1: the exp twist
-        }
-        // Lanes past 2*S are never read at this geometry, but a gather folds whatever
-        // is in the beat if someone later widens S. Zero is the additive identity and
-        // -inf would be the max identity, so leave no junk to inherit.
-        for (uint32_t k = 2u * S; k < LANES; k++) {
-            out[k] = 0u;
+    const uint32_t groups = (n_rows + BINGO_SSJ_ROWS - 1u) / BINGO_SSJ_ROWS;
+    for (uint32_t g = 0; g < groups; g++) {
+        uint16_t *km = dst + g * 2u * BINGO_SSJ_ROWS;
+        uint16_t *vl = km + BINGO_SSJ_ROWS;
+        for (uint32_t r = 0; r < BINGO_SSJ_ROWS; r++) {
+            const uint32_t row = g * BINGO_SSJ_ROWS + r;
+            km[r] = row < n_rows ? src_m[row] : (uint16_t)BINGO_SSJ_IDENTITY;
+            vl[r] = row < n_rows ? src_l[row] : (uint16_t)BINGO_SSJ_IDENTITY;
         }
     }
     __asm__ volatile("" ::: "memory");
@@ -708,9 +706,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
     *(volatile uint32_t *)(uintptr_t)dst_addr = 0xDEADBEEFu;
     __asm__ volatile("fence" ::: "memory");
 
-    BINGO_XDMA_TRY(xdma_chain_gather_1d_full_address(local_src, chain, chain_num,
-                                                     a->size, (uint8_t)a->junction,
-                                                     a->jct_csr0),
+    uint32_t jct_csr[XDMA_DST_JCT_CSR_NUM] = {0};
+    jct_csr[0] = a->jct_csr0;
+    if (XDMA_DST_JCT_CSR_NUM > 1) jct_csr[1] = a->jct_csr1;
+    BINGO_XDMA_TRY(xdma_chain_gather_1d_full_address_csrs(local_src, chain, chain_num,
+                                                          a->size, (uint8_t)a->junction,
+                                                          jct_csr),
                    "xdma_chain_gather");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
@@ -781,7 +782,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
     // simply does not have them.
     (void)arg;
     printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather needs a writer junction "
-                "(HasElementwiseJunction / HasMonoidJunction) and this cfg has none\r\n",
+                "(HasElementwiseJunction / HasSoftmaxStatsJunction) and this cfg has none\r\n",
                 snrt_cluster_idx(), snrt_cluster_core_idx());
     return BINGO_RET_FAIL;
 }

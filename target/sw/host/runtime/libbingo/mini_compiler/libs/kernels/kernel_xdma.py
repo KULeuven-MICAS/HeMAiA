@@ -11,6 +11,8 @@ what it computes is programmed through one packed CSR word -- which is why those
 functions that build a number rather than classes."""
 
 from typing import Union, Dict
+
+import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 from bingo_helpers import _check_xdma_size_aligned
 
@@ -363,7 +365,7 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
 # named here by its C identifier and emitted verbatim rather than hardcoded to a number
 # that would silently shift if the cluster gained or lost a junction.
 XDMA_JCT_ELEMENTWISE = "WRITER_JCT_ELEMENTWISEJUNCTION"
-XDMA_JCT_MONOID = "WRITER_JCT_MONOIDJUNCTION"
+XDMA_JCT_SOFTMAX_STATS = "WRITER_JCT_SOFTMAXSTATSJUNCTION"
 
 # ElementwiseJunction CSR(0): [3:0] op, [6:4] fmt.
 XDMA_EWJCT_OP_ADD = 0
@@ -375,78 +377,59 @@ def xdma_ewjct_csr0(op=XDMA_EWJCT_OP_ADD, fmt=XDMA_EWJCT_FMT_FP32):
     return (fmt << 4) | op
 
 
-# MonoidJunction CSR(0)[14:12] transport format, from MonoidJunction.scala (FpHelpers.FMT_*).
-XDMA_MONOID_FMT_FP16 = 0
-XDMA_MONOID_FMT_BF16 = 1
-XDMA_MONOID_FMT_FP8  = 2
-XDMA_MONOID_FMT_FP32 = 3
+# SoftmaxStatsJunction (SoftmaxStatsJunction.scala): the online-softmax (m, l) merge
+#     m* = max(m_a, m_b)      l* = sum_k exp(scale * (m_k - m*)) * l_k
+# on GROUPS of two beats per operand stream -- the keys m[0..31], then the values l[0..31],
+# FP16, lane r = row r -- the form the SIMD softmax leaves its statistics in. The output is a
+# group of the same form, so a chain folds hop by hop.
+XDMA_SSJ_ROWS = 32              # rows of one group: FP16 lanes of a 512-bit beat
+XDMA_SSJ_GROUP_BYTES = 128      # a key beat and a value beat
+XDMA_SSJ_IDENTITY = 0xFBFF      # the lowest finite FP16: the identity key, and every lane of the identity beat
 
 
-def xdma_monoid_csr0(n_valid=8, n=1, n_exp=1, n_add=0, sigma=3, key_pol=0, key_mul=0,
-                     fmt=XDMA_MONOID_FMT_FP32):
-    """CSR(0) for the monoid junction -- a GEOMETRY word, not an operator id.
+def xdma_softmax_stats_csrs(n_valid, scale=1.0):
+    """(CSR(0), CSR(1)) for the softmax-statistics junction.
 
-        [7:0] nValid | [11:8] n | [14:12] fmt | [21:18] nExp | [25:22] nAdd
-        [27:26] sigma | [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+    CSR(0) [7:0] nValid: rows 0..nValid-1 of every group are folded, the others come out as
+    the identity row, key 0xFBFF and value 0. One number for every group of a transfer, so a partial of more than one
+    group must fill each one. CSR(1): the FP32 bits of `scale`, the factor that multiplies
+    the key difference before the exponential -- the softmax's own exp(scale * (s - m)) --
+    so the keys can be the raw running maxima. 1.0 is written as 0, which the junction reads
+    as 1.0. A scale that is negative, infinite or NaN, or nValid outside 1..32, raises the
+    junction's cfgerr (XDMA_JCT_STATUS bit 0)."""
+    if not 1 <= n_valid <= XDMA_SSJ_ROWS:
+        raise ValueError(f"softmax-statistics junction: nValid={n_valid} must be 1..{XDMA_SSJ_ROWS}")
+    if not (scale > 0 and np.isfinite(scale)):
+        raise ValueError(f"softmax-statistics junction: scale={scale} must be positive and finite")
+    bits = 0 if scale == 1.0 else int(np.array(scale, dtype=np.float32).view(np.uint32))
+    return n_valid & 0xFF, bits
 
-    `fmt` IS NOT OPTIONAL and its zero value is a trap. It is the TRANSPORT format the
-    junction slices a beat into -- 0 = FP16, 1 = BF16, 2 = FP8, 3 = FP32 -- and it was
-    added to the junction after this encoder was written. A word built before the field
-    existed has those bits zero, which names FP16: on the split cluster (elemWidth 16, so
-    32 lanes per beat) the fold then reads the FP32 partial as 32 FP16 lanes, folds the
-    wrong halves, and leaves the rest untouched.
-    MEASURED when that happened: every per-shard check PASSED and fa_ml_merged FAILED with
-    exactly 32 of 64 lanes reading 0x00000000, no watchdog. The default is FP32 because
-    that is what pack_fa_partial produces and what the cluster cfg says the gather carries.
 
-    Lanes are field-major, lane = field*S + slot with S = 1 << sigma, and nValid is how
-    many of those S slots carry real data (the rest are fed their field's identity).
-
-    The defaults are the online-softmax partial (m, l): key m plus ONE exp-twisted value
-    coordinate, so n=1 (F = n+1 = 2 fields) and nExp=1, nAdd=0.
-
-    sigma picks how many INDEPENDENT (m, l) pairs share a beat -- one per query row. A
-    512b beat holds 16 FP32 lanes and the geometry uses F*S of them, so S=8 (sigma=3) is
-    the largest legal choice and packs 8 query rows per beat: m at lanes 0..7, l at lanes
-    8..15. Br=32 rows is then 4 beats. The sweep app uses nValid=1 because it folds a
-    single scalar pair; FA folds a whole query tile, so it wants the full slot count --
-    at nValid=1 only row 0 would be folded and the other seven silently keep the
-    collector's own value.
-
-    This is NOT the old StreamMomentMergeRt encoding ((1<<13)|1); under this layout that
-    word decodes to n=0, sigma=0 -- a key-only geometry whose fold reads no value.
-    """
-    return ((n_valid & 0xFF) | ((n & 0xF) << 8) | ((fmt & 0x7) << 12) |
-            ((n_exp & 0xF) << 18) | ((n_add & 0xF) << 22) | ((sigma & 0x3) << 26) |
-            ((key_pol & 0x1) << 28) | ((key_mul & 0x1) << 29))
+def xdma_softmax_stats_groups(n_rows):
+    """Groups of a partial of `n_rows` rows (1..32, or a multiple of 32) and its nValid."""
+    if n_rows < 1 or (n_rows > XDMA_SSJ_ROWS and n_rows % XDMA_SSJ_ROWS):
+        raise ValueError(f"softmax-statistics partial: {n_rows} rows must be 1..{XDMA_SSJ_ROWS} "
+                         f"or a multiple of {XDMA_SSJ_ROWS} (nValid is one number a transfer)")
+    groups = -(-n_rows // XDMA_SSJ_ROWS)
+    return groups, min(n_rows, XDMA_SSJ_ROWS)
 
 
 class SnaxBingoKernelPackFaPartialArgs(BingoKernelArgs):
-    """Pack the softmax arena's (m, l) FP16 beats into the monoid's FP32 lane geometry.
-
-    `slots` must equal the S the gather's monoid CSR(0) was built with, or the fold reads
-    lanes the pack never wrote. Keep them derived from one place -- see
-    xdma_monoid_csr0().
-    """
+    """Copy the softmax arena's (m, l) FP16 vectors into the softmax-statistics junction's
+    groups (key beat, then value beat, 32 rows a group, rows past n_rows the identity)."""
 
     def __init__(self, src_m: Union[BingoMemAlloc, int], src_l: Union[BingoMemAlloc, int],
-                 dst: Union[BingoMemAlloc, int], n_rows: int, slots: int = 8):
-        if slots not in (1, 2, 4, 8):
-            raise ValueError(f"pack_fa_partial: slots={slots} must be 1, 2, 4 or 8 "
-                             "(two fields must fit the beat's 16 FP32 lanes).")
-        if n_rows % slots:
-            raise ValueError(f"pack_fa_partial: n_rows={n_rows} must be a multiple of "
-                             f"slots={slots}.")
+                 dst: Union[BingoMemAlloc, int], n_rows: int):
+        xdma_softmax_stats_groups(n_rows)
         self.src_m = src_m
         self.src_l = src_l
         self.dst = dst
         self.n_rows = n_rows
-        self.slots = slots
 
     @staticmethod
-    def packed_bytes(n_rows: int, slots: int = 8) -> int:
+    def packed_bytes(n_rows: int) -> int:
         """Size of the packed partial -- what the gather transfers per cluster."""
-        return (n_rows // slots) * 64
+        return xdma_softmax_stats_groups(n_rows)[0] * XDMA_SSJ_GROUP_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_pack_fa_partial_args_t"
@@ -457,7 +440,6 @@ class SnaxBingoKernelPackFaPartialArgs(BingoKernelArgs):
         self._process_addr(self.src_l, "src_l_addr", a, handle_name_map)
         self._process_addr(self.dst, "dst_addr", a, handle_name_map)
         a["n_rows"] = str(self.n_rows)
-        a["slots"] = str(self.slots)
         return a
 
 
@@ -466,7 +448,8 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
     CHAIN_MAX = 16
 
     def __init__(self, local_src: Union[BingoMemAlloc, int], chain: list,
-                 size: int, junction: str, jct_csr0: int, hops: list | None = None):
+                 size: int, junction: str, jct_csr0: int, hops: list | None = None,
+                 jct_csr1: int = 0):
         """`hops`: the (chiplet, cluster) whose xDMA each chain entry reaches, in chain order.
         Needed when the entries are address expressions; an L1 BingoMemAlloc entry (or a view
         of one) names its own. The compiler orders gathers that would meet as middle hops on
@@ -483,6 +466,7 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         self.size = size
         self.junction = junction
         self.jct_csr0 = jct_csr0
+        self.jct_csr1 = jct_csr1
         self.hops = [tuple(h) for h in hops] if hops is not None else None
 
     def get_struct_name(self) -> str:
@@ -502,6 +486,7 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         a["size"] = str(self.size)
         a["junction"] = self.junction
         a["jct_csr0"] = f"0x{self.jct_csr0:08x}u"
+        a["jct_csr1"] = f"0x{self.jct_csr1:08x}u"
         return a
 
 

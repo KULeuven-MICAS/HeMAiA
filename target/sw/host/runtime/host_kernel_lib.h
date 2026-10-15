@@ -183,22 +183,6 @@ static inline uint64_t __host_bingo_kernel_chip_barrier(void *arg){
     return BINGO_RET_SUCC;
 }
 
-// exp(x) for x <= 0, single precision: 2^(x log2 e) split into 2^n (the exponent field) and
-// 2^f, f in [0, 1), by a degree-5 polynomial. The fold below only needs non-positive
-// arguments (m_p - max m), so there is no overflow path.
-static inline float bingo_host_expf_nonpos(float x){
-    if (x < -87.0f) return 0.0f;
-    float t = x * 1.4426950408889634f;
-    int32_t n = (int32_t)t;
-    if ((float)n > t) n--;
-    float f = t - (float)n;
-    float p = 1.0f + f * (0.69314718f + f * (0.24022651f + f * (0.05550411f +
-              f * (0.00961813f + f * 0.00133336f))));
-    union { float f; uint32_t u; } s;
-    s.u = (uint32_t)(n + 127) << 23;
-    return p * s.f;
-}
-
 static inline float bingo_host_as_f32(uint32_t u){
     union { uint32_t u; float f; } v;
     v.u = u;
@@ -211,11 +195,112 @@ static inline uint32_t bingo_host_as_u32(float f){
     return v.u;
 }
 
+// The softmax-statistics fold below repeats SoftmaxStatsJunction's arithmetic one IEEE
+// operation at a time, so each FP step is one instruction with a static round-to-nearest-even:
+// the build's -ffast-math lets the compiler reassociate or contract plain float expressions,
+// and the magic-number round in bingo_host_ssj_exp depends on neither happening.
+static inline float bingo_host_fadd_rne(float a, float b){
+    float r;
+    asm("fadd.s %0, %1, %2, rne" : "=f"(r) : "f"(a), "f"(b));
+    return r;
+}
+
+static inline float bingo_host_fmul_rne(float a, float b){
+    float r;
+    asm("fmul.s %0, %1, %2, rne" : "=f"(r) : "f"(a), "f"(b));
+    return r;
+}
+
+static inline float bingo_host_fmadd_rne(float a, float b, float c){
+    float r;
+    asm("fmadd.s %0, %1, %2, %3, rne" : "=f"(r) : "f"(a), "f"(b), "f"(c));
+    return r;
+}
+
+// FpHelpers.fp32aWins: a >= b, compared on the FP32 bit patterns (a tie keeps a).
+static inline int bingo_host_f32_a_wins(uint32_t a, uint32_t b){
+    const uint32_t sa = a >> 31, sb = b >> 31;
+    return sa != sb ? !sa : (sa ? b >= a : a >= b);
+}
+
+// 2^(i/128) as FP32 bits: FpActivation's exponential table at the junction's depth (expLutN).
+static const uint32_t bingo_host_ssj_exp_lut[128] = {
+    0x3F800000u, 0x3F80B1EDu, 0x3F8164D2u, 0x3F8218AFu, 0x3F82CD87u, 0x3F838359u,
+    0x3F843A29u, 0x3F84F1F6u, 0x3F85AAC3u, 0x3F866491u, 0x3F871F62u, 0x3F87DB35u,
+    0x3F88980Fu, 0x3F8955EEu, 0x3F8A14D5u, 0x3F8AD4C6u, 0x3F8B95C2u, 0x3F8C57CAu,
+    0x3F8D1ADFu, 0x3F8DDF04u, 0x3F8EA43Au, 0x3F8F6A81u, 0x3F9031DCu, 0x3F90FA4Du,
+    0x3F91C3D3u, 0x3F928E72u, 0x3F935A2Bu, 0x3F9426FFu, 0x3F94F4F0u, 0x3F95C3FFu,
+    0x3F96942Du, 0x3F97657Du, 0x3F9837F0u, 0x3F990B88u, 0x3F99E046u, 0x3F9AB62Bu,
+    0x3F9B8D3Au, 0x3F9C6573u, 0x3F9D3EDAu, 0x3F9E196Eu, 0x3F9EF532u, 0x3F9FD228u,
+    0x3FA0B051u, 0x3FA18FAFu, 0x3FA27043u, 0x3FA3520Fu, 0x3FA43516u, 0x3FA51958u,
+    0x3FA5FED7u, 0x3FA6E595u, 0x3FA7CD94u, 0x3FA8B6D5u, 0x3FA9A15Bu, 0x3FAA8D26u,
+    0x3FAB7A3Au, 0x3FAC6897u, 0x3FAD583Fu, 0x3FAE4934u, 0x3FAF3B79u, 0x3FB02F0Eu,
+    0x3FB123F6u, 0x3FB21A32u, 0x3FB311C4u, 0x3FB40AAFu, 0x3FB504F3u, 0x3FB60094u,
+    0x3FB6FD92u, 0x3FB7FBF0u, 0x3FB8FBAFu, 0x3FB9FCD2u, 0x3FBAFF5Bu, 0x3FBC034Au,
+    0x3FBD08A4u, 0x3FBE0F68u, 0x3FBF179Au, 0x3FC0213Bu, 0x3FC12C4Du, 0x3FC238D2u,
+    0x3FC346CDu, 0x3FC4563Fu, 0x3FC5672Au, 0x3FC67991u, 0x3FC78D75u, 0x3FC8A2D8u,
+    0x3FC9B9BEu, 0x3FCAD226u, 0x3FCBEC15u, 0x3FCD078Cu, 0x3FCE248Cu, 0x3FCF4319u,
+    0x3FD06334u, 0x3FD184DFu, 0x3FD2A81Eu, 0x3FD3CCF1u, 0x3FD4F35Bu, 0x3FD61B5Eu,
+    0x3FD744FDu, 0x3FD87039u, 0x3FD99D16u, 0x3FDACB94u, 0x3FDBFBB8u, 0x3FDD2D82u,
+    0x3FDE60F5u, 0x3FDF9613u, 0x3FE0CCDFu, 0x3FE2055Bu, 0x3FE33F89u, 0x3FE47B6Du,
+    0x3FE5B907u, 0x3FE6F85Bu, 0x3FE8396Au, 0x3FE97C38u, 0x3FEAC0C7u, 0x3FEC0719u,
+    0x3FED4F30u, 0x3FEE9910u, 0x3FEFE4BAu, 0x3FF13231u, 0x3FF28177u, 0x3FF3D290u,
+    0x3FF5257Du, 0x3FF67A41u, 0x3FF7D0DFu, 0x3FF9295Au, 0x3FFA83B3u, 0x3FFBDFEDu,
+    0x3FFD3E0Cu, 0x3FFE9E11u,
+};
+
+// FpActivation's EXP, bit for bit: x clamped to +-88.376, s0 = x * 128 log2(e) (an FMA with
+// +0), split by the 1.5 * 2^23 magic add into the nearest integer i and frac = s0 - i, then
+// table[i mod 128] * (1 + frac * ln2 / 128) * 2^(i div 128), the power 0 below 2^-127.
+static inline float bingo_host_ssj_exp(float x){
+    const uint32_t hi_e = 0x42B0C0A5u, lo_e = 0xC2B0C0A5u, magic = 0x4B400000u;
+    uint32_t u = bingo_host_as_u32(x);
+    if (bingo_host_f32_a_wins(u, hi_e)) u = hi_e;
+    if (!bingo_host_f32_a_wins(u, lo_e)) u = lo_e;
+    const float s0 = bingo_host_fmadd_rne(bingo_host_as_f32(u), bingo_host_as_f32(0x4338AA3Bu),
+                                          bingo_host_as_f32(0u));
+    const float rm = bingo_host_fadd_rne(s0, bingo_host_as_f32(magic));
+    const float rnd = bingo_host_fadd_rne(rm, bingo_host_as_f32(magic | 0x80000000u));
+    const float frac = bingo_host_fadd_rne(s0, bingo_host_as_f32(bingo_host_as_u32(rnd) ^
+                                                                 0x80000000u));
+    const int32_t im = (int32_t)bingo_host_as_u32(rm) - (int32_t)magic;
+    const float interp = bingo_host_fmadd_rne(frac, bingo_host_as_f32(0x3BB17218u),
+                                              bingo_host_as_f32(0x3F800000u));
+    const float r3 = bingo_host_fmul_rne(bingo_host_as_f32(bingo_host_ssj_exp_lut[im & 127]),
+                                         interp);
+    const int32_t ne = im >> 7;
+    const uint32_t pow2 = ne < -127 ? 0u : ((uint32_t)(ne + 127) & 0xFFu) << 23;
+    return bingo_host_fmul_rne(r3, bingo_host_as_f32(pow2));
+}
+
+static inline uint16_t __bingo_host_f32_to_f16bits(float f);
+
+// One SoftmaxStatsJunction hop on one row, FP16 bits in and out, (ma, la) operand A: the
+// larger key kept exactly; delta = loser - winner in FP32 (0 for the NaN of two equal infinite
+// keys), times scale; l = fma(l_loser, exp(delta), l_winner) in FP32, or l_winner where l_loser
+// is +0; l rounded to FP16 (nearest even). -> m* | l* << 16.
+static inline uint32_t bingo_host_ssj_hop(uint16_t ma, uint16_t la, uint16_t mb, uint16_t lb,
+                                          float scale){
+    const uint32_t ka = bingo_host_as_u32(__bingo_fp16_to_fp32(ma));
+    const uint32_t kb = bingo_host_as_u32(__bingo_fp16_to_fp32(mb));
+    const int aw = bingo_host_f32_a_wins(ka, kb);
+    uint32_t d = bingo_host_as_u32(bingo_host_fadd_rne(bingo_host_as_f32(aw ? kb : ka),
+                                                       bingo_host_as_f32((aw ? ka : kb) ^
+                                                                         0x80000000u)));
+    if ((d & 0x7F800000u) == 0x7F800000u && (d & 0x7FFFFFu)) d = 0u;
+    const float alpha = bingo_host_ssj_exp(bingo_host_fmul_rne(bingo_host_as_f32(d), scale));
+    const float los = __bingo_fp16_to_fp32(aw ? lb : la);
+    const float win = __bingo_fp16_to_fp32(aw ? la : lb);
+    const float l = bingo_host_as_u32(los) == 0u ? win : bingo_host_fmadd_rne(los, alpha, win);
+    return (uint32_t)(aw ? ma : mb) | ((uint32_t)__bingo_host_f32_to_f16bits(l) << 16);
+}
+
 // Fold on the host core (host_kernel_args.h, __host_bingo_kernel_fold_args): n_parts
-// partials of part_bytes each, back to back at src, folded into dst, 64 B beat by beat.
-// The cluster cores have no FPU, so this is where a fold of floats runs when no xDMA writer
-// junction does it. The fence first: the partials were written by a DMA, which the
-// write-through D-cache does not snoop, and a plain fence flushes and invalidates it.
+// partials of part_bytes each, back to back at src, folded into dst, 64 B beat (TOPK) or
+// 128 B group (SOFTMAX_STATS) at a time. The cluster cores have no FPU, so this is where a
+// fold of floats runs when no xDMA writer junction does it. The fence first: the partials
+// were written by a DMA, which the write-through D-cache does not snoop, and a plain fence
+// flushes and invalidates it.
 static inline uint64_t __host_bingo_kernel_fold(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t op         = ((uint64_t *)arg)[0];
@@ -223,14 +308,16 @@ static inline uint64_t __host_bingo_kernel_fold(void *arg){
     uint64_t n_parts    = ((uint64_t *)arg)[2];
     uint64_t part_bytes = ((uint64_t *)arg)[3];
     uint32_t* dst       = (uint32_t*)(uintptr_t)(((uint64_t *)arg)[4]);
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
+    uint64_t n_valid    = ((uint64_t *)arg)[5];
+    uint32_t scale_bits = (uint32_t)((uint64_t *)arg)[6];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[7];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     asm volatile("fence" ::: "memory");
     uint64_t words = part_bytes / 4;
-    for (uint64_t b = 0; b < part_bytes / 64; b++) {
-        const uint32_t* p0 = src + b * 16;
-        uint32_t* o = dst + b * 16;
-        if (op == BINGO_HOST_FOLD_TOPK) {
+    if (op == BINGO_HOST_FOLD_TOPK) {
+        for (uint64_t b = 0; b < part_bytes / 64; b++) {
+            const uint32_t* p0 = src + b * 16;
+            uint32_t* o = dst + b * 16;
             // two descending lists of 8 merge into the 8 largest of their union
             float bv[8];
             uint32_t bi[8];
@@ -248,22 +335,28 @@ static inline uint64_t __host_bingo_kernel_fold(void *arg){
                 for (int j = 0; j < 8; j++) { bv[j] = mv[j]; bi[j] = mi[j]; }
             }
             for (int j = 0; j < 8; j++) { o[j] = bingo_host_as_u32(bv[j]); o[8 + j] = bi[j]; }
-        } else {
-            // per query row r: m* = max m_p, l* = sum l_p exp(m_p - m*)
-            for (int r = 0; r < 8; r++) {
-                float m = bingo_host_as_f32(p0[r]);
-                for (uint64_t q = 1; q < n_parts; q++) {
-                    float mq = bingo_host_as_f32(src[q * words + b * 16 + r]);
-                    if (mq > m) m = mq;
+        }
+    } else {
+        // per group, per row r below n_valid: part 0's (m, l), then each later part folded
+        // into it as one junction hop with the running result as operand A
+        const uint16_t* s16 = (const uint16_t*)src;
+        uint16_t* o16 = (uint16_t*)dst;
+        const float scale = bingo_host_as_f32(scale_bits ? scale_bits : 0x3F800000u);
+        for (uint64_t g = 0; g < part_bytes / 128; g++) {
+            for (uint32_t r = 0; r < 32; r++) {
+                uint16_t m = 0xFBFFu, l = 0u;
+                if (r < n_valid) {
+                    m = s16[g * 64 + r];
+                    l = s16[g * 64 + 32 + r];
+                    for (uint64_t q = 1; q < n_parts; q++) {
+                        const uint16_t* pq = s16 + q * (part_bytes / 2) + g * 64;
+                        const uint32_t ml = bingo_host_ssj_hop(m, l, pq[r], pq[32 + r], scale);
+                        m = (uint16_t)ml;
+                        l = (uint16_t)(ml >> 16);
+                    }
                 }
-                float l = 0.0f;
-                for (uint64_t q = 0; q < n_parts; q++) {
-                    float mq = bingo_host_as_f32(src[q * words + b * 16 + r]);
-                    float lq = bingo_host_as_f32(src[q * words + b * 16 + 8 + r]);
-                    l += lq * bingo_host_expf_nonpos(mq - m);
-                }
-                o[r] = bingo_host_as_u32(m);
-                o[8 + r] = bingo_host_as_u32(l);
+                o16[g * 64 + r] = m;
+                o16[g * 64 + 32 + r] = l;
             }
         }
     }
@@ -597,6 +690,125 @@ typedef struct {
 #define WEIGHT_PREFETCH_ROUTED  1u
 #define WEIGHT_PREFETCH_TRAILER 2u
 
+// WEIGHT_PREFETCH_PROFILE (a build flag, default 0): the prefetcher counts its host cycles by what
+// it is doing and prints them after each quarter of its chunks, one "[WPF]" line a chip. The
+// buckets: picking the next run; for the flag and for the data launch, the register writes up to
+// the read-back (WR) and the launching read of next_id (GO), which returns once the engine takes
+// the transfer and so includes waiting for it to finish the previous one; polling with nothing
+// to push (IDLE). Register launches only. A line takes the UART ~100 us of simulated time, during
+// which this prefetcher pushes nothing: only the first quarter's counts are undisturbed.
+//
+// WEIGHT_PREFETCH_LEAN (a build flag, default 0): cheaper launches and picks.
+//   - A launch writes only the registers that change: the low words of the source and the length,
+//     then the destination's low word LAST, and reads that back as the witness that they all
+//     landed (writes to one engine land in order). Consecutive launches never share a destination
+//     (the next run of a ring starts at a later slot, another ring or the flags are elsewhere), so
+//     the length needs no clearing after the launch. The high words and the configuration are
+//     written by the first launch, the full sys_dma_engine_memcpy, and again only when they change.
+//   - A ring's next run, once found pushable, is kept until it is launched: its shape depends only
+//     on where the ring stands and on the schedule, and slots that are free stay free, so the
+//     schedule (in L3, not cached) is read again only for the ring that just launched.
+#ifndef WEIGHT_PREFETCH_PROFILE
+#define WEIGHT_PREFETCH_PROFILE 0
+#endif
+#ifndef WEIGHT_PREFETCH_LEAN
+#define WEIGHT_PREFETCH_LEAN 0
+#endif
+#if WEIGHT_PREFETCH_PROFILE
+enum { WP_PICK, WP_FLAG_WR, WP_FLAG_GO, WP_DATA_WR, WP_DATA_GO, WP_IDLE, WP_N };
+
+static inline uint64_t weight_prefetch_cycles(void) {
+    uint64_t r;
+    asm volatile("csrr %0, mcycle" : "=r"(r));
+    return r;
+}
+
+static inline void weight_prefetch_tick(uint64_t *p, int b, uint64_t *t) {
+    const uint64_t u = weight_prefetch_cycles();
+    p[b] += u - *t;
+    *t = u;
+}
+#define WP_TIMED(b) weight_prefetch_tick(p, (b), t)
+#else
+#define WP_TIMED(b) do { } while (0)
+#endif
+
+#if WEIGHT_PREFETCH_PROFILE || WEIGHT_PREFETCH_LEAN
+// The register words a lean launch leaves standing in the engine (valid once `set`).
+typedef struct {
+    uint32_t src_hi, dst_hi, len_hi, set;
+} weight_prefetch_regs_t;
+
+// One register launch: sys_dma_engine_memcpy, or the lean launch above; with the profile, the
+// writes up to the read-back are timed into p[wr] and the launching read into p[wr + 1].
+static inline void weight_prefetch_launch(uint8_t chip_id, uint32_t engine, uint64_t dst,
+                                          uint64_t src, uint64_t size,
+                                          weight_prefetch_regs_t *regs, uint64_t *p, int wr,
+                                          uint64_t *t) {
+    (void)regs; (void)p; (void)wr; (void)t;
+    volatile uint32_t *dst_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_DST_ADDR);
+    volatile uint32_t *src_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_SRC_ADDR);
+    volatile uint32_t *len_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_LENGTH_ADDR);
+#if WEIGHT_PREFETCH_LEAN
+    if (regs->set) {
+        if (regs->src_hi != (uint32_t)(src >> 32)) {
+            regs->src_hi = (uint32_t)(src >> 32);
+            src_ptr[1] = regs->src_hi;
+        }
+        if (regs->dst_hi != (uint32_t)(dst >> 32)) {
+            regs->dst_hi = (uint32_t)(dst >> 32);
+            dst_ptr[1] = regs->dst_hi;
+        }
+        if (regs->len_hi != (uint32_t)(size >> 32)) {
+            regs->len_hi = (uint32_t)(size >> 32);
+            len_ptr[1] = regs->len_hi;
+        }
+        src_ptr[0] = (uint32_t)src;
+        len_ptr[0] = (uint32_t)size;
+        dst_ptr[0] = (uint32_t)dst;
+        asm volatile("fence" ::: "memory");
+        while (dst_ptr[0] != (uint32_t)dst) {
+        }
+        WP_TIMED(wr);
+        (void)*sys_dma_engine_reg(chip_id, engine, IDMA_NEXTID_ADDR);
+        WP_TIMED(wr + 1);
+        return;
+    }
+    regs->src_hi = (uint32_t)(src >> 32);
+    regs->dst_hi = (uint32_t)(dst >> 32);
+    regs->len_hi = (uint32_t)(size >> 32);
+    regs->set = 1;
+#endif
+    dst_ptr[0] = (uint32_t)dst;
+    dst_ptr[1] = (uint32_t)(dst >> 32);
+    src_ptr[0] = (uint32_t)src;
+    src_ptr[1] = (uint32_t)(src >> 32);
+    len_ptr[1] = (uint32_t)(size >> 32);
+    *sys_dma_engine_reg(chip_id, engine, IDMA_CONF_ADDR) = IDMA_CONF_AXI_MEMCPY;
+    len_ptr[0] = (uint32_t)size;
+    asm volatile("fence" ::: "memory");
+    while (len_ptr[0] != (uint32_t)size) {
+    }
+    WP_TIMED(wr);
+    (void)*sys_dma_engine_reg(chip_id, engine, IDMA_NEXTID_ADDR);
+    len_ptr[0] = 0;
+    WP_TIMED(wr + 1);
+}
+#endif
+
+#if WEIGHT_PREFETCH_PROFILE
+#define WP_TICK(b) weight_prefetch_tick(wp, (b), &wp_t)
+#define WP_LAUNCH(dst, src, size, wr) \
+    weight_prefetch_launch(mem, eng, (dst), (src), (size), &wp_regs, wp, (wr), &wp_t)
+#elif WEIGHT_PREFETCH_LEAN
+#define WP_TICK(b) do { } while (0)
+#define WP_LAUNCH(dst, src, size, wr) \
+    weight_prefetch_launch(mem, eng, (dst), (src), (size), &wp_regs, 0, 0, 0)
+#else
+#define WP_TICK(b) do { } while (0)
+#define WP_LAUNCH(dst, src, size, wr) (void)sys_dma_engine_memcpy(mem, eng, (dst), (src), (size))
+#endif
+
 // The next run of ring r, or m = 0 if it cannot be pushed now.
 static inline weight_prefetch_run_t weight_prefetch_run_of(
     const __host_bingo_kernel_weight_prefetch_args_t *a, const volatile uint64_t *sched,
@@ -691,6 +903,21 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
     weight_prefetch_run_t cur = {-1, 0, 0, 0, 0};
     if (queued) sys_dma_engine_queue_enable(mem, eng);
+#if WEIGHT_PREFETCH_PROFILE || WEIGHT_PREFETCH_LEAN
+    weight_prefetch_regs_t wp_regs = {0, 0, 0, 0};
+#endif
+#if WEIGHT_PREFETCH_LEAN
+    // per ring, its next run once found pushable (cand_ok), kept until it is launched
+    weight_prefetch_run_t cand[4];
+    int cand_ok[4] = {0, 0, 0, 0};
+#endif
+#if WEIGHT_PREFETCH_PROFILE
+    // cycles by bucket; runs launched and the chosen rings' pushed-but-unread chunks summed
+    uint64_t wp[WP_N], wp_runs = 0, wp_occ = 0, wp_mark = 1;
+    for (int b = 0; b < WP_N; b++) wp[b] = 0;
+    const uint64_t wp_total = left, wp_t0 = weight_prefetch_cycles();
+    uint64_t wp_t = wp_t0;
+#endif
     while (left) {
         // Pick the next run from fresh release words (between the current run's data launch
         // and its flag launch, so the pick overlaps the data on the link).
@@ -707,9 +934,18 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
         for (uint64_t i = 0; i < nr; i++) {
             const uint64_t r = (turn + i) % nr;
             if (pos[r] >= n[r]) continue;
+#if WEIGHT_PREFETCH_LEAN
+            if (!cand_ok[r]) {
+                cand[r] = weight_prefetch_run_of(a, sched, r, pos[r], n[r], first[r], cons[r],
+                                                 batch, batch_routed, &rec_ready);
+                cand_ok[r] = cand[r].m != 0;
+            }
+            const weight_prefetch_run_t run = cand[r];
+#else
             weight_prefetch_run_t run =
                 weight_prefetch_run_of(a, sched, r, pos[r], n[r], first[r], cons[r], batch,
                                        batch_routed, &rec_ready);
+#endif
             if (run.m == 0) continue;
             if (best.ring < 0 ||
                 (policy == 1 && pos[r] - cons[r] < pos[best.ring] - cons[best.ring])) {
@@ -723,12 +959,14 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
             cur.ring = -1;
         } else if (cur.ring >= 0) {
             const uint64_t r = (uint64_t)cur.ring, k0 = pos[r] - cur.m, s0 = k0 % ns;
-            sys_dma_engine_memcpy(mem, eng, a->flag_addr + (r * ns + s0) * 64,
-                                  a->seq_addr + (k0 + 1) * 64, 64 * cur.m);
+            WP_TICK(WP_PICK);
+            WP_LAUNCH(a->flag_addr + (r * ns + s0) * 64, a->seq_addr + (k0 + 1) * 64, 64 * cur.m,
+                      WP_FLAG_WR);
             cur.ring = -1;
         }
         if (best.ring < 0) {
             for (int i = 0; i < 32; i++) asm volatile("nop");
+            WP_TICK(WP_IDLE);
             continue;
         }
         const uint64_t r = (uint64_t)best.ring, s0 = pos[r] % ns;
@@ -761,23 +999,49 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
                 infl_val[t] = pos[r] + best.m;
                 infl_n++;
             }
+#if WEIGHT_PREFETCH_LEAN
+            cand_ok[r] = 0;
+#endif
             pos[r] += best.m;
             left -= best.m;
             turn = (r + 1) % nr;
             continue;
         }
         // The next run's data, at once: the link is idle again after the flags.
-        sys_dma_engine_memcpy(mem, eng, a->ring_addr + (r * ns + s0) * sb, best.src, best.bytes);
+        WP_TICK(WP_PICK);
+#if WEIGHT_PREFETCH_PROFILE
+        wp_runs++;
+        wp_occ += pos[r] - cons[r];
+#endif
+        WP_LAUNCH(a->ring_addr + (r * ns + s0) * sb, best.src, best.bytes, WP_DATA_WR);
+#if WEIGHT_PREFETCH_LEAN
+        cand_ok[r] = 0;
+#endif
         pos[r] += best.m;
         left -= best.m;
         turn = (r + 1) % nr;
         cur = best;
+#if WEIGHT_PREFETCH_PROFILE
+        if ((wp_total - left) * 4 >= wp_mark * wp_total) {
+            printf_safe("[WPF] chip %x eng %u q%lu chunks %lu runs %lu occ_x100 %lu cyc %lu pick %lu "
+                        "flag_wr %lu flag_go %lu data_wr %lu data_go %lu idle %lu\r\n",
+                        get_current_chip_id(), eng, wp_mark, wp_total - left, wp_runs,
+                        wp_runs ? 100 * wp_occ / wp_runs : 0, wp_t - wp_t0, wp[WP_PICK],
+                        wp[WP_FLAG_WR], wp[WP_FLAG_GO], wp[WP_DATA_WR], wp[WP_DATA_GO], wp[WP_IDLE]);
+            wp_mark++;
+            wp_t = weight_prefetch_cycles();    // the print is not the prefetcher's time
+        }
+#endif
     }
     if (cur.ring >= 0 && !(cur.kind & WEIGHT_PREFETCH_TRAILER)) {   // the last run's flags
         const uint64_t r = (uint64_t)cur.ring, k0 = pos[r] - cur.m, s0 = k0 % ns;
-        sys_dma_engine_memcpy(mem, eng, a->flag_addr + (r * ns + s0) * 64,
-                              a->seq_addr + (k0 + 1) * 64, 64 * cur.m);
+        WP_LAUNCH(a->flag_addr + (r * ns + s0) * 64, a->seq_addr + (k0 + 1) * 64, 64 * cur.m,
+                  WP_FLAG_WR);
     }
+#if WEIGHT_PREFETCH_LEAN
+    // a later sys_dma_engine_memcpy of the same length must not pass its read-back on a stale value
+    if (wp_regs.set) *sys_dma_engine_reg(mem, eng, IDMA_LENGTH_ADDR) = 0;
+#endif
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
     return BINGO_RET_SUCC;
 }

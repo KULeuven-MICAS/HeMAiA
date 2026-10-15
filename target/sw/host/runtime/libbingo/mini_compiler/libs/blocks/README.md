@@ -166,11 +166,11 @@ l* = sum_c exp(m_c - m*) * l_c
 O* = sum_c exp(m_c - m*) * O_c
 ```
 
-`fa_gather` does the **first two**, in the fabric, as the partials cross the monoid
-junction. `O` is left as `o_c{c}`, still scaled by that cluster's own `m_c`; applying the
-third line is the caller's, using the `m*` the fold returns. Reading `o_c{c}` as final
-gives an answer wrong by a per-cluster exponential — and where the maxima are close, wrong
-by little enough to look plausible.
+`fa_gather` does the **first two**, in the fabric, as the partials cross the
+softmax-statistics junction. `O` is left as `o_c{c}`, still scaled by that cluster's own
+`m_c`; applying the third line is the caller's, using the `m*` the fold returns. Reading
+`o_c{c}` as final gives an answer wrong by a per-cluster exponential — and where the maxima
+are close, wrong by little enough to look plausible.
 
 ## Why the gather is not a block
 

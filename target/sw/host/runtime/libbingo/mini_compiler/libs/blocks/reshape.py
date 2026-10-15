@@ -34,9 +34,10 @@ from ..comm.variant import free_fields
 
 _ELEM_BYTES = {DType.I8: 1, DType.F16: 2, DType.F32: 4, DType.I32: 4}
 
-# What a reshape may be asked to convert between. d32 and monoid are left out on purpose:
-# they are the D port's int32 scatter and the junction's lane geometry, neither of which is
-# reached by a strided nest, and offering them would only fill the search with refusals.
+# What a reshape may be asked to convert between. d32 and softmax_stats are left out on
+# purpose: they are the D port's int32 scatter and the junction's (m, l) group, neither of
+# which is reached by a strided nest, and offering them would only fill the search with
+# refusals.
 _CONVERTIBLE = (Layout.ROW_MAJOR, Layout.COL_MAJOR, Layout.A, Layout.B, Layout.D)
 
 

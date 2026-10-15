@@ -88,19 +88,26 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_chip_barrier_args {
 } __host_bingo_kernel_chip_barrier_args_t;
 
 // Fold kernel args (host core): n_parts partials of part_bytes each, back to back at
-// src_addr, folded into dst_addr, one 64 B beat at a time.
-//   op 0 (TOPK):   per beat, 8 FP32 values in descending order at lanes 0..7 and their u32
-//                  indices at lanes 8..15; the result is the 8 largest pairs of the union.
-//   op 1 (MONOID): per beat, 8 query rows' online-softmax pair, m at lanes 0..7 and l at
-//                  lanes 8..15, FP32; the result is m* = max m, l* = sum l exp(m - m*).
-#define BINGO_HOST_FOLD_TOPK   0
-#define BINGO_HOST_FOLD_MONOID 1
+// src_addr, folded into dst_addr.
+//   op 0 (TOPK):          per 64 B beat, 8 FP32 values in descending order at lanes 0..7 and
+//                         their u32 indices at lanes 8..15; the result is the 8 largest pairs
+//                         of the union.
+//   op 1 (SOFTMAX_STATS): per 128 B group, the softmax-statistics junction's: a key beat
+//                         m[0..31] then a value beat l[0..31], FP16, lane r = query row r;
+//                         the result is m* = max m, l* = sum l exp(scale (m - m*)), folded
+//                         part by part with the junction's arithmetic and l rounded to FP16
+//                         after each, so it equals a ChainGather through the parts in order.
+//                         Rows n_valid..31 come out as the junction leaves them: 0xFBFF, 0.
+#define BINGO_HOST_FOLD_TOPK          0
+#define BINGO_HOST_FOLD_SOFTMAX_STATS 1
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fold_args {
     uint64_t op;
     uint64_t src_addr;
     uint64_t n_parts;
-    uint64_t part_bytes;   // a multiple of 64
+    uint64_t part_bytes;      // a multiple of 64 (TOPK) or of 128 (SOFTMAX_STATS)
     uint64_t dst_addr;
+    uint64_t n_valid;         // SOFTMAX_STATS: rows folded in every group, 1..32
+    uint64_t scale_f32bits;   // SOFTMAX_STATS: FP32 bits of the key factor; 0 reads as 1.0
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_fold_args_t;
 

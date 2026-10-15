@@ -64,6 +64,22 @@ typedef struct __attribute__((aligned(8))) BingoHeapInstance {
     BingoHeapDiagnostics diagnostics;
 } BingoHeapInstance;
 
+/// Where allocations land, for code that must know an address without allocating: the host's
+/// generated init code bakes the addresses of its L1 allocations into static data and checks
+/// them against what bingoHeapMalloc returns. bingoHeapInit puts the instance at the arena base
+/// and the one free fragment right after it; bingoHeapMalloc cuts a fragment of
+/// BINGO_HEAP_FRAGMENT_SIZE(amount) bytes from the front of the fragment it picks and returns the
+/// address BINGO_HEAP_ALIGNMENT past the fragment's start. So on a heap that has seen no free,
+/// allocation k returns BINGO_HEAP_FIRST_ALLOC(base) plus the fragment sizes of allocations 0..k-1.
+#define BINGO_HEAP_INSTANCE_SIZE_PADDED \
+    (((uint64_t)sizeof(BingoHeapInstance) + BINGO_HEAP_ALIGNMENT - 1U) & ~(uint64_t)(BINGO_HEAP_ALIGNMENT - 1U))
+#define BINGO_HEAP_FRAGMENT_SIZE_MIN ((uint64_t)BINGO_HEAP_ALIGNMENT * 2U)
+#define BINGO_HEAP_FRAGMENT_SIZE(amount) \
+    (((uint64_t)(amount) + BINGO_HEAP_ALIGNMENT + BINGO_HEAP_FRAGMENT_SIZE_MIN - 1U) & \
+     ~(BINGO_HEAP_FRAGMENT_SIZE_MIN - 1U))
+#define BINGO_HEAP_FIRST_ALLOC(heap_base_addr) \
+    ((uint64_t)(heap_base_addr) + BINGO_HEAP_INSTANCE_SIZE_PADDED + BINGO_HEAP_ALIGNMENT)
+
 /// Initialize a heap in the provided memory arena.
 /// The arena base must be aligned to BINGO_HEAP_ALIGNMENT.
 /// Returns the heap handle (same as base), or 0 on failure.

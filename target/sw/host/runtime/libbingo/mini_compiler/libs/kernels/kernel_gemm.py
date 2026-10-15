@@ -20,6 +20,11 @@ from kernel_base import BingoKernelArgs
 # to_b_pairs + pack_int4), which B walks at A's stride and needs an even N, B not transposed.
 INT4_B_LAYOUT_B = 1
 INT4_B_LAYOUT_PAIRED = 2
+# The parity layout, for a row-major A (a_pitch): the nibble-packed B-layout with each pair of
+# consecutive passes interleaved word by word (word w of pass 2j + i at word 2 w + i of the
+# pair's run), so a pass's words sit in banks of one parity, the other parity from A's rows
+# when B starts an odd number of 8-byte words after A. Needs an even K, B not transposed.
+INT4_B_LAYOUT_PARITY = 3
 
 
 class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
@@ -43,7 +48,8 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
                  int32tofp16_enable: int = 0,
                  int4_a_enable: int = 0,
                  int4_b_enable: int = 0,
-                 d_shift: int = 0):
+                 d_shift: int = 0,
+                 a_pitch: int = 0):
         # d_shift is the D port's power-of-two output scale k: FP16 out = RNE(acc * 2^-k).
         # An INT8 dot product of depth K reaches 127^2 * K and overflows FP16 -- to Inf,
         # silently -- unless 127^2 * K <= 65,504 * 2^k.
@@ -52,12 +58,20 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         if d_shift and not int32tofp16_enable:
             raise ValueError("d_shift scales the INT32 -> FP16 conversion; it means nothing "
                              "without int32tofp16_enable")
-        if int(int4_b_enable) not in (0, INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED):
-            raise ValueError(f"int4_b_enable={int4_b_enable}: 0, {INT4_B_LAYOUT_B} (B-layout) "
-                             f"or {INT4_B_LAYOUT_PAIRED} (paired)")
+        if int(int4_b_enable) not in (0, INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, INT4_B_LAYOUT_PARITY):
+            raise ValueError(f"int4_b_enable={int4_b_enable}: 0, {INT4_B_LAYOUT_B} (B-layout), "
+                             f"{INT4_B_LAYOUT_PAIRED} (paired) or {INT4_B_LAYOUT_PARITY} (parity)")
+        if int(int4_b_enable) == INT4_B_LAYOUT_PARITY and (int(K) % 2 or transpose_B):
+            raise ValueError(f"parity INT4 B needs an even K (K={K}) and B not transposed "
+                             f"(transpose_B={transpose_B})")
         if int(int4_b_enable) == INT4_B_LAYOUT_PAIRED and (int(N) % 2 or transpose_B):
             raise ValueError(f"paired INT4 B needs an even N (N={N}) and B not transposed "
                              f"(transpose_B={transpose_B})")
+        # a_pitch: 0 = A in the blocked A layout; otherwise A is row-major, row r at
+        # input_A_addr + r * a_pitch (array shape 3 only, gemm.h checks the shape)
+        if int(a_pitch) and (int(a_pitch) % 8 or int4_a_enable or transpose_A):
+            raise ValueError(f"a_pitch={a_pitch}: a multiple of 8, INT8 A, not transposed")
+        self.a_pitch = int(a_pitch)
         self.d_shift = int(d_shift)
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr
@@ -104,7 +118,71 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         assignments["int4_a_enable"] = str(self.int4_a_enable)
         assignments["int4_b_enable"] = str(self.int4_b_enable)
         assignments["d_shift"] = str(self.d_shift)
+        assignments["a_pitch"] = str(self.a_pitch)
         return assignments
+
+
+class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
+    """gemm_full's descriptor for __snax_bingo_kernel_gemm_start: configure and start the
+    cluster's `seq`-th VersaCore dispatch (from 1, in core 0's issue order) and return; the
+    matching __snax_bingo_kernel_gemm_wait (SnaxBingoKernelGemmWaitArgs) waits for it."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_start"
+
+    def __init__(self, *args, seq: int, shape_addr=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        if int(seq) < 1:
+            raise ValueError(f"seq={seq}: dispatches are numbered from 1")
+        self.seq = int(seq)
+        # shape_addr: this cluster's L1 copy of the shape's parameters (SnaxBingoKernelGemmShapeInitArgs),
+        # or 0 for the table in L3
+        self.shape_addr = shape_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_start_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = super().get_c_field_assignments(handle_name_map)
+        assignments["seq"] = str(self.seq)
+        self._process_addr(self.shape_addr, "shape_addr", assignments, handle_name_map, split_64bit=False)
+        return assignments
+
+
+class SnaxBingoKernelGemmShapeInitArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_gemm_shape_init: array shape `shape_idx`'s parameters and the C reader's
+    all-off mask into `dst_addr` (64 bytes of the cluster's L1), for gemm_start's shape_addr."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_shape_init"
+    BYTES = 64
+
+    def __init__(self, dst_addr, shape_idx: int):
+        self.dst_addr, self.shape_idx = dst_addr, int(shape_idx)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_shape_init_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map, split_64bit=False)
+        a["shape_idx"] = str(self.shape_idx)
+        return a
+
+
+class SnaxBingoKernelGemmWaitArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_gemm_wait: return once the array has retired dispatch `seq`."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_wait"
+
+    def __init__(self, seq: int):
+        if int(seq) < 1:
+            raise ValueError(f"seq={seq}: dispatches are numbered from 1")
+        self.seq = int(seq)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_wait_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        return {"seq": str(self.seq)}
 
 
 class SnaxBingoKernelGemvArgs(BingoKernelArgs):

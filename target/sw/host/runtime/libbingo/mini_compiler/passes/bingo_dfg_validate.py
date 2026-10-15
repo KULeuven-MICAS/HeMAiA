@@ -2,6 +2,8 @@
 
 import networkx as nx
 
+from bingo_reach import reach_sets
+
 from bingo_platform import _engine_of_kernel
 
 
@@ -83,12 +85,10 @@ class BingoDFGValidateMixin:
                 names = " -> ".join(a.node_name for a, _ in cyc[:12])
                 raise ValueError(f"hang check: a spin wait closes a cycle ({len(cyc)} edges: "
                                  f"{names} ...). The consumer would spin forever.")
-        _desc: dict = {}
+        hb_reach = reach_sets(hb)
 
         def reach(n):
-            if n not in _desc:
-                _desc[n] = nx.descendants(hb, n)
-            return _desc[n]
+            return hb_reach[n]
 
         cells: dict = {}          # cell -> [(set_node, check_node), ...]
         covered: dict = {}        # (check_node, producer core) -> True

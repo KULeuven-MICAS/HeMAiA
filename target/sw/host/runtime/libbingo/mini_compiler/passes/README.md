@@ -20,6 +20,7 @@ because each depends on the last. The analyses the passes use live here too.
 | file | |
 |---|---|
 | `bingo_liveness.py` | Who uses which buffer, reachability between nodes, and `can_share` — the rule static-L1 rests on: every user of A must be a graph ancestor of every user of B. One incomparable pair vetoes the whole buffer pair. |
+| `bingo_reach.py` | Every node's descendants in the happens-before graph at once, one bitset per node over a topological order: the reachability the tag allocator and the hang check test thousands of times. |
 | `bingo_l1_packer.py` | The placement search itself, and the proof that the placement is safe. |
 | `bingo_sim_check.py` | Replays the graph against a model of the hardware task manager. It is a **deadlock oracle**, not a performance model — trust it for "this wedges", not for cycle counts. |
 | `bingo_block_viz.py` | One picture and one text listing per libs block, under `<output_dir>/block_dfg/`, drawn from the records `Pipeline.run()` leaves on the DFG. It runs first in `bingo_compile_dfg`, so it shows the dependencies the blocks stated rather than the dummy nodes they are lowered to, and it never fails a build. `BINGO_BLOCK_DFG=0` skips it. |

@@ -15,6 +15,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_helpers import _check_xdma_size_aligned
 
 from kernel_base import BingoKernelArgs
+from kernel_xdma import xdma_softmax_stats_csrs
 
 
 class HostBingoKernelDummyArgs(BingoKernelArgs):
@@ -58,26 +59,35 @@ class HostBingoKernelChipBarrierArgs(BingoKernelArgs):
 class HostBingoKernelFoldArgs(BingoKernelArgs):
     """Args for __host_bingo_kernel_fold: n_parts partials of part_bytes each, back to back
     at src_addr, folded on the host core into dst_addr. op TOPK keeps the 8 largest
-    (value, index) pairs per 64 B beat; op MONOID folds 8 rows' online-softmax (m, l) per
-    beat. Both buffers should be host-cacheable memory on the host's own chiplet."""
+    (value, index) pairs per 64 B beat; op SOFTMAX_STATS folds the softmax-statistics
+    junction's 128 B groups (a key beat m[0..31], a value beat l[0..31], FP16) with the
+    junction's arithmetic, part by part: rows 0..n_valid-1 folded, `scale` the factor on the
+    key difference (xdma_softmax_stats_csrs' CSR(0) and CSR(1)). Both buffers should be
+    host-cacheable memory on the host's own chiplet."""
     KERNEL_NAME = "__host_bingo_kernel_fold"
     TOPK = 0
-    MONOID = 1
+    SOFTMAX_STATS = 1
 
-    def __init__(self, op: int, src_addr, n_parts: int, part_bytes: int, dst_addr):
-        if part_bytes % 64:
-            raise ValueError(f"fold: part_bytes {part_bytes} is not a multiple of 64")
+    def __init__(self, op: int, src_addr, n_parts: int, part_bytes: int, dst_addr,
+                 n_valid: int = 0, scale: float = 1.0):
+        unit = 128 if op == self.SOFTMAX_STATS else 64
+        if part_bytes % unit:
+            raise ValueError(f"fold: part_bytes {part_bytes} is not a multiple of {unit}")
         self.op = int(op)
         self.src_addr = src_addr
         self.n_parts = int(n_parts)
         self.part_bytes = int(part_bytes)
         self.dst_addr = dst_addr
+        self.n_valid, self.scale_f32bits = 0, 0
+        if self.op == self.SOFTMAX_STATS:
+            self.n_valid, self.scale_f32bits = xdma_softmax_stats_csrs(n_valid, scale)
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_fold_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {"op": str(self.op), "n_parts": str(self.n_parts), "part_bytes": str(self.part_bytes)}
+        a = {"op": str(self.op), "n_parts": str(self.n_parts), "part_bytes": str(self.part_bytes),
+             "n_valid": str(self.n_valid), "scale_f32bits": f"0x{self.scale_f32bits:08x}u"}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map,
                            split_64bit=False, as_64bit=True)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map,

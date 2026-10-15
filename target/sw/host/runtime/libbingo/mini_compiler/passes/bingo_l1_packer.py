@@ -436,10 +436,10 @@ def check_emitted_arena_text(text: str) -> List[str]:
     import re
 
     problems: List[str] = []
-    for m in re.finditer(r"uint64_t (__bingo_l[13]_arena_\w+) = bingo_l[13]_alloc\(", text):
+    for m in re.finditer(r"uint64_t (__bingo_l[13]_arena_\w+) = bingo_l[13]_alloc(?:_at)?\(", text):
         base = m.group(1)
         # how many slots does the arena RESERVE, and where does the arg bump start?
-        size_m = re.search(re.escape(base) + r" = bingo_l[13]_alloc\((.*?)\);", text, re.S)
+        size_m = re.search(re.escape(base) + r" = bingo_l[13]_alloc(?:_at)?\((.*?)\);", text, re.S)
         off_m = re.search(r"uint64_t " + re.escape(base) + r"_off = (.*?);", text)
         if off_m is None:
             continue

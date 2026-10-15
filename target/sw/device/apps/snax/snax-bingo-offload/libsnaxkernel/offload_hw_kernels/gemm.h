@@ -61,7 +61,7 @@
 //
 // The 6 reachable precision modes (input_A x input_B -> output_D), i.e. the
 // GEMM_PRECISIONS suites in
-// target/sim/automation/sweep/versacore/testing_workload_gen.py. Each has a
+// target/sim/automation/sweep/unit_test/versacore/testing_workload_gen.py. Each has a
 // clean precision-named wrapper kernel below (preferred); gemm_full stays the
 // low-level escape hatch that exposes all flags:
 //   int8 x int8 -> int32   (all flags 0)                    -> gemm_i8i8_i32
@@ -90,9 +90,28 @@
 //       pair, the pair, the row tile), so it needs a B reader with at least four temporal
 //       loops, an even N, and B not transposed; anything else is refused.
 //
+//   parity    (int4_b_enable = 3)   for a ROW-MAJOR A (a_pitch). Passes come in pairs, each
+//       pair one 2 blk run: word w of pass 2j + i at 2 * w + i, so a pass's eight words are
+//       16 bytes apart. A row-major A advances one bank a pass and, with a_pitch = 32 mod
+//       64, its eight rows sit in banks of one parity; B advances one bank a pass too and
+//       keeps the other parity, so the readers never meet when B starts an odd number of
+//       words after A. The B walk is (the pass of the pair, the pair, the column tile, the
+//       row tile): blk = 64 (eight 8-byte channels), K even, B not transposed, four loops.
+//
 // The same INT4 blob also serves the (1, 4, 32) GEMV, which reads a whole pair a pass.
 #define BINGO_INT4_B_LAYOUT_B 1
 #define BINGO_INT4_B_LAYOUT_PAIRED 2
+#define BINGO_INT4_B_LAYOUT_PARITY 3
+
+// One array shape's row of bingo_gemm_shape_params and the C reader's all-off mask, copied into
+// the cluster's L1 by __snax_bingo_kernel_gemm_shape_init: the table and the mask are .rodata in
+// L3, which every GEMM set-up otherwise reads a dozen times.
+typedef struct {
+    bingo_gemm_shape_params_t sh;
+    uint32_t c_null[BINGO_C_CSR_NUM];
+    uint32_t shape_idx;
+} bingo_gemm_shape_l1_t;
+_Static_assert(sizeof(bingo_gemm_shape_l1_t) <= 64, "gemm_shape_init writes 64 bytes at most");
 
 // -------------------------------------------------------------
 // The "+C" term and accumPrevC  (D = A*B + C)
@@ -166,7 +185,7 @@ static inline uint32_t bingo_blocks_changed(volatile int32_t *d, const int32_t *
 // Shared GEMM core: configure the streamer + VersaCore and run.
 // All precision/quant fields are explicit parameters, so the precision-named
 // wrappers (and gemm_full) below select them. Emits the shared GEMM_FULL_RUN trace
-// markers for every caller, so the sweep/gemm cycle LUT works for all precisions.
+// markers for every caller, so the sweep/unit_test/gemm cycle LUT works for all precisions.
 // Caller must already have done the core-0 check + SW guard + arg parse.
 // -------------------------------------------------------------
 static uint32_t __bingo_gemm_run(
@@ -176,6 +195,7 @@ static uint32_t __bingo_gemm_run(
     uint32_t quantization_enable, uint32_t shift_i, uint32_t multiplier_i,
     int32_t input_zp_i, int32_t output_zp_i, int32_t int32tofp16_enable,
     int32_t int4_a_enable, int32_t int4_b_enable, uint32_t d_shift,
+    uint32_t a_pitch, uint32_t start_seq, const bingo_gemm_shape_l1_t *shape_l1,
     bingo_kernel_scratchpad_t *sp)
 {
     VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM run A=0x%08x B=0x%08x C=0x%08x D=0x%08x\r\n",
@@ -191,7 +211,16 @@ static uint32_t __bingo_gemm_run(
                               array_shape_idx, BINGO_NUM_ARRAY_SHAPES);
         return BINGO_RET_FAIL;
     }
-    const bingo_gemm_shape_params_t *shape = &bingo_gemm_shape_params[array_shape_idx];
+    if (shape_l1 != 0 && shape_l1->shape_idx != array_shape_idx)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm shape %d but the L1 copy holds shape %d\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)array_shape_idx,
+                    (int)shape_l1->shape_idx);
+        return BINGO_RET_FAIL;
+    }
+    const bingo_gemm_shape_params_t *shape =
+        shape_l1 != 0 ? &shape_l1->sh : &bingo_gemm_shape_params[array_shape_idx];
+    const uint32_t *channel_en_C_null = shape_l1 != 0 ? shape_l1->c_null : bingo_channel_en_C_null;
     const uint32_t meshRow = shape->meshRow;
     const uint32_t tileSize = shape->tileSize;
     const uint32_t meshCol = shape->meshCol;
@@ -248,14 +277,24 @@ static uint32_t __bingo_gemm_run(
     }
 #endif
 
-    if (int4_b_enable < 0 || int4_b_enable > BINGO_INT4_B_LAYOUT_PAIRED)
+    if (int4_b_enable < 0 || int4_b_enable > BINGO_INT4_B_LAYOUT_PARITY)
     {
         printf_safe("[Cluster %d Core %d]: Error! gemm_full int4_b_enable=%d, expected 0, 1 "
-                    "(B-layout) or 2 (paired)\r\n", snrt_cluster_idx(),
+                    "(B-layout), 2 (paired) or 3 (parity)\r\n", snrt_cluster_idx(),
                     snrt_cluster_core_idx(), (int)int4_b_enable);
         return BINGO_RET_FAIL;
     }
     const uint32_t b_paired = int4_b_enable == BINGO_INT4_B_LAYOUT_PAIRED;
+    const uint32_t b_parity = int4_b_enable == BINGO_INT4_B_LAYOUT_PARITY;
+    if (b_parity && (T_BOUND_NUM_READER_1 < 4 || (K % 2u) != 0 || transpose_B ||
+                     tileSize * meshCol / 2u != 8u * (BINGO_BANK_WIDTH / 8)))
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full parity INT4 B needs >= 4 B loops "
+                    "(have %d), an even K (K=%d), B not transposed (%d) and eight-word passes\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), T_BOUND_NUM_READER_1,
+                    (int)K, (int)transpose_B);
+        return BINGO_RET_FAIL;
+    }
     if (b_paired && (T_BOUND_NUM_READER_1 < 4 || (N % 2u) != 0 || transpose_B))
     {
         printf_safe("[Cluster %d Core %d]: Error! gemm_full paired INT4 B needs >= 4 B "
@@ -266,6 +305,24 @@ static uint32_t __bingo_gemm_run(
     }
     const uint32_t a_elem_len = int4_a_enable ? 4u : BINGO_A_ELEM_LEN;
     const uint32_t b_elem_len = int4_b_enable ? 4u : BINGO_B_ELEM_LEN;
+    // A ROW-MAJOR A (a_pitch != 0): row r of the operand at A_addr + r * a_pitch, K values
+    // contiguous. The reader's channel i reads one 8-byte bank word a pass, so this is the
+    // A layout exactly when one channel holds one row's K-tile and a pass has one row per
+    // channel: meshRow rows of tileSize INT8 values (array shape 3, (8, 8, 16)). The blocked
+    // layout is the special case a_pitch = tileSize.
+    if (a_pitch != 0u &&
+        (int4_a_enable || transpose_A || (a_pitch % (BINGO_BANK_WIDTH / 8)) != 0u ||
+         tileSize * a_elem_len != BINGO_BANK_WIDTH ||
+         meshRow * tileSize * a_elem_len != BINGO_BANK_WIDTH * 8u))
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full a_pitch=%d needs INT8 A, not "
+                    "transposed, a multiple of %d B, and an array shape whose A pass is one "
+                    "row per channel (shape %d is %dx%d)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)a_pitch,
+                    (int)(BINGO_BANK_WIDTH / 8), (int)array_shape_idx, (int)meshRow,
+                    (int)tileSize);
+        return BINGO_RET_FAIL;
+    }
     const uint32_t d_elem_len = quantization_enable ? 8u
                                                     : (int32tofp16_enable ? 16u : BINGO_D32_ELEM_LEN);
     const uint32_t has_d_extension = quantization_enable || int32tofp16_enable;
@@ -355,7 +412,7 @@ static uint32_t __bingo_gemm_run(
     //////////////////////////////////////////////////////////////
 
     // Aslstride0
-    uint32_t Aslstride0 = BINGO_BANK_WIDTH / 8;
+    uint32_t Aslstride0 = a_pitch ? a_pitch : BINGO_BANK_WIDTH / 8;
     // Atlbound0~5
     uint32_t Atlbound[6];
     // Atlbound0
@@ -390,10 +447,13 @@ static uint32_t __bingo_gemm_run(
         ((a_tile_banks + BINGO_GRANULARITY_A - 1) / BINGO_GRANULARITY_A) *
         BINGO_GRANULARITY_A;
     Atlstride[0] = a_tile_banks_aligned * (BINGO_BANK_WIDTH / 8);
+    // a row-major A: the next K-tile is the next bank word of every row
+    if (a_pitch) Atlstride[0] = BINGO_BANK_WIDTH / 8;
     // Atlstride1
     Atlstride[1] = 0;
-    // Atlstride2 — one full K-run, using the (granularity-aligned) K-tile pitch.
-    Atlstride[2] = Atlstride[0] * K;
+    // Atlstride2 — one full K-run, using the (granularity-aligned) K-tile pitch; a row-major
+    // A: the next meshRow rows.
+    Atlstride[2] = a_pitch ? meshRow * a_pitch : Atlstride[0] * K;
     // Atlstride3
     Atlstride[3] = 0;
     // Atlstride4
@@ -415,7 +475,8 @@ static uint32_t __bingo_gemm_run(
 #error "extend the B spatial stride nest: only 1 or 2 dimensions are derived here"
 #endif
     uint32_t Bslstride[S_STRIDE_NUM_READER_1];
-    Bslstride[0] = BINGO_BANK_WIDTH / 8;
+    // the parity layout puts a pass's words two words apart
+    Bslstride[0] = (b_parity ? 2u : 1u) * (BINGO_BANK_WIDTH / 8);
 #if S_STRIDE_NUM_READER_1 > 1
     Bslstride[1] = (BINGO_BANK_WIDTH / 8) * 8u;
 #endif
@@ -448,6 +509,28 @@ static uint32_t __bingo_gemm_run(
         Btlbound[3] = M;
         Btlstride[3] = 0;
 #endif
+    }
+    else if (b_parity)
+    {
+        // the pass of the pair, the pair, then the column tile, then the row tile (B is reused).
+        Btlbound[0] = 2;
+        Btlstride[0] = BINGO_BANK_WIDTH / 8;
+        Btlbound[1] = K / 2u;
+        Btlstride[1] = 2u * b_blk;
+        Btlbound[2] = N;
+        Btlstride[2] = b_blk * K;
+#if T_BOUND_NUM_READER_1 >= 4
+        Btlbound[3] = M;
+        Btlstride[3] = 0;
+#endif
+        // A performance condition, not a correctness one: B must start an odd number of
+        // words after A, or the two readers share a bank on every pass.
+        if (a_pitch && (((B_addr - A_addr) / (BINGO_BANK_WIDTH / 8)) % 2u) == 0u)
+        {
+            printf_safe("[Cluster %d Core %d]: Warning! gemm_full parity B at 0x%x, A at 0x%x: "
+                        "an even number of words apart\r\n", snrt_cluster_idx(),
+                        snrt_cluster_core_idx(), B_addr, A_addr);
+        }
     }
     else
     {
@@ -505,7 +588,7 @@ static uint32_t __bingo_gemm_run(
     // Pick the shape's channel_en_C mask, or the shape-invariant zero mask when
     // accumPrevC or !addNonZeroC.
     const uint32_t *channel_en_C_ptr = (accumPrevC == 1 || addNonZeroC == 0)
-                                           ? bingo_channel_en_C_null
+                                           ? channel_en_C_null
                                            : shape->channel_en_C;
     //////////////////////////////////////////////////////////////
     // Streamer cfg for D
@@ -605,6 +688,16 @@ static uint32_t __bingo_gemm_run(
         D32tlstride[3] = 0;
     }
     uint32_t set_addr_remap_index_D32 = 0;
+    // A queued start (start_seq != 0) is this cluster's start_seq-th VersaCore dispatch; the
+    // array has retired fewer than that, or the numbering the waits rely on is wrong.
+    if (start_seq != 0u &&
+        (int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - start_seq) >= 0)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_start seq=%d but the array has already "
+                    "retired %d dispatches\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)start_seq, (int)csrr_ss(VERSACORE_FINISHED_TASK));
+        return BINGO_RET_FAIL;
+    }
     //////////////////////////////////////////////////////////////
     // Configuration the Steamer and Versacore
     //////////////////////////////////////////////////////////////
@@ -668,6 +761,19 @@ static uint32_t __bingo_gemm_run(
         0);
     VERSACORE_DEBUG_PRINT(
         "Bingo GEMM Full Kernel Streamer Configuration Done!\r\n");
+    if (start_seq != 0u)
+    {
+        // Both CSR managers queue the configuration (snax_cfg_queue_depth 2), so the start
+        // writes retire while an earlier dispatch still runs; __snax_bingo_kernel_gemm_wait
+        // waits for this one by its number.
+        start_versacore_and_streamer();
+        csrw_ss(STREAMER_START_CSR, 0);
+        csrw_ss(STREAMER_START_CSR, 0);
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+        sp->return_value = D_addr;
+        sp->num_return_values = M * N;
+        return BINGO_RET_SUCC;
+    }
     // Snapshot the last INT32 of every output block BEFORE anything starts, so the
     // timeout diagnostic below can say how far the writer actually got.
     const uint32_t blk_words = meshRow * meshCol;
@@ -755,7 +861,100 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         a->transpose_A, a->transpose_B, a->accumPrevC,
         a->quantization_enable, a->shift_i, a->multiplier_i,
         a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
-        a->int4_a_enable, a->int4_b_enable, a->d_shift, sp);
+        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, 0u, 0, sp);
+}
+
+// -------------------------------------------------------------
+// gemm_start / gemm_wait: one gemm_full split in two tasks, so the core programs the next
+// dispatch while the array still runs this one. gemm_start configures and starts and
+// returns; both CSR managers queue the configuration. gemm_wait returns once the array has
+// retired dispatch `seq`. `seq` numbers the cluster's VersaCore dispatches from 1 in the
+// order core 0 issues them, which the generator fixes; every dispatch on the cluster must
+// be numbered, synchronous ones included. The output is written when gemm_wait is done, so
+// a consumer depends on the wait, never on the start.
+// -------------------------------------------------------------
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_start(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_start_args_t);
+    if (snrt_cluster_core_idx() != 0)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM start should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    const __snax_bingo_kernel_gemm_start_args_t *a =
+        (const __snax_bingo_kernel_gemm_start_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_start_args_t);
+    if (a->seq == 0u)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_start seq 0: dispatches are numbered from 1\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    return __bingo_gemm_run(
+        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
+        a->M, a->K, a->N, a->array_shape_idx,
+        a->transpose_A, a->transpose_B, a->accumPrevC,
+        a->quantization_enable, a->shift_i, a->multiplier_i,
+        a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
+        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, a->seq,
+        (const bingo_gemm_shape_l1_t *)(uintptr_t)a->shape_addr, sp);
+}
+
+// Copies shape shape_idx of bingo_gemm_shape_params, and the C reader's all-off mask, into the
+// bingo_gemm_shape_l1_t at dst_addr (this cluster's L1) for gemm_start's shape_addr.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_shape_init(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_shape_init_args_t);
+    const __snax_bingo_kernel_gemm_shape_init_args_t *a =
+        (const __snax_bingo_kernel_gemm_shape_init_args_t *)arg;
+    if (a->shape_idx >= BINGO_NUM_ARRAY_SHAPES)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_shape_init shape %d (only %d)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)a->shape_idx,
+                    BINGO_NUM_ARRAY_SHAPES);
+        return BINGO_RET_FAIL;
+    }
+    // word by word through a volatile pointer: a struct assignment becomes a memcpy call, and
+    // the device links no libc
+    volatile bingo_gemm_shape_l1_t *d = (volatile bingo_gemm_shape_l1_t *)(uintptr_t)a->dst_addr;
+    const uint32_t *src = (const uint32_t *)&bingo_gemm_shape_params[a->shape_idx];
+    volatile uint32_t *dw = (volatile uint32_t *)&d->sh;
+    for (uint32_t i = 0; i < sizeof(bingo_gemm_shape_params_t) / 4u; i++)
+        dw[i] = src[i];
+    for (uint32_t i = 0; i < BINGO_C_CSR_NUM; i++)
+        d->c_null[i] = bingo_channel_en_C_null[i];
+    d->shape_idx = a->shape_idx;
+    return BINGO_RET_SUCC;
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_wait(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_wait_args_t);
+    const __snax_bingo_kernel_gemm_wait_args_t *a =
+        (const __snax_bingo_kernel_gemm_wait_args_t *)arg;
+    if (snrt_cluster_core_idx() != 0)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM wait should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    const uint32_t seq = a->seq;
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
+    uint32_t spin = 0;
+    while ((int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - seq) < 0)
+    {
+        if (++spin >= 200000u)
+        {
+            printf_safe("[Cluster %d Core %d]: Error! gemm_wait seq=%d timed out: retired=%d "
+                        "versacore_busy=%d streamer_busy=%d\r\n", snrt_cluster_idx(),
+                        snrt_cluster_core_idx(), (int)seq,
+                        (int)csrr_ss(VERSACORE_FINISHED_TASK), (int)csrr_ss(VERSACORE_BUSY),
+                        (int)csrr_ss(STREAMER_BUSY_CSR));
+            return BINGO_RET_FAIL;
+        }
+    }
+    csrw_ss(VERSACORE_START_CSR, 0);
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+    return BINGO_RET_SUCC;
 }
 
 // -------------------------------------------------------------
@@ -788,7 +987,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     __bingo_gemm_run(a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,       \
                      a->M, a->K, a->N, a->array_shape_idx,                                      \
                      a->transpose_A, a->transpose_B, a->accumPrevC,                             \
-                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), 0u, sp)
+                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), 0u, 0u, 0u, 0, sp)
 
 // int8 x int8 -> int32 (baseline).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i32(void *arg)
@@ -846,7 +1045,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i8(void *arg)
         a->M, a->K, a->N, a->array_shape_idx,
         a->transpose_A, a->transpose_B, a->accumPrevC,
         /*quant*/ 1, a->shift_i, a->multiplier_i, a->input_zp_i, a->output_zp_i,
-        /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, /*d_shift*/ 0u, sp);
+        /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, /*d_shift*/ 0u, /*a_pitch*/ 0u,
+        /*start_seq*/ 0u, /*shape_l1*/ 0, sp);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)

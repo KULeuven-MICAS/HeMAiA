@@ -31,6 +31,8 @@
 //                                          the query segments of MLA's score operand, the
 //                                          attention's c / l, the router softmax, SwiGLU.
 //   offload_hw_kernels/moe_route.h       — the router's top k as an expert-slot record.
+//   offload_hw_kernels/moe_prefill.h     — the MoE prefill: route table, row lists, row
+//                                          gather, and the SIMD row-tile passes.
 //   validate_shapes.py                   — lives at runtime/snax/versacore/;
 //                                          cross-checks gemm_shapes.h vs hwcfg.
 
@@ -50,6 +52,7 @@
 #include "offload_hw_kernels/gemv.h"
 #include "offload_hw_kernels/simd_row.h"
 #include "offload_hw_kernels/moe_route.h"
+#include "offload_hw_kernels/moe_prefill.h"
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
@@ -91,7 +94,18 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_ring_load),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_route),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_router_pack),
+    // The MoE prefill (offload_hw_kernels/moe_prefill.h).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_topk_rows),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_dispatch),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_gather_rows),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_mul_tiles),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_deq_swiglu),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_quant_rows),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_scatter_add_rows),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_start),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_wait),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_shape_init),
     // Clean per-precision GEMM wrappers (over gemm_full) — see offload_hw_kernels/gemm.h.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_i32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i4_i32),

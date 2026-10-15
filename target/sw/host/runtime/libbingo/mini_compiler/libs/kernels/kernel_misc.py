@@ -327,12 +327,14 @@ class SnaxBingoKernelMoeRouterPackArgs(BingoKernelArgs):
     (offload_hw_kernels/moe_route.h, moe_router_pack; on the DM core):
       MODE_ROW     n FP16 logits -> a 32-lane row padded with -65504
       MODE_PACK    the row + the softmax row kernel's max and sum beats -> the TopK beat (the
-                   logits as FP32 descending, ids id_base + j) and the Monoid beat (m, l)
-      MODE_UNPACK  the folded TopK and Monoid beats -> the candidates' row, -m* below it, l*
-                   splatted at s_addr, the candidates' ids at ids_addr"""
+                   logits as FP32 descending, ids id_base + j) and the softmax-statistics
+                   group at stats_addr (128 B: m at lane 0 of the key beat, l at lane 0 of
+                   the value beat, FP16)
+      MODE_UNPACK  the folded TopK beat and statistics group -> the candidates' row, -m*
+                   below it, l* splatted at s_addr, the candidates' ids at ids_addr"""
     KERNEL_NAME = "__snax_bingo_kernel_moe_router_pack"
     MODE_ROW, MODE_PACK, MODE_UNPACK = 0, 1, 2
-    FIELDS = ("logits_addr", "row_addr", "m_addr", "s_addr", "topk_addr", "monoid_addr",
+    FIELDS = ("logits_addr", "row_addr", "m_addr", "s_addr", "topk_addr", "stats_addr",
               "ids_addr")
 
     def __init__(self, mode: int, n: int = 0, id_base: int = 0, **addrs):

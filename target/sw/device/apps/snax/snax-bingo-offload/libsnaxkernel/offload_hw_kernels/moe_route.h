@@ -210,9 +210,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
     return BINGO_RET_SUCC;
 }
 
-// FP32 bits -> FP16 bits, round to nearest even, for a finite value: a softmax sum (positive,
-// normal in FP16), or a logit widened from FP16, which comes back exactly. Overflow saturates
-// to infinity; a value below FP16's normals flushes to 0.
+// FP32 bits -> FP16 bits, round to nearest even, for a finite value: a logit widened from
+// FP16, which comes back exactly. Overflow saturates to infinity; a value below FP16's
+// normals flushes to 0.
 static inline uint16_t bingo_f32bits_to_f16(uint32_t f) {
     const uint16_t sign = (uint16_t)((f >> 16) & 0x8000u);
     const int32_t e = (int32_t)((f >> 23) & 0xFFu) - 127 + 15;
@@ -267,22 +267,25 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_router_pack(void *arg)
             tk[i] = i < n ? bingo_f16_to_f32bits(row[idx[i]]) : BINGO_MOE_PAD_F32;
             tk[8u + i] = i < n ? a->id_base + idx[i] : 0xFFFFFFFFu;
         }
-        volatile uint32_t *mo = (volatile uint32_t *)a->monoid_addr;
-        const uint16_t m16 = *(const volatile uint16_t *)a->m_addr;
-        const uint16_t s16 = *(const volatile uint16_t *)a->s_addr;
-        for (uint32_t i = 0; i < 8u; i++) {
-            mo[i] = i == 0u ? bingo_f16_to_f32bits(m16) : BINGO_MOE_PAD_F32;
-            mo[8u + i] = i == 0u ? bingo_f16_to_f32bits(s16) : 0u;
+        // the softmax-statistics group: the key beat (m at lane 0), then the value beat (l at
+        // lane 0), FP16; row 0 is the only one the junction folds, the other lanes -65504
+        volatile uint32_t *st = (volatile uint32_t *)a->stats_addr;
+        const uint32_t m16 = *(const volatile uint16_t *)a->m_addr;
+        const uint32_t s16 = *(const volatile uint16_t *)a->s_addr;
+        const uint32_t pad2 = BINGO_MOE_PAD_F16 | (BINGO_MOE_PAD_F16 << 16);
+        for (uint32_t i = 0; i < 16u; i++) {
+            st[i] = i == 0u ? (BINGO_MOE_PAD_F16 << 16) | m16 : pad2;
+            st[16u + i] = i == 0u ? (BINGO_MOE_PAD_F16 << 16) | s16 : pad2;
         }
     } else {
         const volatile uint32_t *tk = (const volatile uint32_t *)a->topk_addr;
-        const volatile uint32_t *mo = (const volatile uint32_t *)a->monoid_addr;
+        const volatile uint16_t *st = (const volatile uint16_t *)a->stats_addr;
         volatile uint16_t *row = (volatile uint16_t *)a->row_addr;
         volatile uint16_t *neg_m = (volatile uint16_t *)(a->row_addr - 64u);
         volatile uint16_t *s = (volatile uint16_t *)a->s_addr;
         volatile uint32_t *ids = (volatile uint32_t *)a->ids_addr;
-        const uint16_t m16 = bingo_f32bits_to_f16(mo[0]);
-        const uint16_t l16 = bingo_f32bits_to_f16(mo[8]);
+        const uint16_t m16 = st[0];         // the key beat's lane 0: m*
+        const uint16_t l16 = st[32];        // the value beat's lane 0: l*, FP16 from the junction
         for (uint32_t i = 0; i < 32u; i++) {
             row[i] = i < BINGO_MOE_CAND ? bingo_f32bits_to_f16(tk[i])
                                          : (uint16_t)BINGO_MOE_PAD_F16;

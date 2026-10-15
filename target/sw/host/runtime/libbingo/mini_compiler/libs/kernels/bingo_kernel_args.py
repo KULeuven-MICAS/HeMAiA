@@ -17,6 +17,7 @@ The classes live one file per engine:
     kernel_simd.py      SIMD streaming primitives and the fused whole-operators
     kernel_host.py      host transfers and the per-precision result checks
     kernel_ara.py       Ara (RVV) host kernels, typed by precision
+    kernel_moe.py       the MoE prefill: route table, row lists, row gather, row-tile SIMD
 
 WHY THIS FILE EXISTS. Roughly sixty workloads import from `bingo_kernel_args` by name, so
 this is a facade: it re-exports the lot under that one name, and new code can import the
@@ -36,6 +37,7 @@ from kernel_layout import *      # noqa: F401,F403
 from kernel_simd import *        # noqa: F401,F403
 from kernel_host import *        # noqa: F401,F403
 from kernel_ara import *         # noqa: F401,F403
+from kernel_moe import *         # noqa: F401,F403
 
 # Private names a star import will not carry, but that callers inside the compiler use.
 from kernel_host import _CHECK_TYPE_ELEM_BYTES  # noqa: F401

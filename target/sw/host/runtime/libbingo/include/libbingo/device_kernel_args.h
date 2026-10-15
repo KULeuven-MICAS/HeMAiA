@@ -411,20 +411,130 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_route_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_moe_route_args_t;
 
+// The MoE prefill (offload_hw_kernels/moe_prefill.h): the route of T tokens as a table, each
+// chip's row lists, the row gather, and the SIMD passes over D-layout row tiles.
+// The top k of each token's n FP16 probabilities, tokens [t0, t1): token t's at p_addr +
+// t * p_pitch; its 32-B entry of the route table at out_addr + t * 32 (k ids, then k FP16
+// weights at byte 8). Any core; every address in this cluster's L1.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_topk_rows_args {
+  uint32_t p_addr;
+  uint32_t p_pitch;
+  uint32_t n;             // <= 64
+  uint32_t k;             // <= 8
+  uint32_t t0;
+  uint32_t t1;
+  uint32_t out_addr;
+  uint32_t ctr_addr;      // 0: this task does [t0, t1); else the range's shared counter (L1)
+  uint32_t chunk;         // tokens a take from the counter
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_moe_topk_rows_args_t;
+
+// The route table -> the row lists of a chip's expert slots (n_slots <= 4, expert id of slot s
+// in byte s of expert_ids). Slot s: 4 * cap[s] bytes from list_addr, slots back to back,
+// cap[s] uint16 token rows then cap[s] FP16 weights; rows past its tokens are pad_row, weight 0.
+// cnt[s]: the tokens the graph expects; any other count is an error (written to err_addr if
+// non-zero). Every address in this cluster's L1.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_dispatch_args {
+  uint32_t table_addr;
+  uint32_t tokens;
+  uint32_t k;
+  uint32_t n_slots;
+  uint32_t expert_ids;
+  uint32_t list_addr;
+  uint32_t cap[4];
+  uint32_t cnt[4];
+  uint32_t pad_row;
+  uint32_t err_addr;
+  uint32_t t0;            // with state_addr: tokens [t0, t1) only, in order with the other ranges
+  uint32_t t1;
+  uint32_t state_addr;    // 0: all tokens; else the slots' counts between ranges (16 B, this L1)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_moe_dispatch_args_t;
+
+// Rows ids[i] (uint16 in this cluster's L1) of the matrix at src (row r at src + r *
+// row_bytes) into dst + i * dst_pitch, i < n. On the DM core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_gather_rows_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t row_bytes;
+  uint32_t ids_addr;
+  uint32_t n;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t dst_pitch;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_gather_rows_args_t;
+
+// x times a one-row-tile scale tile, row tile by row tile: tiles row tiles of tile_beats beats,
+// x_tile_stride apart, into dst + m * dst_tile_stride, or (dst_pitch != 0) into a row-major
+// matrix of pitch dst_pitch. On the SIMD core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_mul_tiles_args {
+  uint32_t x_addr;
+  uint32_t s_addr;
+  uint32_t dst_addr;
+  uint32_t tiles;
+  uint32_t tile_beats;
+  uint32_t x_tile_stride;
+  uint32_t dst_tile_stride;
+  uint32_t dst_pitch;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_mul_tiles_args_t;
+
+// A gate|up GEMM output ([tiles][2 nb][8][16] FP16) dequantised by its scale tile in place, then
+// silu(gate) * up into out + m * out_tile_stride; sg_addr a scratch as large as g. SIMD core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_deq_swiglu_args {
+  uint32_t g_addr;
+  uint32_t s_addr;
+  uint32_t sg_addr;
+  uint32_t out_addr;
+  uint32_t tiles;
+  uint32_t nb;
+  uint32_t out_tile_stride;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_deq_swiglu_args_t;
+
+// Rows of a D-layout A16 (nb column tiles, row tiles src_tile_stride apart), each times its
+// FP16 weight w[i] (w_addr 0: 1), quantised (inv_scale, FP32 bits) into row-major INT8 rows
+// dst + i * dst_pitch. SIMD core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_quant_rows_args {
+  uint32_t src_addr;
+  uint32_t rows;
+  uint32_t nb;
+  uint32_t src_tile_stride;
+  uint32_t w_addr;
+  uint32_t inv_scale;
+  uint32_t dst_addr;
+  uint32_t dst_pitch;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_quant_rows_args_t;
+
+// y[ids[i]] += d[i], i < n: FP16 rows of nt column tiles, both D layout (row tiles
+// y_tile_stride / d_tile_stride apart); ids uint16 in this cluster's L1. SIMD core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_scatter_add_rows_args {
+  uint32_t y_addr;
+  uint32_t y_tile_stride;
+  uint32_t d_addr;
+  uint32_t d_tile_stride;
+  uint32_t nt;
+  uint32_t ids_addr;
+  uint32_t n;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_scatter_add_rows_args_t;
+
 // One chip's share of a SHARDED router, and the root's view of the folded result
 // (offload_hw_kernels/moe_route.h, moe_router_pack). On the DM core; FP16 and FP32 handled as
 // bits, so no FPU is needed.
 //   mode 0  the chip's n FP16 logits at logits_addr -> a 32-lane row at row_addr, the other
 //           lanes -65504 (the input of simd_softmax_row, whose max and sum the fold needs)
 //   mode 1  its TopK beat at topk_addr (the n logits as FP32, descending, then their expert
-//           ids id_base + j; the other values -65504, ids 0xFFFFFFFF) and its Monoid beat at
-//           monoid_addr (lane 0 m, lane 8 l, as FP32: the softmax row's max beat at m_addr
-//           and sum beat at s_addr; the other rows m = -65504, l = 0), from the row at
-//           logits_addr
-//   mode 2  the root, after both folds: the folded TopK beat (topk_addr) and Monoid beat
-//           (monoid_addr) -> the 8 candidates' logits as an FP16 row at row_addr (the other
-//           lanes -65504), -m* splatted in the beat below it, l* rounded to FP16 and splatted
-//           at s_addr, and the candidates' expert ids, 8 uint32, at ids_addr
+//           ids id_base + j; the other values -65504, ids 0xFFFFFFFF) and its
+//           softmax-statistics group at stats_addr (128 B: the key beat, m at lane 0, then
+//           the value beat, l at lane 0, FP16: the softmax row's max beat at m_addr and sum
+//           beat at s_addr; every other lane -65504), from the row at logits_addr
+//   mode 2  the root, after both folds: the folded TopK beat (topk_addr) and statistics
+//           group (stats_addr) -> the 8 candidates' logits as an FP16 row at row_addr (the
+//           other lanes -65504), -m* splatted in the beat below it, l* splatted at s_addr,
+//           and the candidates' expert ids, 8 uint32, at ids_addr
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_router_pack_args {
   uint32_t mode;
   uint32_t logits_addr;
@@ -434,7 +544,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_router_pack_args {
   uint32_t m_addr;
   uint32_t s_addr;
   uint32_t topk_addr;
-  uint32_t monoid_addr;
+  uint32_t stats_addr;
   uint32_t ids_addr;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_moe_router_pack_args_t;
@@ -476,8 +586,54 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   // RNE(acc * 2^-k). Written on every dispatch -- the register is sticky. Needs the
   // converter built with `shift: 1`; a non-zero k on a build without it is refused.
   uint32_t d_shift;
+  // 0: A in the blocked A layout. Otherwise A is row-major, row r at input_A_addr +
+  // r * a_pitch bytes (array shape 3 only; a multiple of 8). gemm_minimal keeps it.
+  uint32_t a_pitch;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_full_args_t;
+
+// gemm_full split in two tasks (offload_hw_kernels/gemm.h): gemm_start configures and starts
+// the cluster's seq-th VersaCore dispatch (from 1, in core 0's issue order) and returns;
+// gemm_wait returns once the array has retired it.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_start_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t input_C_addr;
+  uint32_t output_D_addr;
+  uint32_t M;
+  uint32_t K;
+  uint32_t N;
+  uint32_t array_shape_idx;
+  uint32_t transpose_A;
+  uint32_t transpose_B;
+  uint32_t accumPrevC;
+  uint32_t quantization_enable;
+  uint32_t shift_i;
+  uint32_t multiplier_i;
+  int32_t input_zp_i;
+  int32_t output_zp_i;
+  int32_t int32tofp16_enable;
+  int32_t int4_a_enable;
+  int32_t int4_b_enable;
+  uint32_t d_shift;
+  uint32_t a_pitch;
+  uint32_t seq;
+  uint32_t shape_addr;    // 0: the shape table in L3; else this cluster's L1 copy (gemm_shape_init)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_start_args_t;
+
+// One array shape's parameters and the C reader's all-off mask into dst_addr (this cluster's
+// L1, 64 bytes) for gemm_start's shape_addr.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_shape_init_args {
+  uint32_t dst_addr;
+  uint32_t shape_idx;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_shape_init_args_t;
+
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_wait_args {
+  uint32_t seq;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_wait_args_t;
 
 // The one-token GEMV on VersaCore's (1, 4, 32) shape (offload_hw_kernels/gemv.h). One task
 // runs `groups` GEMVs of depth K = 4 kt and width N = 16 nb:
@@ -736,14 +892,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_elementwise_add_args_t;
 
-// BINGO pack of a FlashAttention (m, l) partial into the monoid junction's lane
-// geometry, so a chain gather can fold it. See __snax_bingo_kernel_pack_fa_partial.
+// BINGO pack of a FlashAttention (m, l) partial into the softmax-statistics junction's
+// groups, so a chain gather can fold it. See __snax_bingo_kernel_pack_fa_partial.
 //
-// The softmax arena keeps the running max and the running sum as two FP16 beats, one
-// lane per query row. The monoid wants them interleaved as FP32 in ONE stream, at
-// lane = field*S + slot: field 0 is the key m, field 1 is the exp-twisted value l, and
-// S = 1 << sigma is how many query rows share a beat. A 512b beat holds 16 FP32 lanes,
-// so S = 8 is the largest legal choice (F*S = 16) and Br = 32 rows pack into 4 beats.
+// The softmax arena keeps the running max and the running sum as two FP16 vectors, one
+// lane per query row, with other state between them. The junction reads a GROUP as two
+// consecutive 64 B beats, the keys m[0..31] and then the values l[0..31], FP16, lane r =
+// row r. The pack copies the two vectors into that form, 32 rows a group (128 B), and fills
+// the rows past n_rows with the identity 0xFBFF.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_pack_fa_partial_args {
   uint32_t src_m_addr_hi;
   uint32_t src_m_addr_lo;
@@ -751,8 +907,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_pack_fa_partial_args {
   uint32_t src_l_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t n_rows;   // query rows (Br); must be a multiple of `slots`
-  uint32_t slots;    // S = 1 << sigma; rows per beat. S * 2 <= 16, so S <= 8.
+  uint32_t n_rows;   // query rows (Br): 1..32, or a multiple of 32
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_pack_fa_partial_args_t;
 
@@ -771,10 +926,10 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_pack_fa_partial_args {
 //               (chip|cluster|offset) addresses, which is exactly what bingo_l1_alloc
 //               returns for a handle on another cluster -- no address arithmetic needed
 //               on the Python side.
-//   junction  : WRITER_JCT_ELEMENTWISEJUNCTION (per-element ADD/MUL/MAX/MIN) or
-//               WRITER_JCT_MONOIDJUNCTION (the softmax/attn/norm merge).
-//   jct_csr0  : the junction's CSR(0). See snax_xdma_lib.h for both encodings -- the
-//               monoid word is a GEOMETRY, not an operator id.
+//   junction  : WRITER_JCT_ELEMENTWISEJUNCTION (per-element ADD/MUL/MAX/MIN),
+//               WRITER_JCT_SOFTMAXSTATSJUNCTION (the online-softmax (m, l) merge), ...
+//   jct_csr0/1: the junction's CSR(0) and CSR(1); a junction with one CSR ignores CSR(1).
+//               See snax_xdma_lib.h for the encodings.
 //
 // BINGO_XDMA_CHAIN_MAX bounds the chain in the ARG STRUCT only. The hardware bound is
 // XDMA_MAX_DST_COUNT (a generated, cfg-dependent define, not visible in this shared
@@ -789,6 +944,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_gather_args {
   uint32_t size;        // bytes per partial
   uint32_t junction;    // WRITER_JCT_*
   uint32_t jct_csr0;    // junction CSR(0)
+  uint32_t jct_csr1;    // junction CSR(1)
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_chain_gather_args_t;
 
@@ -1194,9 +1350,10 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_row_args {
 } __snax_bingo_kernel_simd_softmax_row_args_t;
 
 // The softmax row with its statistics GIVEN (a sharded router's root, after the TopK and
-// Monoid folds): -m splatted in x's latch beat (x_addr - 64) and s splatted at s_addr, both
-// written before; p = exp(x - m) * rsqrt(s * s). Three tasks: EW0 ADD|STICKY_B [-m][x] -> Map
-// EXP -> e; [s][s] EW0 MUL -> Map RSQRT -> 1/s in e's latch; EW1 MUL|STICKY_B [1/s][e] -> p.
+// softmax-statistics folds): -m splatted in x's latch beat (x_addr - 64) and s splatted at
+// s_addr, both written before; p = exp(x - m) * rsqrt(s * s). Three tasks: EW0 ADD|STICKY_B
+// [-m][x] -> Map EXP -> e; [s][s] EW0 MUL -> Map RSQRT -> 1/s in e's latch; EW1
+// MUL|STICKY_B [1/s][e] -> p.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_row_ext_args {
   uint32_t x_addr;
   uint32_t s_addr;             // one beat

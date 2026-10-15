@@ -298,8 +298,10 @@ class WeightRings:
                 offset, nbytes = self.crest.routed(ring, fld, int(offset), int(nbytes))
                 compressed = True
         # trailer mode: the chunk's own last beat says it has landed; its schedule entry is
-        # marked (kind bit 1) so the prefetcher pushes no flag for it
-        trailer = compressed and self.crest.trailer
+        # marked (kind bit 1) so the prefetcher pushes no flag for it. A CREST record carries the
+        # trailer; a plain dense chunk (plain_trailer) ends in one its caller appended.
+        trailer = (compressed and self.crest.trailer) or \
+            (self.crest is None and getattr(self, "plain_trailer", False) and not kind & 1)
         if trailer:
             kind |= 2
         if nbytes > self.slot_bytes:

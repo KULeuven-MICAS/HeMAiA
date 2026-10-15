@@ -184,6 +184,48 @@ void get_device_functions(const char *const *names, uint32_t *addrs, int n) {
     }
 }
 
+/// get_device_functions for a caller that has each wanted name's signature in advance
+/// (`sigs[k]` = snax_symbol_sig_of_cstr(names[k]), e.g. computed by the code generator).
+///
+/// An entry whose signature hashes to a slot no wanted name occupies is passed over after one
+/// mask test; the rest are tested against the wanted names still pending, tracked in a register
+/// mask. Same results as get_device_functions.
+void get_device_functions_sig(const char *const *names, const uint64_t *sigs, uint32_t *addrs,
+                              int n) {
+    uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);
+    uint64_t symtab_end_addr_ptr   = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(2);
+    uint64_t snax_symtab_start = (uint64_t)readw(chiplet_addr_transform(symtab_start_addr_ptr));
+    uint64_t snax_symtab_end   = (uint64_t)readw(chiplet_addr_transform(symtab_end_addr_ptr));
+    const snax_symbol_t *sym = (const snax_symbol_t *)(uintptr_t)chiplet_addr_transform(snax_symtab_start);
+    const snax_symbol_t *end = (const snax_symbol_t *)(uintptr_t)chiplet_addr_transform(snax_symtab_end);
+
+    // 64 hash slots of the signatures, one bit each
+    const uint64_t hash_mul = 0x9E3779B97F4A7C15ULL;
+    uint64_t slots = 0;
+    uint64_t pending = (n >= 64) ? ~0ULL : ((1ULL << n) - 1ULL);
+    for (int k = 0; k < n; k++) {
+        addrs[k] = (uint32_t)SNAX_SYMTAB_END_FN_ADDR;
+        slots |= 1ULL << ((sigs[k] * hash_mul) >> 58);
+    }
+
+    for (; sym < end && pending != 0; sym++) {
+        if (sym->addr == SNAX_SYMTAB_END_FN_ADDR &&
+            snax_symbol_name_eq((const char *)sym->name, SNAX_SYMTAB_END_FN_NAME)) {
+            break;
+        }
+        uint64_t sig = snax_symbol_sig_of_field((const char *)sym->name);
+        if (((slots >> ((sig * hash_mul) >> 58)) & 1u) == 0) continue;
+        for (int k = 0; k < n; k++) {
+            if (sig == sigs[k] && ((pending >> k) & 1u) &&
+                snax_symbol_name_eq((const char *)sym->name, names[k])) {
+                addrs[k] = sym->addr;
+                pending &= ~(1ULL << k);
+                break;
+            }
+        }
+    }
+}
+
 // Get the device function
 uint32_t get_device_function(const char *name) {
     uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);

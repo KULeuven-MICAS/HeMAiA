@@ -79,6 +79,9 @@ extern uint32_t xdma_last_write_cycle();
 #ifdef XDMA_DST_JCT_ENABLE_PTR
 extern int32_t xdma_enable_dst_junction(uint8_t jct, uint32_t* csr_value);
 extern int32_t xdma_disable_dst_junction(uint8_t jct);
+extern int32_t xdma_chain_gather_1d_full_address_csrs(uint64_t local_src, uint64_t* chain,
+                                                      uint32_t chain_num, uint32_t size,
+                                                      uint8_t junction, uint32_t* jct_csr);
 extern int32_t xdma_chain_gather_1d_full_address(uint64_t local_src, uint64_t* chain,
                                                  uint32_t chain_num, uint32_t size,
                                                  uint8_t junction, uint32_t jct_csr0);

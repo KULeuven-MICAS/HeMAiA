@@ -142,6 +142,29 @@ uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
     return results;
 }
 
+uint64_t bingo_l1_alloc_at(uint8_t chip_id, uint32_t cluster_id, uint64_t size, uint64_t expected){
+    uint64_t results = bingo_l1_alloc(chip_id, cluster_id, size);
+    if (results != expected) {
+        printf_safe("Chip(%x, %x): [Host] L1 malloc on cluster %d returned 0x%lx, expected 0x%lx\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id, results, expected);
+        host_abort(BINGO_EXIT_LAYOUT);
+    }
+    return results;
+}
+
+void bingo_fill_kernel_list(uint32_t *list, const uint32_t *fn_addrs, const uint8_t *fn_idx,
+                            uint32_t n){
+    // Every store to the list is a write through the D-cache to L3: two entries a store.
+    uint32_t i = 0;
+    if (((uintptr_t)list & 7u) == 0) {
+        for (; i + 1 < n; i += 2) {
+            *(uint64_t *)&list[i] = (uint64_t)fn_addrs[fn_idx[i]] |
+                                    ((uint64_t)fn_addrs[fn_idx[i + 1]] << 32);
+        }
+    }
+    for (; i < n; i++) list[i] = fn_addrs[fn_idx[i]];
+}
+
 uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
     uint64_t results = bingoHeapMalloc(bingo_get_l2_heap_manager(chip_id), size);
     if (results==0UL) {
@@ -923,7 +946,62 @@ void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_ke
     bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
 }
 
-uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
+int16_t *bingo_g2l16_build(int16_t *dense, const int16_t *tmpl, uint32_t num_total_tasks,
+                           const uint32_t *idx, const int16_t *val, uint32_t n){
+    const uint32_t bytes = ALIGN_UP(4u + num_total_tasks * (uint32_t)sizeof(int16_t), 8u);
+    sys_dma_blk_memcpy(get_current_chip_id(),
+                       (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), (uint64_t)(uintptr_t)dense),
+                       (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), (uint64_t)(uintptr_t)tmpl),
+                       bytes);
+    // past the two halves of the magic word
+    for (uint32_t i = 0; i < n; i++) dense[2u + idx[i]] = val[i];
+    // the clusters' copies are DMA reads of memory, after these stores
+    __asm__ volatile("fence" ::: "memory");
+    return dense;
+}
+
+int16_t *bingo_g2l16_build_runs(int16_t *dense, const int16_t *tmpl, uint32_t num_total_tasks,
+                                const uint32_t *runs, const int16_t *run_vals, uint32_t nruns,
+                                const uint32_t *idx, const int16_t *val, uint32_t n){
+    const uint8_t chip = get_current_chip_id();
+    const uint32_t bytes = ALIGN_UP(4u + num_total_tasks * (uint32_t)sizeof(int16_t), 8u);
+    sys_dma_blk_memcpy(chip,
+                       (uint64_t)chiplet_addr_transform_full(chip, (uint64_t)(uintptr_t)dense),
+                       (uint64_t)chiplet_addr_transform_full(chip, (uint64_t)(uintptr_t)tmpl),
+                       bytes);
+    // The runs are queued back to back on the engine and run in order after the template copy
+    uint32_t last_id = 0;
+    const int16_t *src = run_vals;
+    for (uint32_t r = 0; r < nruns; r++) {
+        const uint32_t at = runs[2u * r], len = runs[2u * r + 1u];
+        last_id = sys_dma_engine_memcpy(
+            chip, 0, (uint64_t)chiplet_addr_transform_full(chip, (uint64_t)(uintptr_t)(dense + at)),
+            (uint64_t)chiplet_addr_transform_full(chip, (uint64_t)(uintptr_t)src),
+            len * (uint32_t)sizeof(int16_t));
+        src += len;
+    }
+    if (nruns) sys_dma_engine_wait(chip, 0, last_id);
+    for (uint32_t i = 0; i < n; i++) dense[2u + idx[i]] = val[i];
+    // the clusters' copies are DMA reads of memory, after these stores
+    __asm__ volatile("fence" ::: "memory");
+    return dense;
+}
+
+// The position of `gid` in the ascending list `gids`, or -1.
+static int32_t bingo_sparse_host_task_id(const uint32_t *gids, uint32_t n, uint32_t gid){
+    uint32_t lo = 0, hi = n;
+    while (lo < hi) {
+        const uint32_t mid = (lo + hi) >> 1;
+        if (gids[mid] < gid) lo = mid + 1; else hi = mid;
+    }
+    return (lo < n && gids[lo] == gid) ? (int32_t)lo : -1;
+}
+
+// The scheduler loop; the host task id comes from the dense table when it is given, else from
+// the sparse list.
+static uint32_t bingo_hw_scheduler_run(uint64_t* host_arg_list, uint64_t* host_kernel_list,
+                                       int32_t* global_task_id_to_host_task_id,
+                                       const uint32_t* host_task_gids, uint32_t num_host_tasks){
     uint32_t current_global_task_id;
     int32_t current_host_task_id;
     uint64_t current_arg_ptr;
@@ -937,7 +1015,9 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
         BINGO_TRACE_MARKER(BINGO_TRACE_MGR_GET_READY_END);
         // 2. Then we get the host task id from the global task id
         BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_START);
-        current_host_task_id = bingo_hw_scheduler_get_host_task_id(global_task_id_to_host_task_id, current_global_task_id);
+        current_host_task_id = global_task_id_to_host_task_id
+            ? bingo_hw_scheduler_get_host_task_id(global_task_id_to_host_task_id, current_global_task_id)
+            : bingo_sparse_host_task_id(host_task_gids, num_host_tasks, current_global_task_id);
         if (current_host_task_id == -1){
             BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Error: Invalid host task id for global task id %d\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
@@ -998,6 +1078,17 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
         }
     }
     return err;
+}
+
+uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
+    return bingo_hw_scheduler_run(host_arg_list, host_kernel_list, global_task_id_to_host_task_id,
+                                  0, 0u);
+}
+
+uint32_t bingo_hw_scheduler_sparse(uint64_t *host_arg_list, uint64_t *host_kernel_list,
+                                   const uint32_t *host_task_gids, uint32_t num_host_tasks){
+    return bingo_hw_scheduler_run(host_arg_list, host_kernel_list, 0, host_task_gids,
+                                  num_host_tasks);
 }
 
 /////////////////////////////

@@ -143,9 +143,10 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 #           index_map() in comm/nest.py deliberately has no entry for d32: it is an output
 #           permutation, not a transport source.
 #
-# "monoid"  The monoid junction's lane geometry: lane = field*S + slot within a 16-lane
-#           FP32 beat, field 0 = m and field 1 = l. It is what a partial (m, l) physically
-#           is, and calling it row-major would invite a consumer to read it as rows.
+# "softmax_stats"  The softmax-statistics junction's group: per 32 rows a key beat m[0..31]
+#           then a value beat l[0..31], FP16, lane r = row r. It is what a partial (m, l)
+#           physically is, and calling it row-major would invite a consumer to read it as
+#           one matrix.
 #
 # ======================================================================================
 # ORIENTATION IS A LAYOUT, NOT A FLAG BESIDE ONE
@@ -222,7 +223,7 @@ class Layout(_Vocab):
     ROW_MAJOR = "row_major", "plain row-major, what everything outside the array uses"
     COL_MAJOR = "col_major", "the same values stored [cols, rows]: what a per-row reduction wants"
     D32 = "d32", "the D port's INT32 scatter -- a DIFFERENT bijection from D"
-    MONOID = "monoid", "the junction's lane geometry: lane = field*S + slot, field 0 = m, 1 = l"
+    SOFTMAX_STATS = "softmax_stats", "the junction's group: per 32 rows a key beat m, then a value beat l"
 
 
 class DType(_Vocab):

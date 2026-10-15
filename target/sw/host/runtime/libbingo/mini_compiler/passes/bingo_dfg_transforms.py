@@ -2,7 +2,38 @@
 
 import networkx as nx
 
+from bingo_reach import reach_sets
+
 from bingo_node import BingoNode
+
+
+def _dsatur(G) -> dict:
+    """networkx greedy_color(G, strategy="DSATUR"), the same colouring: the next node is the uncoloured
+    one with the most distinct colours among its neighbours, then the highest degree, then the first in
+    G's node order, and it takes the smallest colour no neighbour has. networkx recounts every
+    node's colours from every coloured node at each step; here a colouring updates its neighbours'
+    counts only, and a heap with stale entries skipped finds the next node."""
+    import heapq
+    deg = {v: G.degree(v) for v in G}
+    sat = {v: set() for v in G}
+    heap = [(0, -deg[v], i, v) for i, v in enumerate(G)]
+    heapq.heapify(heap)
+    order = {v: i for i, v in enumerate(G)}
+    colour: dict = {}
+    while heap:
+        nsat, _, _, u = heapq.heappop(heap)
+        if u in colour or -nsat != len(sat[u]):
+            continue
+        used = {colour[v] for v in G[u] if v in colour}
+        c = 0
+        while c in used:
+            c += 1
+        colour[u] = c
+        for v in G[u]:
+            if v not in colour and c not in sat[v]:
+                sat[v].add(c)
+                heapq.heappush(heap, (-len(sat[v]), -deg[v], order[v], v))
+    return colour
 
 
 class BingoDFGTransformsMixin:
@@ -1139,12 +1170,10 @@ class BingoDFGTransformsMixin:
             for i in range(len(seq) - 1):
                 hb.add_edge(seq[i], seq[i + 1])
 
-        _desc: dict = {}
+        hb_reach = reach_sets(hb)
 
         def _descendants(n):
-            if n not in _desc:
-                _desc[n] = nx.descendants(hb, n)
-            return _desc[n]
+            return hb_reach[n]
 
         def _precedes(a, b):
             """Group a may hand its tag on to b: every drain of a happens-before
@@ -1237,7 +1266,7 @@ class BingoDFGTransformsMixin:
             for a, b in _it.combinations(sorted(groups_in_cell[cell]), 2):
                 if not _precedes(a, b) and not _precedes(b, a):
                     H.add_edge(a, b)
-        colour = nx.coloring.greedy_color(H, strategy="DSATUR")
+        colour = _dsatur(H)
         n_tags = (max(colour.values()) + 1) if colour else 0
         H_cell = None
         if n_tags > max_tags:
@@ -1271,7 +1300,7 @@ class BingoDFGTransformsMixin:
                 for a, b in _it.combinations(sorted(groups_in_cell[cell]), 2):
                     if not _precedes_in(a, b, cell) and not _precedes_in(b, a, cell):
                         H_cell.add_edge(a, b)
-            colour_cell = nx.coloring.greedy_color(H_cell, strategy="DSATUR")
+            colour_cell = _dsatur(H_cell)
             n_cell = (max(colour_cell.values()) + 1) if colour_cell else 0
             print(f"Tag allocation: ordering groups as a whole needs {n_tags} tags, "
                   f"ordering them per cell needs {n_cell} (of {max_tags})")

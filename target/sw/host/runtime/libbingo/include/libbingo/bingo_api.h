@@ -472,6 +472,14 @@ static inline bingo_hw_manager_task_desc_t bingo_hw_build_conditional_task(
 // Implemented in start.S; used to fail fast (rather than spin) on unrecoverable
 // runtime errors such as a heap out-of-memory.
 __attribute__((noreturn)) void host_abort(uint64_t exit_code);
+// Exit code when an address is not where generated code assumed it would be (an L1 allocation,
+// the program image).
+#define BINGO_EXIT_LAYOUT 2UL
+// 1: generated code also computes every args field it initialised statically from an address
+// the way it would at run time, and aborts with BINGO_EXIT_LAYOUT on any difference.
+#ifndef BINGO_CHECK_STATIC_ARGS
+#define BINGO_CHECK_STATIC_ARGS 0
+#endif
 
 // Allocator init (L2 and L3)
 int bingo_hemaia_system_mmap_init();
@@ -487,6 +495,22 @@ uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size);
 uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size);
 uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size);
 void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr);
+
+// chiplet_addr_transform_full as a constant expression, for static initializers.
+#define BINGO_CHIP_ADDR(chip_id, addr) ((((uint64_t)(chip_id)) << 40) | (uint64_t)(addr))
+// Where the first allocation on a fresh L1 heap of cluster `cluster_id` on chip `chip_id` lands:
+// the device puts the heap at the start of the cluster's TCDM (bingo_get_l1_heap_manager), and
+// bingo_alloc.h gives the layout from there.
+#define BINGO_L1_FIRST_ALLOC(chip_id, cluster_id)                                         \
+    BINGO_HEAP_FIRST_ALLOC(BINGO_CHIP_ADDR(chip_id, QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + \
+                                                        (uint64_t)(cluster_id) * cluster_offset))
+// bingo_l1_alloc for code built around an address it computed in advance (static data that
+// holds L1 addresses): aborts the run when the allocation lands anywhere else.
+uint64_t bingo_l1_alloc_at(uint8_t chip_id, uint32_t cluster_id, uint64_t size, uint64_t expected);
+
+// The device kernel list from the resolved kernel addresses: list[i] = fn_addrs[fn_idx[i]].
+void bingo_fill_kernel_list(uint32_t *list, const uint32_t *fn_addrs, const uint8_t *fn_idx,
+                            uint32_t n);
 void bingo_l2_free(uint8_t chip_id, uint64_t ptr);
 void bingo_l3_free(uint8_t chip_id, uint64_t ptr);
 
@@ -617,6 +641,28 @@ void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_ke
                                      uint32_t bingo_hw_scheduler_num_task_desc);
 
 uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);
+
+// COMPACT ID MAPS. The binary every chiplet runs holds every chiplet's tables, so a table
+// indexed by global task id costs one entry per task per chiplet. These keep only the
+// chiplet's own entries and build what has to be dense at boot.
+//
+// The global -> local dev id table the clusters read (bingo_hw_scheduler_init_compact):
+// `tmpl` holds the magic word and -1 for every task, shared by all chiplets; it is copied
+// into `dense` and the chiplet's n entries (global id idx[i] -> local id val[i]) are written
+// over it. Returns dense.
+int16_t *bingo_g2l16_build(int16_t *dense, const int16_t *tmpl, uint32_t num_total_tasks,
+                           const uint32_t *idx, const int16_t *val, uint32_t n);
+// bingo_g2l16_build with the chiplet's entries mostly in runs: run r covers table entries
+// [runs[2r], runs[2r] + runs[2r+1]) and is copied by DMA from run_vals, where the runs sit back
+// to back (8-byte aligned, whole 8-byte words); the n entries outside every run are written
+// as in bingo_g2l16_build.
+int16_t *bingo_g2l16_build_runs(int16_t *dense, const int16_t *tmpl, uint32_t num_total_tasks,
+                                const uint32_t *runs, const int16_t *run_vals, uint32_t nruns,
+                                const uint32_t *idx, const int16_t *val, uint32_t n);
+// The host scheduler with the global -> host task id map as the chiplet's host-task global
+// ids, ascending: a task's host id is its position in that list.
+uint32_t bingo_hw_scheduler_sparse(uint64_t *host_arg_list, uint64_t *host_kernel_list,
+                                   const uint32_t *host_task_gids, uint32_t num_host_tasks);
 
 /////////////////////////////
 // DARTS CERF Runtime API  //

@@ -4,8 +4,8 @@
 //
 // Cross-die in-fabric REDUCTION sweep on the HeMAiA chiplet mesh.
 //
-// Two reduction SHAPES over the same partials, the same junctions and the same goldens, so
-// the only variable is the shape:
+// Two reduction SHAPES over the same partials and the same junctions, so the only variable is
+// the shape:
 //
 //   CHAIN  one flat width-P ChainGather: P-1 remote sources folded hop by hop into the
 //          collector. Cost grows linearly in P.
@@ -16,13 +16,16 @@
 // and two junctions per shape:
 //
 //   LINEAR  ElementwiseJunction, per-element FP32 ADD  -> byte-exact check.
-//   MOMENT  MonoidJunction, the nonlinear online-softmax (m, l) merge
-//           (m1,l1) (+) (m2,l2) = (max(m1,m2), l1*exp(m1-m*) + l2*exp(m2-m*))
-//           -> m* exact, l* checked to a ULP tolerance (writer exp LUT).
+//   SMS     SoftmaxStatsJunction, the online-softmax statistics merge over a 32-row group
+//           (m1,l1) (+) (m2,l2) = (max(m1,m2), l1*exp(a(m1-m*)) + l2*exp(a(m2-m*)))
+//           -> byte-exact check against the datagen's bit-exact model of the fold.
 //
-// Both junctions are associative AND commutative, which is exactly what licenses the tree:
-// re-associating the fold cannot change the answer, so the tree's result is checked against
-// the SAME golden as the chain's. That is a real correctness statement, not a convenience.
+// Both operators are associative AND commutative, which is exactly what licenses the tree.
+// The linear fold is also EXACT on its integer-valued partials, so re-associating it cannot
+// change the answer and the tree's result is checked against the SAME golden as the chain's.
+// That is a real correctness statement, not a convenience. The stats fold rounds l to FP16 at
+// every hop, so re-associating it moves the last bits: each shape has its own golden, the
+// datagen's model folded in that shape's order.
 //
 // THE GRID AND THE SNAKE.  hemaia_16chiplet places 16 compute chiplets on a 4x4 grid plus a
 // memory chiplet at [4,0]. chip_id = (x << 4) | y (chip_id.h), so with x the column and y the
@@ -117,6 +120,9 @@
 #include "snrt.h"
 
 #define PARTIAL_BYTES (PARTIAL_ELEMS * (int)sizeof(float))
+// A stats partial is one group: the key beat m[0..31], then the value beat l[0..31], FP16.
+#define SMS_HALFS (2 * SMS_ROWS)
+#define SMS_BYTES (SMS_HALFS * (int)sizeof(uint16_t))
 
 // The collector is the chiplet at snake index 0 -- chip 0x00, the boot chip. It is also the
 // tree's row-0 collector and its final root.
@@ -124,7 +130,7 @@
 
 // Two junctions measured per width.
 #define MODE_LIN 0
-#define MODE_MOM 1
+#define MODE_SMS 1
 #define NUM_MODES 2
 
 // Two reduction shapes measured per (width, junction).
@@ -134,7 +140,8 @@
 
 #define NUM_ROUNDS (NUM_ALGOS * NUM_MODES * NUM_SWEEP_P)
 
-// TCDM map. Eight 64 B data beats first, then the per-round row slots, then the flag tables.
+// TCDM map. Nine 64 B data beats first -- a linear partial is one beat, a stats group two --
+// then the per-round row slots, then the flag tables.
 // Everything after the beats is sized from NUM_ROUNDS / NUM_CHIPLETS so the regions cannot
 // silently overlap when the sweep grows -- an earlier layout had READY running straight
 // through DONE and only escaped by luck, because the aliased slot happened to be one nobody
@@ -142,18 +149,19 @@
 #define BEAT_BYTES 0x40u
 #define LIN_SRC_OFF 0x000u   // this chiplet's linear partial
 #define LIN_DST_OFF 0x040u   // collector's linear CHAIN result
-#define MOM_SRC_OFF 0x080u   // this chiplet's (m, l) beat
-#define MOM_DST_OFF 0x0C0u   // collector's merged (m*, l*) CHAIN result
-#define LIN_TREE_OFF 0x100u  // collector's linear TREE result
-#define MOM_TREE_OFF 0x140u  // collector's merged TREE result
+#define SMS_SRC_OFF 0x080u   // this chiplet's (m, l) group
+#define SMS_DST_OFF 0x100u   // collector's merged (m*, l*) CHAIN result
+#define LIN_TREE_OFF 0x180u  // collector's linear TREE result
+#define SMS_TREE_OFF 0x1C0u  // collector's merged TREE result
 
 // Tree stage-1 output, one slot PER ROUND on every row collector. Per-round slots mean the
 // DATA cannot race even though the flags are only loosely coupled: chip 0x00 reads row slot r
 // while the row collector may already be writing round r+1, and those are different slots.
 // (The s2done flag below is a separate concern -- it protects the xDMA CONFIG plane, not this
-// buffer.)
-#define ROW_OFF 0x200u
-#define ROW_WORDS (NUM_ROUNDS * (int)(BEAT_BYTES / 4u))
+// buffer.) A slot is sized for the larger partial, the stats group.
+#define ROW_OFF 0x240u
+#define SLOT_BYTES 0x80u
+#define ROW_WORDS (NUM_ROUNDS * (int)(SLOT_BYTES / 4u))
 
 // ready[round][snake_idx]: written cross-chip by a source INTO the node that gathers from it
 // -- chip 0x00 for a chain round, the row's x=0 chiplet for a tree round.
@@ -175,12 +183,6 @@
 #define DONE_OFF (S2DONE_OFF + (uint32_t)S2DONE_WORDS * 4u)
 #define SYNC_END (DONE_OFF + 4u)
 #define FLAG_SET 0xA5A5A5A5u
-
-// fp32 ULP tolerance for l* (exp-LUT approximation). ~0x20000 ULPs ~= 1.5% at l* ~ 1.19,
-// matching the Gate-A moment-merge acceptance bound. The measured delta is printed so the
-// bound can be tightened once the sweep has run; measured values so far are 7-27 ULP, four
-// orders of magnitude inside this, so it is currently far too loose to catch a regression.
-#define L_TOL_ULPS 0x20000u
 
 // Bounded wait. A sweep is worth more when one hanging width still yields the others, so the
 // collector polls with a spin cap instead of spinning forever: a stuck round is reported as
@@ -269,14 +271,23 @@ static inline void xchip_store_u32(uint8_t target_chip, uint32_t local_addr, uin
 _Static_assert(NUM_CHIPLETS == N_CHIPLETS,
     "the generated data set has NUM_CHIPLETS partials but the platform reports N_CHIPLETS "
     "chiplets; set num_chiplets in the app's params.hjson to match the RTL cfg.");
+_Static_assert(NUM_CHIPLETS_X == N_CHIPLETS_X,
+    "the stats tree goldens were folded on a grid NUM_CHIPLETS_X wide but the platform is "
+    "N_CHIPLETS_X wide; set num_chiplets_x in the app's params.hjson to match the RTL cfg.");
 _Static_assert(NUM_CHIPLETS <= XDMA_MAX_DST_COUNT,
     "a width-NUM_CHIPLETS chain needs NUM_CHIPLETS xDMA dst slots (NUM_CHIPLETS-1 remote "
     "sources + the local dst); raise the xDMA multicast width or lower num_chiplets.");
 _Static_assert(SYNC_END <= 0x4000u,
     "the sync tables have grown past 16 KiB of TCDM; shrink sweep_p or move them.");
-_Static_assert(LIN_TREE_OFF + BEAT_BYTES <= MOM_TREE_OFF &&
-                   MOM_TREE_OFF + BEAT_BYTES <= ROW_OFF,
-    "the data beats overlap the per-round row slots.");
+_Static_assert(PARTIAL_BYTES <= BEAT_BYTES && SMS_BYTES == 2 * BEAT_BYTES &&
+                   SMS_BYTES <= SLOT_BYTES,
+    "a linear partial must fit one beat and a stats group is exactly two.");
+_Static_assert(LIN_DST_OFF + BEAT_BYTES <= SMS_SRC_OFF &&
+                   SMS_SRC_OFF + SMS_BYTES <= SMS_DST_OFF &&
+                   SMS_DST_OFF + SMS_BYTES <= LIN_TREE_OFF &&
+                   LIN_TREE_OFF + BEAT_BYTES <= SMS_TREE_OFF &&
+                   SMS_TREE_OFF + SMS_BYTES <= ROW_OFF,
+    "the data beats overlap each other or the per-round row slots.");
 
 // How many FULL rows a width-P tree spans, or 0 if this width has no tree.
 // A tree needs at least two full rows: one row is a straight line with no second dimension to
@@ -320,37 +331,39 @@ static void clear_xdma_plugins(void) {
     for (uint8_t j = 0; j < XDMA_DST_JCT_NUM; j++) xdma_disable_dst_junction(j);
 }
 
-// The junction and its CSR(0) for a mode. Both tree stages use the SAME junction the chain
-// does -- re-associating an associative fold does not change the operator.
-static void junction_for_mode(int mode, uint8_t *junction, uint32_t *jct_csr) {
+// Bytes moved per operand stream for a mode: one beat linear, one two-beat group for stats.
+static inline uint32_t partial_bytes(int mode) {
+    return (mode == MODE_LIN) ? (uint32_t)PARTIAL_BYTES : (uint32_t)SMS_BYTES;
+}
+
+// The junction and its user CSRs for a mode, one word per CSR in csr[]; CSRs a junction does
+// not use stay zero. Both tree stages use the SAME junction the chain does -- re-associating
+// the fold changes its order, not the operator.
+static void junction_for_mode(int mode, uint8_t *junction, uint32_t *csr) {
+    for (int i = 0; i < XDMA_DST_JCT_CSR_NUM; i++) csr[i] = 0;
     if (mode == MODE_LIN) {
         // ElementwiseJunction CSR(0): [3:0] op = ADD(0), [6:4] fmt = FP32(3).
         *junction = WRITER_JCT_ELEMENTWISEJUNCTION;
-        *jct_csr = (3u << 4) | 0u;
+        csr[0] = (3u << 4) | 0u;
     } else {
-        // MonoidJunction CSR(0) names a GEOMETRY, not an operator (MonoidJunction.scala):
-        //   [7:0] nValid | [11:8] n | [21:18] nExp | [25:22] nAdd | [27:26] sigma
-        //   [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
-        // The online-softmax partial is (m, l): key m plus ONE value coordinate, so n = 1
-        // (F = n+1 = 2 fields) and l takes the exp twist, so nExp = 1, nAdd = 0. Lanes are
-        // field-major, lane = field*S + slot with S = 1 << sigma, so sigma = 3 (S = 8) puts
-        // m at lane 0 and l at lane 8 -- exactly MOMENT_M_LANE / MOMENT_L_LANE. nValid = 1
-        // leaves only slot 0 live; every other slot is fed its field's identity.
-        //
-        // NOT the old StreamMomentMergeRt encoding ((1<<13)|1, combineMode at [15:13]).
-        // Under this layout that word decodes to n = 0, sigma = 0 -- a key-only geometry
-        // with S = 1 -- so the l value at lane 8 was never read and the fold wrote nothing.
-        *junction = WRITER_JCT_MONOIDJUNCTION;
-        *jct_csr = (1u /*nValid*/) | (1u << 8 /*n*/) | (1u << 18 /*nExp*/) |
-                   (0u << 22 /*nAdd*/) | (3u << 26 /*sigma=3 -> S=8*/);
+        // SoftmaxStatsJunction (SoftmaxStatsJunction.scala) has a fixed layout and no geometry
+        // word: a group is the key beat m[0..31] then the value beat l[0..31], FP16, lane r =
+        // row r, and the output group has the same form.
+        //   CSR(0) [7:0] nValid  rows 0..nValid-1 are folded; the others come out as the
+        //                        identity, key 0xFBFF and value 0
+        //   CSR(1)       the FP32 bits of a in alpha = exp(a * (m_k - m*)); 0 reads as 1.0
+        // Both values come from the datagen, whose golden folds with the same two.
+        *junction = WRITER_JCT_SOFTMAXSTATSJUNCTION;
+        csr[0] = (uint32_t)SMS_NVALID & 0xFFu;
+        csr[1] = SMS_SCALE_BITS;
     }
 }
 
-// Fill a beat with the sentinel so "the writer never wrote" is distinguishable from "it wrote
-// the wrong value". Integer stores only -- the DM core is rv32ima with no FPU.
-static void sentinel_fill(uint32_t addr) {
+// Fill a partial's bytes with the sentinel so "the writer never wrote" is distinguishable from
+// "it wrote the wrong value". Integer stores only -- the DM core is rv32ima with no FPU.
+static void sentinel_fill(uint32_t addr, uint32_t bytes) {
     volatile uint32_t *p = (volatile uint32_t *)(uintptr_t)addr;
-    for (int j = 0; j < PARTIAL_ELEMS; j++) p[j] = 0xDEADBEEFu;
+    for (uint32_t j = 0; j < bytes / 4u; j++) p[j] = 0xDEADBEEFu;
 }
 
 // SETTLE BARRIER -- do not delete.
@@ -362,12 +375,14 @@ static void sentinel_fill(uint32_t addr) {
 // which is exactly the "only the first gather works" symptom.
 //
 // A printf between the wait and the check happens to give the write time to land, which is
-// not a barrier. Wait explicitly: poll until the destination stops reading as the sentinel,
+// not a barrier. Wait explicitly: poll until the destination's LAST word stops reading as the
+// sentinel -- the last, so a two-beat stats group is waited for up to its value beat --
 // bounded so a genuinely dead transfer still reports.
-static void settle_dst(uint32_t addr) {
+static void settle_dst(uint32_t addr, uint32_t bytes) {
     volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)addr;
+    const uint32_t last = bytes / 4u - 1u;
     for (uint32_t s = 0; s < SETTLE_SPINS; s++) {
-        if (settle[0] != 0xDEADBEEFu) break;
+        if (settle[last] != 0xDEADBEEFu) break;
         asm volatile("fence" ::: "memory");
     }
     asm volatile("fence" ::: "memory");
@@ -408,17 +423,17 @@ static xdma_task_t start_and_probe(const char *algo, int width, const char *tag)
     return task;
 }
 
-// Compare the folded beat at `addr` with `golden`. Returns the number of errors.
+// Compare the folded partial at `addr` with `golden`. Returns the number of errors.
 static int check_result(int mode, int width, const char *algo, uint32_t addr,
-                        const float *golden) {
-    // Compare raw fp32 BIT PATTERNS as integers: the DM core is rv32ima with NO FPU, so a
-    // float compare would emit flw and trap as an illegal instruction.
-    volatile uint32_t *res = (volatile uint32_t *)(uintptr_t)addr;
-    const uint32_t *gold = (const uint32_t *)golden;
+                        const void *golden) {
+    // Compare raw BIT PATTERNS as integers: the DM core is rv32ima with NO FPU, so a float
+    // compare would emit flw and trap as an illegal instruction.
     int err = 0;
 
     if (mode == MODE_LIN) {
         // Small integer-valued fp32 operands -> the sum is exact -> byte-exact compare.
+        volatile uint32_t *res = (volatile uint32_t *)(uintptr_t)addr;
+        const uint32_t *gold = (const uint32_t *)golden;
         for (int j = 0; j < PARTIAL_ELEMS; j++) {
             if (res[j] != gold[j]) {
                 if (err < 4) {
@@ -429,19 +444,25 @@ static int check_result(int mode, int width, const char *algo, uint32_t addr,
             }
         }
     } else {
-        // m* is a max, so exact; l* goes through the writer's exp LUT, so ULP-bounded.
-        uint32_t m_got = res[MOMENT_M_LANE], m_exp = gold[MOMENT_M_LANE];
-        uint32_t l_got = res[MOMENT_L_LANE], l_exp = gold[MOMENT_L_LANE];
-        uint32_t l_ulp = (l_got > l_exp) ? (l_got - l_exp) : (l_exp - l_got);
-        printf("[Sweep] %s P=%d mom m*: got %x exp %x | l*: got %x exp %x (ulp=%x tol=%x)\r\n",
-               algo, width, m_got, m_exp, l_got, l_exp, l_ulp, L_TOL_ULPS);
-        if (m_got != m_exp) {
-            printf("[Sweep] %s P=%d mom m* MISMATCH\r\n", algo, width);
-            err++;
-        }
-        if (l_ulp > L_TOL_ULPS) {
-            printf("[Sweep] %s P=%d mom l* OUT OF TOLERANCE\r\n", algo, width);
-            err++;
+        // m* is a max and l* is modelled bit for bit in this shape's fold order, so the whole
+        // group is a byte-exact compare too. A value mismatch prints its FP16 ULP distance.
+        volatile uint16_t *res = (volatile uint16_t *)(uintptr_t)addr;
+        const uint16_t *gold = (const uint16_t *)golden;
+        for (int j = 0; j < SMS_HALFS; j++) {
+            if (res[j] != gold[j]) {
+                if (err < 4) {
+                    if (j < SMS_ROWS) {
+                        printf("[Sweep] %s P=%d sms m* MISMATCH row %d: got %x exp %x\r\n", algo,
+                               width, j, res[j], gold[j]);
+                    } else {
+                        const int d = (int)res[j] - (int)gold[j];
+                        printf("[Sweep] %s P=%d sms l* MISMATCH row %d: got %x exp %x "
+                               "(%d FP16 ULP)\r\n",
+                               algo, width, j - SMS_ROWS, res[j], gold[j], d < 0 ? -d : d);
+                    }
+                }
+                err++;
+            }
         }
     }
     return err;
@@ -450,11 +471,12 @@ static int check_result(int mode, int width, const char *algo, uint32_t addr,
 //======================================================================================
 // CHAIN: one flat width-P gather into the collector.
 //======================================================================================
-static int run_chain_round(int mode, int width, uint32_t tcdm_base, const float *golden,
+static int run_chain_round(int mode, int width, uint32_t tcdm_base, const void *golden,
                            uint32_t *task_cycles, uint32_t *wall_cycles) {
-    const uint32_t src_off = (mode == MODE_LIN) ? LIN_SRC_OFF : MOM_SRC_OFF;
-    const uint32_t dst_off = (mode == MODE_LIN) ? LIN_DST_OFF : MOM_DST_OFF;
-    const char *tag = (mode == MODE_LIN) ? "lin" : "mom";
+    const uint32_t src_off = (mode == MODE_LIN) ? LIN_SRC_OFF : SMS_SRC_OFF;
+    const uint32_t dst_off = (mode == MODE_LIN) ? LIN_DST_OFF : SMS_DST_OFF;
+    const uint32_t bytes = partial_bytes(mode);
+    const char *tag = (mode == MODE_LIN) ? "lin" : "sms";
 
     clear_xdma_plugins();
 
@@ -471,14 +493,14 @@ static int run_chain_round(int mode, int width, uint32_t tcdm_base, const float 
     }
     chain[n++] = dst_local;
 
-    sentinel_fill(tcdm_base + dst_off);
+    sentinel_fill(tcdm_base + dst_off, bytes);
 
     uint8_t junction;
-    uint32_t jct_csr;
-    junction_for_mode(mode, &junction, &jct_csr);
+    uint32_t jct_csr[XDMA_DST_JCT_CSR_NUM];
+    junction_for_mode(mode, &junction, jct_csr);
 
-    if (xdma_chain_gather_1d_full_address(local_src, chain, (uint32_t)n, PARTIAL_BYTES, junction,
-                                          jct_csr) != 0) {
+    if (xdma_chain_gather_1d_full_address_csrs(local_src, chain, (uint32_t)n, bytes, junction,
+                                               jct_csr) != 0) {
         printf("[Sweep] chain P=%d %s: cfg FAILED\r\n", width, tag);
         *task_cycles = 0;
         *wall_cycles = 0;
@@ -501,7 +523,7 @@ static int run_chain_round(int mode, int width, uint32_t tcdm_base, const float 
     *task_cycles = xdma_last_task_cycle();
     *wall_cycles = t1 - t0;
 
-    settle_dst(tcdm_base + dst_off);
+    settle_dst(tcdm_base + dst_off, bytes);
     print_jct_status("chain", width, tag);
     return check_result(mode, width, "chain", tcdm_base + dst_off, golden);
 }
@@ -511,13 +533,14 @@ static int run_chain_round(int mode, int width, uint32_t tcdm_base, const float 
 // parallel across rows. Returns 0 and the started task on success.
 //======================================================================================
 static int tree_start_row_fold(int mode, int y, int r, uint32_t tcdm_base, xdma_task_t *task) {
-    const uint32_t src_off = (mode == MODE_LIN) ? LIN_SRC_OFF : MOM_SRC_OFF;
-    const uint32_t row_off = ROW_OFF + (uint32_t)r * BEAT_BYTES;
-    const char *tag = (mode == MODE_LIN) ? "lin" : "mom";
+    const uint32_t src_off = (mode == MODE_LIN) ? LIN_SRC_OFF : SMS_SRC_OFF;
+    const uint32_t row_off = ROW_OFF + (uint32_t)r * SLOT_BYTES;
+    const uint32_t bytes = partial_bytes(mode);
+    const char *tag = (mode == MODE_LIN) ? "lin" : "sms";
     const uint8_t self = chip_at(0, y);
 
     clear_xdma_plugins();
-    sentinel_fill(tcdm_base + row_off);
+    sentinel_fill(tcdm_base + row_off, bytes);
 
     // Walk the row east-to-west: (RX-1,y) -> ... -> (1,y) -> dst at (0,y). Every step is one
     // hop, whichever way the snake happens to run through this row.
@@ -530,11 +553,11 @@ static int tree_start_row_fold(int mode, int y, int r, uint32_t tcdm_base, xdma_
     chain[n++] = chiplet_addr_transform_full(self, (uint64_t)(tcdm_base + row_off));
 
     uint8_t junction;
-    uint32_t jct_csr;
-    junction_for_mode(mode, &junction, &jct_csr);
+    uint32_t jct_csr[XDMA_DST_JCT_CSR_NUM];
+    junction_for_mode(mode, &junction, jct_csr);
 
-    if (xdma_chain_gather_1d_full_address(local_src, chain, (uint32_t)n, PARTIAL_BYTES, junction,
-                                          jct_csr) != 0) {
+    if (xdma_chain_gather_1d_full_address_csrs(local_src, chain, (uint32_t)n, bytes, junction,
+                                               jct_csr) != 0) {
         printf("[Sweep] tree row %d %s: stage-1 cfg FAILED\r\n", y, tag);
         return -1;
     }
@@ -550,12 +573,13 @@ static int tree_start_row_fold(int mode, int y, int r, uint32_t tcdm_base, xdma_
 //======================================================================================
 static int tree_start_column_fold(int mode, int ry, int r, uint32_t tcdm_base,
                                   xdma_task_t *task) {
-    const uint32_t row_off = ROW_OFF + (uint32_t)r * BEAT_BYTES;
-    const uint32_t tree_off = (mode == MODE_LIN) ? LIN_TREE_OFF : MOM_TREE_OFF;
-    const char *tag = (mode == MODE_LIN) ? "lin" : "mom";
+    const uint32_t row_off = ROW_OFF + (uint32_t)r * SLOT_BYTES;
+    const uint32_t tree_off = (mode == MODE_LIN) ? LIN_TREE_OFF : SMS_TREE_OFF;
+    const uint32_t bytes = partial_bytes(mode);
+    const char *tag = (mode == MODE_LIN) ? "lin" : "sms";
 
     clear_xdma_plugins();
-    sentinel_fill(tcdm_base + tree_off);
+    sentinel_fill(tcdm_base + tree_off, bytes);
 
     // (0,RY-1) -> ... -> (0,1) -> dst at (0,0). Every step is one hop north.
     uint64_t local_src = chiplet_addr_transform_full(COLLECTOR, (uint64_t)(tcdm_base + row_off));
@@ -567,11 +591,11 @@ static int tree_start_column_fold(int mode, int ry, int r, uint32_t tcdm_base,
     chain[n++] = chiplet_addr_transform_full(COLLECTOR, (uint64_t)(tcdm_base + tree_off));
 
     uint8_t junction;
-    uint32_t jct_csr;
-    junction_for_mode(mode, &junction, &jct_csr);
+    uint32_t jct_csr[XDMA_DST_JCT_CSR_NUM];
+    junction_for_mode(mode, &junction, jct_csr);
 
-    if (xdma_chain_gather_1d_full_address(local_src, chain, (uint32_t)n, PARTIAL_BYTES, junction,
-                                          jct_csr) != 0) {
+    if (xdma_chain_gather_1d_full_address_csrs(local_src, chain, (uint32_t)n, bytes, junction,
+                                               jct_csr) != 0) {
         printf("[Sweep] tree %s: stage-2 cfg FAILED\r\n", tag);
         return -1;
     }
@@ -629,8 +653,8 @@ int main() {
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d((void *)(uintptr_t)(tcdm_base + LIN_SRC_OFF),
                           &chain_gather_data[me * PARTIAL_ELEMS], PARTIAL_BYTES);
-        snrt_dma_start_1d((void *)(uintptr_t)(tcdm_base + MOM_SRC_OFF),
-                          &chain_gather_moment_data[me * PARTIAL_ELEMS], PARTIAL_BYTES);
+        snrt_dma_start_1d((void *)(uintptr_t)(tcdm_base + SMS_SRC_OFF),
+                          &chain_gather_sms_data[me * SMS_HALFS], SMS_BYTES);
         snrt_dma_wait_all();
     }
     snrt_global_barrier();
@@ -657,10 +681,16 @@ int main() {
             for (int pi = 0; pi < NUM_SWEEP_P; pi++) {
                 const int width = SWEEP_P[pi];
                 const int r = (ai * NUM_MODES + mode) * NUM_SWEEP_P + pi;
-                const char *tag = (mode == MODE_LIN) ? "lin" : "mom";
-                const float *golden = (mode == MODE_LIN)
-                                          ? &chain_gather_golden_lin[pi * PARTIAL_ELEMS]
-                                          : &chain_gather_golden_mom[pi * PARTIAL_ELEMS];
+                const char *tag = (mode == MODE_LIN) ? "lin" : "sms";
+                // The linear golden serves both shapes; the stats fold has one per shape.
+                const void *golden;
+                if (mode == MODE_LIN) {
+                    golden = &chain_gather_golden_lin[pi * PARTIAL_ELEMS];
+                } else if (ai == ALGO_CHAIN) {
+                    golden = &chain_gather_golden_sms_chain[pi * SMS_HALFS];
+                } else {
+                    golden = &chain_gather_golden_sms_tree[pi * SMS_HALFS];
+                }
 
                 //==========================================================================
                 // CHAIN
@@ -841,7 +871,7 @@ int main() {
                     continue;
                 }
                 const uint32_t s1_cc = xdma_last_task_cycle();
-                settle_dst(tcdm_base + ROW_OFF + (uint32_t)r * BEAT_BYTES);
+                settle_dst(tcdm_base + ROW_OFF + (uint32_t)r * SLOT_BYTES, partial_bytes(mode));
 
                 xdma_task_t s2;
                 if (tree_start_column_fold(mode, ry, r, tcdm_base, &s2) != 0) {
@@ -881,8 +911,8 @@ int main() {
                 printf("[Sweep] tree P=%d %s: %dx%d, stage1=%u stage2=%u sum=%u\r\n", width, tag,
                        N_CHIPLETS_X, ry, s1_cc, s2_cc, task_cyc[r]);
 
-                const uint32_t tree_off = (mode == MODE_LIN) ? LIN_TREE_OFF : MOM_TREE_OFF;
-                settle_dst(tcdm_base + tree_off);
+                const uint32_t tree_off = (mode == MODE_LIN) ? LIN_TREE_OFF : SMS_TREE_OFF;
+                settle_dst(tcdm_base + tree_off, partial_bytes(mode));
                 print_jct_status("tree", width, tag);
                 round_err[r] = check_result(mode, width, "tree", tcdm_base + tree_off, golden);
                 err += round_err[r];
@@ -915,11 +945,11 @@ int main() {
                     if (round_na[r]) {
                         printf("[Sweep] %s %4d  %s        -        -  n/a (needs >=2 full "
                                "rows)\r\n",
-                               algo, SWEEP_P[pi], (mode == MODE_LIN) ? "lin" : "mom");
+                               algo, SWEEP_P[pi], (mode == MODE_LIN) ? "lin" : "sms");
                         continue;
                     }
                     printf("[Sweep] %s %4d  %s  %7u  %7u  %s\r\n", algo, SWEEP_P[pi],
-                           (mode == MODE_LIN) ? "lin" : "mom", task_cyc[r], wall_cyc[r],
+                           (mode == MODE_LIN) ? "lin" : "sms", task_cyc[r], wall_cyc[r],
                            round_err[r] ? "FAIL" : "PASS");
                 }
             }

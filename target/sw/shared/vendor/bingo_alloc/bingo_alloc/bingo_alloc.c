@@ -21,9 +21,9 @@
 // ---- Internal constants ----
 
 #define BINGO_HEAP_MAX           18446744073709551615ULL
-#define FRAGMENT_SIZE_MIN        (BINGO_HEAP_ALIGNMENT * 2U)
+#define FRAGMENT_SIZE_MIN        BINGO_HEAP_FRAGMENT_SIZE_MIN
 #define FRAGMENT_SIZE_MAX        ((BINGO_HEAP_MAX >> 1U) + 1U)
-#define INSTANCE_SIZE_PADDED     ((sizeof(BingoHeapInstance) + BINGO_HEAP_ALIGNMENT - 1U) & ~(BINGO_HEAP_ALIGNMENT - 1U))
+#define INSTANCE_SIZE_PADDED     BINGO_HEAP_INSTANCE_SIZE_PADDED
 
 // ---- Pointer casting macros ----
 // These allow both 32-bit Snitch cores and 64-bit CVA6 to share the same
@@ -166,8 +166,7 @@ uint64_t bingoHeapMalloc(uint64_t const handle, const uint64_t amount) {
         // Example with 512 KB TCDM (capacity ~508 KB after metadata):
         //   o1heap:      300 KB request -> roundUpToPow2(300KB + 128) = 512 KB -> FAIL
         //   bingo_alloc: 300 KB request -> alignUp(300KB + 128, 256)  = 300.25 KB -> OK
-        const uint64_t fragment_size =
-            (amount + BINGO_HEAP_ALIGNMENT + FRAGMENT_SIZE_MIN - 1U) & ~(FRAGMENT_SIZE_MIN - 1U);
+        const uint64_t fragment_size = BINGO_HEAP_FRAGMENT_SIZE(amount);
 
         // Start from the bin whose minimum size is <= fragment_size.
         // Unlike o1heap (which uses log2Ceil and is guaranteed first-fit),

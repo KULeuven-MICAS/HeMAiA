@@ -378,8 +378,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
 
 // ==========================================================================
 // The softmax row with its statistics GIVEN: -m in x's latch, s splatted at s_addr (a sharded
-// router's root, after the TopK and Monoid folds, moe_router_pack mode 2). Steps 3-5 of
-// simd_softmax_row below, without the reduces: p = exp(x - m) * rsqrt(s * s).
+// router's root, after the TopK and softmax-statistics folds, moe_router_pack mode 2). Steps
+// 3-5 of simd_softmax_row below, without the reduces: p = exp(x - m) * rsqrt(s * s).
 // ==========================================================================
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row_ext(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_softmax_row_ext_args_t);

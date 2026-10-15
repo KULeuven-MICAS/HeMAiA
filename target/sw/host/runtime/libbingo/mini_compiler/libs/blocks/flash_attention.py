@@ -113,7 +113,7 @@ class FaCfg:
 
     Four kinds of value, kept apart because they answer to different questions:
 
-      HARDWARE   mesh, monoid_slots -- properties of the silicon, not choices. `mesh` is
+      HARDWARE   mesh -- a property of the silicon, not a choice. `mesh` is
                  checked against the cluster cfg by configure(); the default is the array
                  the kernels were written for.
       ARGUMENTS  nkv, nq, clusters, decomp, score_scale, score_shift -- the actual
@@ -161,7 +161,6 @@ class FaCfg:
 
     # ---- hardware: checked, not chosen --------------------------------------------------
     mesh: tuple = (16, 4, 16)
-    monoid_slots: int = 8
 
     # ---- internal performance tuning ----------------------------------------------------
     # NONE OF THE BELOW CHANGES THE ANSWER. They change where operands come from and how
@@ -325,11 +324,11 @@ class FaCfg:
                 f"nkv={self.nkv} must divide across {self.ncl} clusters: each cluster "
                 f"owns a disjoint run of KV tiles and the merge assumes every shard covers "
                 f"the same count.")
-        if self.br % self.monoid_slots:
+        if self.br > 32 and self.br % 32:
             raise ValueError(
-                f"Br={self.br} must be a multiple of monoid_slots={self.monoid_slots}: the "
-                f"monoid packs that many query rows per beat and a partial beat would fold "
-                f"lanes the pack never wrote.")
+                f"Br={self.br} must be at most 32 or a multiple of 32: the softmax-statistics "
+                f"junction folds 32 query rows a group, with one count of live rows for every "
+                f"group of a gather.")
         # A stream needs at least two buffers to BE a stream. The WAR edge is written as
         # "V(j) waits on PV(j - nvbuf)", so at nvbuf = 1 it reads V(j) waits on PV(j) --
         # the very task that consumes what V(j) is about to write. The builder does not
@@ -703,9 +702,8 @@ def build_shards(cfg, seed=1234):
         gold["o"].append(d32_order(cfg, o))
     merged = None
     if cfg.decomp == "kvsplit" and cfg.ncl > 1:
-        from .gather import merged_golden, scaled_m
-        merged = merged_golden(cfg, np.stack([scaled_m(cfg, m) for m in gold["m_np"]]),
-                               np.stack(gold["l_np"]))
+        from .gather import merged_golden
+        merged = merged_golden(cfg, np.stack(gold["m_np"]), np.stack(gold["l_np"]))
     return {"q8": q8, "k8": k8, "v8": v8, "m": np.stack(gold["m_np"]),
             "l": np.stack(gold["l_np"]), "o": gold["o"], "merged": merged}
 
@@ -744,8 +742,8 @@ def stage(cfg, st, data):
 
 
 def stage_merged(st, merged):
-    """The gathered (a*m*, l*), in the junction's own lane order, as FP32."""
-    return st.put("fa_ml_merged_golden", "float", np.asarray(merged, dtype=np.float32))
+    """The gathered (m*, l*), in the junction's own groups, as FP16 bit patterns."""
+    return st.put("fa_ml_merged_golden", "uint16_t", np.asarray(merged, dtype=np.uint16))
 
 def _alloc_cluster(ctx, cfg, c):
     """Every L1 buffer one cluster's pipeline owns, and nothing else -- no nodes.
@@ -1641,10 +1639,10 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
     tiles, producing its own (m_c, l_c). What makes this different from four
     copies of the one-cluster run is the epilogue -- the online-softmax merge
 
-        m* = max_c m_c        l* = sum_c exp(m_c - m*) * l_c
+        m* = max_c m_c        l* = sum_c exp(a * (m_c - m*)) * l_c
 
     is not gathered to one cluster and reduced there. It is computed BY THE FABRIC: each
-    cluster packs its partial into the monoid junction's lane geometry, and one
+    cluster copies its partial into the softmax-statistics junction's group, and one
     ChainGather walks the four of them, folding at each hop, so the collector's buffer
     receives the answer rather than the operands.
     """
@@ -1819,7 +1817,7 @@ def geometry(cfg) -> dict:
             "NKV_PER": cfg.nkv_per, "S2_M": cfg.s2_m, "S2_K": cfg.s2_k, "S2_N": cfg.s2_n,
             "QSHIFT": cfg.qshift, "DECOMP": cfg.decomp, "NSCORE": cfg.nscore,
             "NKBUF": cfg.nkbuf, "NVBUF": cfg.nvbuf,
-            "MONOID_SLOTS": cfg.monoid_slots, "mesh": tuple(cfg.mesh)}
+            "mesh": tuple(cfg.mesh)}
 
 
 def fa_alloc(ctx: Ctx, cfg, clusters=None) -> list:
