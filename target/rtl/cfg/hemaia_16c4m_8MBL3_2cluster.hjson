@@ -235,7 +235,7 @@
         dep_tag_width: 4
         task_id_width: 16
         task_desc_width: 128
-        waiting_queue_depth: 32
+        waiting_queue_depth: 128
       },
     },
     clusters:[
