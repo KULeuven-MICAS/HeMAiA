@@ -101,9 +101,47 @@ cluster has no decompressor. The first round, a CREST ladder on the 16 MiB-L3 pl
 
 As the FFN's (`sweep/llm_blocks/ffn/README.md`). **Phases** add the route: the last slot chip's record.
 
+## Prefill (`stages.sh`)
+
+DeepSeek-V2-Lite's layer-1 MoE over a prompt (`workloads/moe/common/moe_prefill_mc.py`), one stage a
+run: `./stages.sh poc<v>` (tiny: every expert's first 384 intermediate columns, the shared MLP's first
+1024), `./stages.sh full<v>` (the real size), `./stages.sh gtb_<variant>` (the reduce on its own,
+`common/gather_tb_mc.py`). Each variant's `params.hjson` lists its levers.
+
+| stage | tokens | what it adds | result |
+|---|---|---|---|
+| `full14` | 128 | register-launched weight pushes | PASS, 1,810.6 us, 29.9 % MAC |
+| `full17` | 128 | queued weight pushes (memory chip descriptor queue) | PASS, 1,483.2 us, 36.5 % MAC |
+| `poc18s` | 256 | full17's levers, serial ChainGathers | PASS, 1,036.3 us |
+| `poc18c` | 256 | the two clusters' ChainGathers at the same time | PASS, 1,008.3 us |
+| `poc19` | 256 | poc18c with the real size's 8 X blocks | PASS, 1,034.3 us |
+| `poc24` / `poc25` / `poc27` | 256 | 64-column slices, half slabs, the route on every chiplet; + RX yield; serial chains | all stop at `y_chain_c0j5` (64-column ChainGathers under the down stream) |
+| `full29` | 256 | the real size: shared MLP split evenly | head measured (route end 313 us, rings full from 180 us); stopped |
+| `poc35` | 256 | prefetchers after the X multicast, the route tile buffer, the shared MLP chunk by chunk, X in the expert buffers, 128-column slices (`inter_sh` 2816) | PASS, 1,146.6 us |
+| `full35` | 256 | poc35 at the real size | head measured (route end 204 us); stopped |
+| `full37` | 256 | full35 + the route collection and fetches early, X in one multicast | PASS, 1,867.7 us, 58.0 % MAC (down phase 1,015-1,867 us: the root finishes every slice 55-62 us after the other chips) |
+| `poc40` | 256 | full37 + expert slots smallest-largest-alternating, second shared pass after slot 2, concurrent chains, X put by both root clusters, per-slice GEMM phases | PASS, 1,089.6 us (the root's lag stays ~50 us a slice) |
+| `gtb_serial_quiet` / `gtb_concurrent_quiet` | - | 16 ChainGathers of 32 KiB, serial / two at a time, no weight stream | PASS, 238.5 / 182.7 us |
+| `gtb_serial_stream` | - | the same, serial, under the queued down stream | first chain 32 us; stopped by the xDMA stall report (now a warning) |
+| `poc41_1` | 256 | poc40 + the root's store of slice j after slice j+1's loads (`store_lag` 1) | PASS, 888.2 us; root lag a slice -0.3..+12.4 us (poc40 ~50) |
+| `poc42` | 256 | poc40 + `store_lag` 2 | hung at slice 3: the ChainGather finish-vs-push deadlock (concurrent chains); `stg_poc42_dbg` replays it on the debug simv |
+| `poc43` | 256 | poc41_1 without holding the pushes for X | PASS, 972.6 us; X lands at 122.9 us instead of 47.8: the hold stays |
+| `gtb_serial_v41` / `gtb_concurrent_v41` / `gtb_concurrent_v41_drift` | - | 8 ChainGathers of 64 KiB a cluster under the stream with v41's traffic (2 slabs, 9-slot rings); serial / concurrent / concurrent with drifting start offsets | PASS all |
+| `full45` | 256 | full37 + `store_lag` 1, `slot_order` [1, 2, 3, 0], `shared_after` [0], serial chains (`chain_concurrent` false) | PASS, 1,587.7 us, 68.2 % MAC; the serial chains (28-39 us each under the stream) set the down phase's pace |
+
+Kept variants: `dsv2_l1_prefill/{v17, v37, v45}`, `dsv2_l1_prefill_tiny/{v40, v41, v42, v45}`, `gather_tb/{serial_quiet,
+concurrent_quiet, serial_v41, concurrent_v41, concurrent_v41_drift}`. Every other variant of the table is archived (params
+only) in `isca_archive/2026-10-15_moe_prefill_variants` and `isca_archive/2026-10-16_moe_prefill_variants`; copy its
+directory back to rerun it.
+
+Concurrent ChainGathers run the same way round the ring: two in opposite directions deadlock on the
+D2D links. Earlier variants (tiny all..v11, full all..v16 but v14, the gather testbench's HBM-partial
+pair) are in `isca_archive/2026-10-15_moe_prefill_variants`.
+
 ## Files
 
-- `run.sh`, `parse_moe.py` (with `../ffn/parse_ffn.py`).
+- `run.sh`, `parse_moe.py` (with `../ffn/parse_ffn.py`): the ablation.
+- `stages.sh`: the prefill; `tools/timeline.py` (a stage run's task spans), `tools/gen_check.sh`.
 - **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/moe/`:
   `common/moe_mc.py` (the driver, on `ffn/common/chiplet_mc.py`), `common/moe_data.py`
   (weights, route, golden), `common/moe.mk`, `dsv2_l1/<variant>/params.hjson`.

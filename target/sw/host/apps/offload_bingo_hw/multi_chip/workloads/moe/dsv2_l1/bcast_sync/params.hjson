@@ -1,0 +1,27 @@
+// DeepSeek-V2-Lite's layer-1 MoE (64 experts top-6 + 2 shared, sharded router) on
+// hemaia_16c4m_8MBL3_2cluster, one token, INT4 experts.
+// Variant bcast_sync: x and the route multicast by the D2D router; the router's logits (TopK and softmax-statistics folds) and the partials gathered by the root (iDMA pulls, SIMD adds); cross-chip dependencies in the BINGO hardware scheduler (per edge).
+// What each field does is in ../../common/moe_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  seed: 1
+  tokens: 1
+  wbits: 4
+  w_chunk_bytes: 114688
+  w_buffers: 3
+  weight_ring:
+  {
+    slots: 16
+    batch: 4
+    policy: 1
+  }
+  weight_crest: false
+  route: gather
+  bcast: bcast_l1
+  reduce: root
+  sync: edge
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+}
