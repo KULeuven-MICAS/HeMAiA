@@ -24,6 +24,7 @@ only (SIGINT so the traces flush, SIGKILL when it does not leave). It stops it o
               for axi_confirm_us (axi_stall=stop stops on the line alone, warn only reports it)
   WEDGE       the simulation clock and every log stood still for wedge_min of wall time
   ASSERT      an assertion failed in the transcript (sim_live.log)
+  HOST-ERR    a host printed an error that ends its program (host_err, in the uart_chip_*.log files)
   QUOTA / LOG disk headroom below min_headroom_gb; the transcript or the trace directory over its cap
   BOUND       the simulation clock passed bound_us
   NOT-ARMED   no chiplet started its task list by arm_deadline_us
@@ -75,6 +76,8 @@ PARAMS = [
     ("stop_grace_s", 60, "seconds between SIGINT and SIGKILL"),
     ("on_stop_cmd", "", "shell command run after the simulator is gone; {task_dir} {tag} {sweep} are substituted"),
     ("dfg", "", "final_dfg.csv of the workload: names the task ids in the evidence"),
+    ("host_err", r"malloc failed|\[Host\].*\b(?:abort|overflow|FATAL)", "regex over the UART logs: a host error that "
+                 "ends the run (empty = off)"),
 ]
 DEFAULTS = {n: d for n, d, _ in PARAMS}
 
@@ -345,6 +348,8 @@ class Judge:
         self.axi = []
         self.axi_seen = 0
         self.assert_line = None
+        self.xdma_stall = None
+        self.host_err = None
         self.anomaly_seen = 0
 
     def feed_bingo(self, lines):
@@ -360,6 +365,12 @@ class Judge:
 
     def feed_transcript(self, lines):
         for ln in lines:
+            # the xDMA stall watchdog's $error marks a chain that made no progress for a while, even one that
+            # completes later: a warning (the probe line follows it); a chain that never completes is a HANG-SCHED
+            if ln.startswith('Error: "') and "xdma_stall_watchdog.sv" in ln:
+                if self.xdma_stall is None:
+                    self.xdma_stall = ln.strip()
+                continue
             if self.assert_line is None and (ln.startswith('Error: "') or "Too many assertion failures" in ln):
                 self.assert_line = ln.strip()
 
@@ -397,6 +408,13 @@ class Judge:
             t = min(t, max(p["stall_cap_us"], p["stall_floor_us"]))
         return t
 
+    def feed_uart(self, lines):
+        if not self.p["host_err"]:
+            return
+        for ln in lines:
+            if self.host_err is None and re.search(self.p["host_err"], ln):
+                self.host_err = ln.strip()
+
     def quiet_us(self):
         return max(0, self.b.sim_ps - self.b.last_progress_ps) / 1e6
 
@@ -406,6 +424,8 @@ class Judge:
         sim_us = b.sim_ps / 1e6
         if self.assert_line:
             return "ASSERT", self.assert_line[:200]
+        if self.host_err:
+            return "HOST-ERR", self.host_err[:200]
         if p["bound_us"] and sim_us > p["bound_us"]:
             return "BOUND", "simulation clock %.1f us past the bound %d us" % (sim_us, p["bound_us"])
         if p["arm_deadline_us"] and not b.ever_armed and sim_us > p["arm_deadline_us"]:
@@ -582,6 +602,14 @@ class Watch:
         j.feed_bingo(self.t_bingo.read())
         j.feed_probes(self.t_probes.read())
         j.feed_transcript(self.t_live.read())
+        try:
+            uarts = [x for x in os.listdir(self.bin) if x.startswith("uart_chip_") and x.endswith(".log")]
+        except OSError:
+            uarts = []
+        for x in uarts:
+            if x not in self.t_uart:
+                self.t_uart[x] = Tail(os.path.join(self.bin, x))
+            j.feed_uart(self.t_uart[x].read())
 
     def checks(self):
         p, j = self.p, self.judge
@@ -591,6 +619,9 @@ class Watch:
         if p["axi_stall"] in ("warn", "confirm") and j.axi_seen and "axi" not in self.warned:
             self.warned.add("axi")
             self.ev("WARN real [AXI-STALL] line: %s" % j.axi[0][:200])
+        if j.xdma_stall and "xdma" not in self.warned:
+            self.warned.add("xdma")
+            self.ev("WARN xDMA stall watchdog: %s" % j.xdma_stall[:200])
         if p["anomaly"] in ("warn", "stop") and j.b.anomalies and "anom" not in self.warned:
             self.warned.add("anom")
             self.ev("WARN queue anomaly: %s" % j.b.anomalies[0][:220])
@@ -683,6 +714,7 @@ class Watch:
         self.t_bingo = Tail(os.path.join(self.bin, "bingo_progress.log"))
         self.t_probes = Tail(os.path.join(self.bin, "snax_probes.log"))
         self.t_live = Tail(os.path.join(self.bin, "sim_live.log"))
+        self.t_uart = {}
         self.ev("armed on simulator %d (%s)" % (self.pid, self.bin))
         while my_sims(p["sim_comm"], self.bin).count(self.pid):
             try:

@@ -22,5 +22,16 @@
   "wedge_min": 30,
   "post_complete_min": 30,
   "on_stop_cmd": "python3 {sweep}/llm_blocks/ffn/trim_traces.py {task_dir} --force"
+ },
+ "fa_prefill": {
+  "_doc": "256-token FA prefill on the 16c4m platform (array shape 0): host init takes several ms of simulated time (a task list of a few thousand tasks a cluster), the window 0.6 ms at 1,024 keys and a few ms at the real size; the GEMM waits and the chain gathers are the long tasks.",
+  "bound_us": 6000,
+  "arm_deadline_us": 12000,
+  "stall_floor_us": 600,
+  "min_threads": 9,
+  "min_rate_us_per_min": 3,
+  "wedge_min": 30,
+  "post_complete_min": 30,
+  "on_stop_cmd": "python3 {sweep}/llm_blocks/ffn/trim_traces.py {task_dir} --force"
  }
 }
