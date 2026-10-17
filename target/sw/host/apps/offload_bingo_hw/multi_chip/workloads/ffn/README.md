@@ -60,11 +60,11 @@ and the stage workloads that bisected the `all` hang are archived outside the re
 The directories hold sources only. `make` in a variant (or the runner) generates `ffn_data.h`,
 `offload_bingo_hw.h`, `final_dfg.csv`, `static_l1_layout.*` and `build/hbm/` (the HBM images of the real
 weights, 35-180 MB a variant); `make clean` removes the data, the headers and the HBM images. The weights come from
-`target/sim/automation/sweep/ffn/cache/` (`fetch_weights.py`).
+`target/sim/automation/sweep/llm_blocks/ffn/cache/` (`fetch_weights.py`).
 
 - Generator alone (no simulation; the DFG, the hazard check and the manager-model hang check run here):
-  `target/sim/automation/sweep/ffn/tools/gen_one.sh <variant under ffn/> <log>`
-- Simulate variants: `target/sim/automation/sweep/ffn/run.sh run dsv2_l0_prefill/base ...`
-- Simulate a prefill variant with the hang guard: `target/sim/automation/sweep/ffn/stages.sh <stage>`
+  `target/sim/automation/sweep/llm_blocks/ffn/tools/gen_one.sh <variant under ffn/> <log>`
+- Simulate variants: `target/sim/automation/sweep/llm_blocks/ffn/run.sh run dsv2_l0_prefill/base ...`
+- Simulate a prefill variant with the hang guard: `target/sim/automation/sweep/llm_blocks/ffn/stages.sh <stage>`
   (`full` = `dsv2_l0_prefill/all`, `poc` = `dsv2_l0_prefill_tiny/all`, `bench_paired`)
-- Status and the state of the ladder: `target/sim/automation/sweep/ffn/HANDOFF.md`
+- Status and the state of the ladder: `target/sim/automation/sweep/llm_blocks/ffn/HANDOFF.md`

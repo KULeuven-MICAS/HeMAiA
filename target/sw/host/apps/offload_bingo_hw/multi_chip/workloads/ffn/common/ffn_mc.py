@@ -232,7 +232,7 @@ class FBuild:
         self.order = self.cycle                    # the fold order: the root, then the cycle
 
         # ---- data -----------------------------------------------------------------------
-        cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/ffn/cache"))
+        cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
         d = self.d = ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), args.dsv2_dir,
                                       seed=int(p.get("seed", 1)), wbits=self.wbits,
                                       tokens=self.T)

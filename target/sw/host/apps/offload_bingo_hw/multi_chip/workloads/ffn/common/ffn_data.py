@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Data of the ffn workloads: one LLM's dense SwiGLU FFN at its real size, from its checkpoint.
 
-THE WEIGHTS are the checkpoint's own (sweep/ffn/fetch_weights.py caches them as stored, BF16),
+THE WEIGHTS are the checkpoint's own (sweep/llm_blocks/ffn/fetch_weights.py caches them as stored, BF16),
 quantised with snax_cluster's util/pack.py: symmetric INT4 per output column. Unlike the dsv2
 golden, the RMSNorm gain in front of the FFN is NOT folded into the rows of gate and up: a
 real checkpoint's gain spans 30x across channels, so folded, a few rows set every column's
@@ -64,14 +64,14 @@ def _bf16(path, shape):
 
 
 def load_weights(cache_dir, model, inter=None):
-    """The FFN of `model` (a sweep/ffn/fetch_weights.py key) in [in, out] orientation, float32
+    """The FFN of `model` (a sweep/llm_blocks/ffn/fetch_weights.py key) in [in, out] orientation, float32
     values of the BF16 checkpoint: gate, up [hidden, inter], down [inter, hidden], gain [hidden].
     `inter` keeps only the first `inter` intermediate columns (a smaller FFN of the same layer)."""
     with open(os.path.join(cache_dir, "manifest.json")) as f:
         man = json.load(f)
     if model not in man:
         raise ValueError(f"params model={model!r}: not in {cache_dir}/manifest.json "
-                         f"({sorted(man)}); run sweep/ffn/fetch_weights.py")
+                         f"({sorted(man)}); run sweep/llm_blocks/ffn/fetch_weights.py")
     m = man[model]
     H, I = int(m["hidden"]), int(m["inter"])
     t = m["tensors"]

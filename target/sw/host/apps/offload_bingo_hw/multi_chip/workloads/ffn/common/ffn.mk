@@ -13,8 +13,8 @@
 #
 # WORKLOAD is the directory's path under workloads/, so the roots are found from it rather than
 # by counting ../ levels. Built and run on hemaia_16c4m_8MBL3_2cluster.hjson with
-# target/sim/automation/sweep/ffn/run.sh; the weights come from that sweep's cache
-# (sweep/ffn/fetch_weights.py).
+# target/sim/automation/sweep/llm_blocks/ffn/run.sh; the weights come from that sweep's cache
+# (sweep/llm_blocks/ffn/fetch_weights.py).
 
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
@@ -42,7 +42,7 @@ SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 # snax_cluster's DeepSeek-V2-Lite package: the device-arithmetic models the golden uses
 DSV2_DIR = $(SNITCH_ROOT)/target/snitch_cluster/sw/apps/dsv2
 PLATFORM_H = $(REPO_ROOT)/target/sw/shared/platform/generated/occamy.h
-WEIGHTS_MANIFEST = $(REPO_ROOT)/target/sim/automation/sweep/ffn/cache/manifest.json
+WEIGHTS_MANIFEST = $(REPO_ROOT)/target/sim/automation/sweep/llm_blocks/ffn/cache/manifest.json
 
 BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \

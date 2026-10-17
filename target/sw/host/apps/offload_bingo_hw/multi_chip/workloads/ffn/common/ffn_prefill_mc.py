@@ -130,7 +130,7 @@ class PBuild(cm.ChipletBuild):
         if self.DNC % (self.dn_unit * self.tail_split):
             raise ValueError(f"params dn_cols={self.DNC} tail_split={self.tail_split}: every down GEMM whole "
                              f"{self.dn_unit}-column units (w4_paired: pairs of column tiles)")
-        cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/ffn/cache"))
+        cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
         d = self.d = ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), args.dsv2_dir,
                                       seed=int(p.get("seed", 1)), wbits=self.wbits,
                                       tokens=self.T, inter=p.get("inter"))

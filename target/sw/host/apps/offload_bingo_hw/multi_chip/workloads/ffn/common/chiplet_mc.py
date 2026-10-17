@@ -54,7 +54,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_platform import core_roles, writer_junction_index  # noqa: E402
 from libs import Ctx, MemLevel, Pipeline  # noqa: E402
 from libs.blocks import LoadStream, WeightRings  # noqa: E402
-from libs.crest import CrestRings  # noqa: E402
+from libs.crest import TRAILER_MAGIC, CrestRings  # noqa: E402
 from libs.verify import checks as vchecks  # noqa: E402
 
 L1_CAPACITY = 990000
@@ -194,13 +194,18 @@ class ChipletBuild:
         dfg.l1_capacity_bytes = int(p.get("l1_capacity", L1_CAPACITY))
         dfg.waiting_queue_depth = plat.get("waiting_queue_depth", 8)
         dfg.compact_task_tables = bool(p.get("compact_tables", True))
+        # each chiplet's id maps hold its own entries only (bingo_g2l16_build, bingo_hw_scheduler_sparse)
+        dfg.compact_id_maps = bool(p.get("compact_id_maps", False))
         dfg.static_args_image = bool(p.get("static_args_image", True))
+        # the generator's faster host init (bingo_dfg_emit: L1 addresses at compile time, the kernel list
+        # by one loop, the symbol lookup by signature, the g2l table runs by DMA)
+        dfg.fast_host_init = bool(p.get("fast_host_init", False))
         dfg.remote_broadcast = bool(p.get("remote_broadcast", True))
         self.roles = core_roles(plat)
         self.ctx = Ctx(dfg=dfg, mesh=MESH, roles=self.roles, hw=hw, chiplet=self.ROOT)
         self.pipe = Pipeline(self.ctx, verbose=False, gate_sources=True)
         self.jct = {n: writer_junction_index(hw, f"Has{n}Junction")
-                    for n in ("Elementwise", "TopK", "Monoid")}
+                    for n in ("Elementwise", "TopK", "SoftmaxStats")}
         self.n_anchor = 0
         self.stamps = BingoMemAlloc(f"A_{self.TAG}_stamps", size=4 * 16, mem_level="L2",
                                     chip_id=self.ROOT, cluster_id=0)
@@ -396,6 +401,14 @@ class ChipletBuild:
         self.ls = [LoadStream(self.cx(g), self.c(g), nbytes=self.chunk, nbuf=wbuf,
                               slack=1024 if self.crest else 0) for g in range(self.G)]
 
+    @staticmethod
+    def chunk_trailer():
+        """The 64-B record a plain weight chunk ends in with weight_ring.trailer: the magic the
+        ring load polls for (idma_ring_load), the rest zero."""
+        t = np.zeros(64, dtype=np.int8)
+        t[:8] = np.array([TRAILER_MAGIC], dtype="<u8").view(np.int8)
+        return t
+
     def make_rings(self, dense, routed=None, slices=None, rec_l3=None, rec_slots=1):
         """Per chip: its clusters' weight rings in its L3, filled by its memory chip's push
         engine under its host's prefetcher (host_kernel_lib.h weight_prefetch).
@@ -407,9 +420,10 @@ class ChipletBuild:
         wr = p.get("weight_ring", {})
         self.n_slots = n_slots = int(wr.get("slots", 16))
         self.ring_batch = int(wr.get("batch", 4))
+        # weight_ring.trailer: a chunk's own last 64 B (a CREST record's, or without CREST a record
+        # the workload appends to every plain chunk, chunk_trailer()) say it has landed, so the
+        # prefetcher pushes no flag after it
         self.ring_trailer = bool(wr.get("trailer", self.crest))
-        if self.ring_trailer and not self.crest:
-            raise ValueError("params weight_ring.trailer needs weight_crest")
         # weight_ring.head / batch_head: a ring's runs that start within its first `head` chunks batch
         # by `batch_head`, so a cluster's first chunks land one by one, not behind a whole run (0: off)
         self.ring_head = int(wr.get("head", 0))
@@ -446,6 +460,8 @@ class ChipletBuild:
                     dense={r: dense[g] for r, g in enumerate(gs) if g in dense},
                     routed=(routed or {}).get(k, {}), slices=(slices or {}).get(k, {}),
                     slab_bytes=self.ls[gs[0]].slab_bytes, trailer=self.ring_trailer)
+            if self.ring_trailer and not self.crest:
+                rings.plain_trailer = True
             for g in gs:
                 self.ls[g].rings = rings
             self.prefetch[k] = self.cx_chip(k).host_node(
@@ -665,6 +681,16 @@ class ChipletBuild:
                 with open(args.data_h, "a") as f:
                     f.write("\n// params d2d_ddr: every D2D link switched to DDR at boot\n"
                             "#define HEMAIA_D2D_DDR 1\n")
+            # params d2d_rx_yield: [compute chips, memory chips], the data links' RX yield windows
+            # (hemaia_d2d_link_rx_yield_grid; 0 = off): a side receiving a push stream hands the
+            # half-duplex link over when it has its own requests waiting
+            if "d2d_rx_yield" in p:
+                wc, wm = (int(v) for v in p["d2d_rx_yield"])
+                if not (0 <= wc < 256 and 0 <= wm < 256):
+                    raise ValueError(f"params d2d_rx_yield={p['d2d_rx_yield']}: 0..255 each")
+                with open(args.data_h, "a") as f:
+                    f.write(f"\n// params d2d_rx_yield: RX yield windows, compute / memory chips\n"
+                            f"#define HEMAIA_D2D_RX_YIELD {wc}\n#define HEMAIA_D2D_RX_YIELD_MEM {wm}\n")
         extra = [os.path.basename(str(args.data_h))] if args.data_h else None
         if self.barrier_fence:
             self.fence_barriers()
@@ -679,6 +705,29 @@ class ChipletBuild:
         self.check_barrier_order(header)
         print(f"[{T}] HBM {st.hbm_bytes / 2**20:.2f} MiB over {len(set(self.mem.values()))} "
               f"memory chips; {sum(1 for _ in dfg.nodes)} nodes")
+        # params export_exec_ir: the compiled graph, rings and prefetch policy as the bingo
+        # framework's Execution IR (its chiplet DSE prices the program from it;
+        # passes/bingo_exec_export.py); a string names the file, else exec_ir.json in the output dir
+        if p.get("export_exec_ir", False):
+            from bingo_exec_export import bingo_export_exec_ir, ring_table
+            wr = p.get("weight_ring", {})
+            out = p["export_exec_ir"] if isinstance(p["export_exec_ir"], str) else \
+                os.path.join(args.output_dir, "exec_ir.json")
+            bingo_export_exec_ir(
+                dfg, out,
+                ring_tables=[ring_table(self.rings[k], k, self.mem[k], self.engine[k])
+                             for k in self.chips],
+                prefetch=dict(ring_slots=self.n_slots, batch=self.ring_batch,
+                              batch_routed=int(wr.get("batch_routed", 0)), head=self.ring_head,
+                              batch_head=self.ring_batch_head, policy=int(wr.get("policy", 1)),
+                              queued=bool(self.ring_queued)),
+                meta=dict(workload=T, app=app_name, chips=list(self.chips), nc=self.NC,
+                          tokens=self.T,
+                          params={k: v for k, v in p.items()
+                                  if isinstance(v, (int, float, str, bool, list, dict))},
+                          trailer=bool(self.ring_trailer), crest=bool(self.crest),
+                          slot_bytes=self.slot_bytes))
+            print(f"[{T}] Execution IR: {out}")
 
     def check_core_order(self, header, x_prefixes):
         """Every DM core reaches its cluster's x task before its first weight-ring load, in the
