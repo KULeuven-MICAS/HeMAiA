@@ -21,7 +21,9 @@ the port model cannot honour.
 """
 
 from . import collective
+from .fa_sweep import FaSweepBufs, FaSweepCfg, fa_sweep, fa_sweep_alloc
 from .flash_attention import FaCfg, FlashAttention
+from .gemm_async import GemmQueue
 from .linear import Linear, LinearCfg, LoadStream, WeightRings, record_spec
 from .gather import fa_gather
 from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, MlaDimOut, MlaDimPV,
@@ -39,7 +41,8 @@ from .simd import (AddRow, AddRowCfg, ARowLoad, ARowLoadCfg, ARowPack, ARowPackC
                    ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                    SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
-__all__ = ["collective", "Broadcast", "FaCfg", "FlashAttention", "fa_gather", "Gather", "Linear",
+__all__ = ["collective", "Broadcast", "FaCfg", "FlashAttention", "fa_gather", "GemmQueue",
+           "FaSweepBufs", "FaSweepCfg", "fa_sweep", "fa_sweep_alloc", "Gather", "Linear",
            "LinearCfg", "LoadStream", "WeightRings", "record_spec", "MoeCfg", "MoeFFN", "MoveCfg",
            "Dequantize", "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
            "Join", "Residual", "RoPE", "RowCfg", "Scatter", "Slice", "TransposeView", "View",

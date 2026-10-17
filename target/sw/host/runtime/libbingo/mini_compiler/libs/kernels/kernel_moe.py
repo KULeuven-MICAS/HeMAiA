@@ -250,15 +250,17 @@ class SnaxBingoKernelSimdQuantRowsArgs(BingoKernelArgs):
 class SnaxBingoKernelSimdScatterAddRowsArgs(BingoKernelArgs):
     """y[ids[i]] += d[i], i < n, FP16 rows of nt column tiles, both D layout (row tiles
     y_tile_stride / d_tile_stride apart; default nt blocks); ids uint16 in this cluster's L1.
-    SIMD core."""
+    s_addr: a one-row-tile scale tile (nt blocks) d's row tiles are multiplied by in place
+    first, as SnaxBingoKernelSimdMulTilesArgs does. SIMD core."""
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_scatter_add_rows"
 
     def __init__(self, y_addr, d_addr, nt: int, ids_addr, n: int, y_tile_stride: int = 0,
-                 d_tile_stride: int = 0):
+                 d_tile_stride: int = 0, s_addr=None):
         if nt <= 0 or n < 0:
             raise ValueError(f"nt={nt}, n={n}")
         self.y_addr, self.d_addr, self.nt, self.ids_addr, self.n = y_addr, d_addr, int(nt), ids_addr, int(n)
+        self.s_addr = s_addr
         self.y_tile_stride = int(y_tile_stride) or nt * D_BLOCK
         self.d_tile_stride = int(d_tile_stride) or nt * D_BLOCK
 
@@ -274,4 +276,8 @@ class SnaxBingoKernelSimdScatterAddRowsArgs(BingoKernelArgs):
         a["nt"] = str(self.nt)
         self._process_addr(self.ids_addr, "ids_addr", a, handle_name_map, split_64bit=False)
         a["n"] = str(self.n)
+        if self.s_addr is None:
+            a["s_addr"] = "0"
+        else:
+            self._process_addr(self.s_addr, "s_addr", a, handle_name_map, split_64bit=False)
         return a

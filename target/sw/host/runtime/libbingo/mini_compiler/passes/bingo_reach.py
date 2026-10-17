@@ -22,7 +22,8 @@ class Reach:
         self.bits, self.pos = bits, pos
 
     def __contains__(self, n) -> bool:
-        return (self.bits >> self.pos[n]) & 1 == 1
+        i = self.pos.get(n)
+        return i is not None and (self.bits >> i) & 1 == 1
 
 
 def reach_sets(G) -> dict:

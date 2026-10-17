@@ -219,7 +219,9 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     """One chunk of an L3 weight ring into an L1 slab (offload_hw_kernels/idma.h): wait
     until the slot's flag holds `seq`, copy `size` bytes from the slot, then write `seq`
     into the slot's release word. The memory chiplet's iDMA pushes the chunk and then its
-    flag (libs/blocks/linear.py WeightRing); flag and release are local L3 words."""
+    flag (libs/blocks/linear.py WeightRing); flag and release are local L3 words. A release
+    address of 0 writes no release word: a chunk several clusters read is released by the load
+    that follows the others."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
 
     def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr,

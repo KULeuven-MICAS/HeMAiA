@@ -26,6 +26,7 @@ from typing import Dict, List, Set, Tuple
 import networkx as nx
 
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
+from bingo_reach import reach_sets
 
 
 def collect_handle_users(nodes) -> Dict[int, Tuple[BingoMemAlloc, Set]]:
@@ -79,21 +80,15 @@ def check_handle_identity(handle_users: Dict[int, Tuple[BingoMemAlloc, Set]]) ->
 
 
 def reachability(dfg, nodes) -> Dict[object, Set]:
-    """node -> every node reachable from it.
+    """node -> every node reachable from it, as a set to test membership in.
 
     A conditional edge still orders its endpoints, so it counts; there is no edge type that
-    does not.
+    does not. One bitset a node (bingo_reach): a Python set of every node's descendants grows
+    with the square of the graph.
     """
-    desc: Dict[object, Set] = {}
-    # reverse topological order, so a node's successors are already resolved
-    for n in reversed(list(nx.topological_sort(dfg))):
-        s: Set = set()
-        for _u, v in dfg.out_edges(n):
-            s.add(v)
-            s |= desc.get(v, set())
-        desc[n] = s
+    desc: Dict[object, Set] = dict(reach_sets(dfg))
     for n in nodes:
-        desc.setdefault(n, set())
+        desc.setdefault(n, frozenset())
     return desc
 
 

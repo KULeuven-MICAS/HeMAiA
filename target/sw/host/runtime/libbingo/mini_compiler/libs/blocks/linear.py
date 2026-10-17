@@ -137,6 +137,11 @@ class LoadStream:
         self._next = 0
         self._reader = [None] * nbuf
         self._extra = [[] for _ in range(nbuf)]      # wait_for(): one-shot extra waits
+        # strict: refuse to hand out a slab whose last load has no reader recorded yet. The WAR edge
+        # of such a take would be the reader before that load, so the new load could land before the
+        # last one was read. Off by default; a caller whose takes may run ahead of its releases sets it.
+        self.strict = False
+        self._unread = [False] * nbuf
 
     def take(self, nbytes: int):
         """(slab index, slab handle, [WAR predecessor]) for the next load of nbytes."""
@@ -145,15 +150,32 @@ class LoadStream:
                              f"slab.")
         i = self._next
         self._next = (i + 1) % len(self.slabs)
+        return self._take(i)
+
+    def _take(self, i: int):
+        if self.strict and self._unread[i]:
+            raise ValueError(f"LoadStream: slab {i} of cluster {self.cluster} taken again before the "
+                             f"reader of its last load was recorded: the new load would not wait "
+                             f"for that read.")
+        self._unread[i] = True
         war = [self._reader[i]] if self._reader[i] is not None else []
         war += [n for n in self._extra[i] if n not in war]
         self._extra[i] = []
         return i, self.slabs[i], war
 
+    def take_at(self, i: int, nbytes: int):
+        """take(), into slab i instead of the next in turn; the turn does not move. For a caller
+        that keeps its own slab plan (a K/V tile sweep reusing each kind's slabs)."""
+        if nbytes > self.nbytes:
+            raise ValueError(f"LoadStream: a {nbytes} B load does not fit a {self.nbytes} B "
+                             f"slab.")
+        return self._take(i)
+
     def release(self, i: int, reader) -> None:
         """`reader` is the LAST node that reads slab i's current contents: the next load
         into slab i waits for it (so it must imply every other reader)."""
         self._reader[i] = reader
+        self._unread[i] = False
 
     def hold_until(self, node) -> None:
         """The stream's first loads wait for `node`: every slab nobody has read yet takes it

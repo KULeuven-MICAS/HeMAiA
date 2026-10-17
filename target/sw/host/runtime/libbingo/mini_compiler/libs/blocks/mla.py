@@ -49,6 +49,7 @@ from bingo_kernel_args import (
 
 from ..comm import Block, BlockResult, Ctx, DType, Layout, MemLevel, Port, PortSpec
 from ..comm.ports import at_offset
+from .gemm_async import GemmQueue
 from .linear import LoadStream
 
 BEAT = 64
@@ -413,6 +414,10 @@ class MlaAttnCfg:
     # (hwmodel.mla_attention `masked`). A key row is one 64-B beat, lane l at 2 l.
     masks: tuple = ()
     mask_src: object = field(default=None, compare=False, repr=False)
+    # Every matmul a start / wait pair (blocks/gemm_async.py): the next dispatch is programmed while
+    # the array runs this one. The matmuls' consumers and the slabs they free follow their waits; the
+    # application orders the cores with GemmQueue.of(dfg).program_order(...) before compiling.
+    gemm_async: bool = False
 
     @property
     def nt(self) -> int:
@@ -523,6 +528,13 @@ class MlaAttention(Block):
         fresh = {(c.keys - 1) // c.bc} if kv_after else set()
         kbytes, vbytes = c.bc * c.d_qk, c.d_v * c.bc
         nodes, qk, sm, pv, slab_of = [], {}, {}, {}, {}
+        gq = GemmQueue.of(ctx.dfg, True) if c.gemm_async else None
+
+        def matmul(name, kernel, args, deps):
+            # the blocking task, or a queued dispatch's wait: what the matmul's consumers follow
+            if gq is None:
+                return g.node(name, ctx.gemm, kernel, args, deps)
+            return (gq.qk if kernel.endswith("_qk") else gq.pv)(g, name, args, deps, "mla")
 
         split = c.vstream is not None
         k_slab, v_slab = {}, {}          # tile -> (slab index, slab handle) when split
@@ -591,7 +603,7 @@ class MlaAttention(Block):
             if last:
                 flags |= pv_cls.D_FP16
             deps = [sm[j], v_ld(j)] + ([pv[j - 1]] if j else [])
-            pv[j] = g.node(f"PV{j}", ctx.gemm, "__snax_bingo_kernel_gemm_fa_pv",
+            pv[j] = matmul(f"PV{j}", "__snax_bingo_kernel_gemm_fa_pv",
                            pv_cls(v_at(j),
                                   p8[j % 2], 0 if first else oacc,
                                   at_offset(o16, BEAT) if last else oacc,
@@ -609,7 +621,7 @@ class MlaAttention(Block):
                 ldv[j + nv] = split_v(j + nv)
 
         for j in range(c.nt):
-            qk[j] = g.node(f"QK{j}", ctx.gemm, "__snax_bingo_kernel_gemm_fa_qk",
+            qk[j] = matmul(f"QK{j}", "__snax_bingo_kernel_gemm_fa_qk",
                            SnaxBingoKernelGemmFaQkArgs(
                                k_at(j), q8.handle, 0, at_offset(s16[j % 2], BEAT),
                                M=c.bc // 16, K=c.d_qk // 4, N=c.br // 16, d_shift=c.k_s),

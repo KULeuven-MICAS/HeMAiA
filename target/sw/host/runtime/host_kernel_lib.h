@@ -34,6 +34,17 @@ static inline uint64_t __host_bingo_kernel_dummy(void *arg){
 #ifndef BINGO_CHECK_QUIET
 #define BINGO_CHECK_QUIET 0
 #endif
+// BINGO_CHECK_ERR_PRINT_MAX (a build flag): how many mismatching elements a failing check prints
+// before its FAIL line. The UART drains slowly in simulation, so a run that ends right after its
+// checks keeps only the first lines: 0 leaves one line a failing check, and every verdict fits.
+#ifndef BINGO_CHECK_ERR_PRINT_MAX
+#define BINGO_CHECK_ERR_PRINT_MAX 8u
+#endif
+// BINGO_CHECK_FAIL_DRAIN_CYCLES (a build flag, default 0): host cycles the exit waits when a check
+// failed, so the UART drains the verdicts before the run ends.
+#ifndef BINGO_CHECK_FAIL_DRAIN_CYCLES
+#define BINGO_CHECK_FAIL_DRAIN_CYCLES 0
+#endif
 static uint32_t bingo_check_npass __attribute__((unused)), bingo_check_nfail __attribute__((unused));
 #define BINGO_CHECK_PASS(...) do { bingo_check_npass++; \
     if (!BINGO_CHECK_QUIET) printf_safe(__VA_ARGS__); } while (0)
@@ -50,6 +61,15 @@ static inline uint64_t __host_bingo_kernel_exit(void *arg){
         printf_safe("Chip(%x, %x): [Host] Checks: %d PASS, %d FAIL\r\n", get_current_chip_loc_x(),
                     get_current_chip_loc_y(), (int)bingo_check_npass, (int)bingo_check_nfail);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
+#if BINGO_CHECK_FAIL_DRAIN_CYCLES
+    // A failing run ends right after these lines, faster than the UART drains them: wait, so every
+    // verdict reaches the log.
+    if (bingo_check_nfail) {
+        uint64_t t0, t;
+        asm volatile("csrr %0, mcycle" : "=r"(t0));
+        do { asm volatile("csrr %0, mcycle" : "=r"(t)); } while (t - t0 < (uint64_t)BINGO_CHECK_FAIL_DRAIN_CYCLES);
+    }
+#endif
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = BINGO_RET_EXIT;
     sp->num_return_values = 0;
@@ -398,7 +418,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // ended at element 169, so the verdict line never appeared and the other checks never
     // ran. The count in the PASS/FAIL line below is still exact; only the per-element
     // printing stops, and the first few elements are what localises a fault anyway.
-    const uint32_t ERR_PRINT_MAX = 8u;
+    const uint32_t ERR_PRINT_MAX = BINGO_CHECK_ERR_PRINT_MAX;
     // WHERE the mismatches are, in 16 equal buckets over the buffer. Eight printed
     // elements say a check failed; they cannot distinguish "the first half is wrong" from
     // "every other row is wrong" from "one column is wrong", and those point at different
@@ -408,6 +428,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     uint32_t bucket_n = 0;  // elements per bucket, set once the element count is known
 
     if (check_type == BINGO_CHECK_TYPE_BYTE_EXACT) {
+        uint64_t first_bad = data_size;
         // Byte-exact comparison over the whole buffer, EIGHT BYTES A LOAD where both
         // buffers allow it: a load per byte made a 64 KiB check cost milliseconds of
         // simulated time. A word that differs is re-walked byte by byte, so the count and
@@ -421,6 +442,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
                 if (o8[w] == g8[w]) continue;
                 for (uint64_t b = 8u * w; b < 8u * w + 8u; b++) {
                     if (output_data_addr[b] != golden_data_addr[b]) {
+                        if (!err) first_bad = b;
                         err++;
                         if (err <= ERR_PRINT_MAX)
                             printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n", name, (int)b,
@@ -432,6 +454,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         }
         for (; i < data_size; i++) {
             if (output_data_addr[i] != golden_data_addr[i]) {
+                if (!err) first_bad = i;
                 err++;
                 if (err <= ERR_PRINT_MAX)
                     printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n",
@@ -445,7 +468,8 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
             BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
             return BINGO_RET_SUCC;
         } else {
-            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d bytes, first at %d)\r\n", name, err, data_size,
+                             (int)first_bad);
             return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_INT8_TOL) {

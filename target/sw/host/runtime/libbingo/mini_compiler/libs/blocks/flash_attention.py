@@ -44,6 +44,7 @@ from sim_golden_models import block_gemm_golden_model      # noqa: E402
 from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                     PortSpec, at_offset, transfer)
 from ..verify import checks
+from .gemm_async import GemmQueue
 
 # Core placement, from the generated map (snax_core_roles_defs.h).
 # The array these kernels were written for. configure() CHECKS the cluster cfg against
@@ -172,6 +173,11 @@ class FaCfg:
     # Read by BOTH decompositions -- pipeline depth, which is a property of the per-cluster
     # loop and so exists however the work was split.
     nscore: int = 2                # score buffers; 2 is the minimum that overlaps QK/PV
+    # Every matmul a start / wait pair (blocks/gemm_async.py): the core programs the next dispatch while
+    # the array runs this one. A matmul's consumers, and the buffers it frees, follow its wait. The
+    # application orders the cores with GemmQueue.of(dfg).program_order(...) before compiling; the
+    # array's counters (measure_array) cannot be read for a queued dispatch.
+    gemm_async: bool = False
     nkbuf: int = 2                 # K prefetch depth
     nvbuf: int = 2                 # V prefetch depth
     v_push_tiles: tuple = ()       # tiles the host pushes instead of the cluster pulling
@@ -364,6 +370,9 @@ class FaCfg:
             raise ValueError(
                 "stagger_first_v with resident operands: there is no V load to stagger -- "
                 "the operand is already in L1.")
+        if self.gemm_async and self.measure_array:
+            raise ValueError("gemm_async with measure_array: the array's counters reset on every "
+                             "configuration write, so a queued dispatch cannot account its own.")
         if self.v_on_xdma and (self.bcast_k or self.bcast_v):
             raise ValueError(
                 "v_on_xdma with a broadcast: a cluster cannot absorb an incoming remote "
@@ -958,9 +967,12 @@ def _build_head(ctx, cfg, c, h_all, buf):
     # bound, so the xDMA core spins forever. The size is a legal multiple of the datapath
     # width, so it is not the alignment guard in bingo_helpers -- the descriptor is being
     # rejected for some other reason. Diagnose that before adding one back.
-    warm_gemm = g.node("WarmGemm", ctx.gemm, "__snax_bingo_kernel_gemm_fa_qk",
-                       SnaxBingoKernelGemmFaQkArgs(warm_a, warm_b, warm_b,
-                                                   warm_buf.view(64), 1, 1, 1), warm_ab)
+    warm_args = SnaxBingoKernelGemmFaQkArgs(warm_a, warm_b, warm_b, warm_buf.view(64), 1, 1, 1)
+    if cfg.gemm_async:      # a dispatch of the cluster like the others: numbered
+        warm_gemm = GemmQueue.of(ctx.dfg, True).qk(g, "WarmGemm", warm_args, warm_ab, "fa")
+    else:
+        warm_gemm = g.node("WarmGemm", ctx.gemm, "__snax_bingo_kernel_gemm_fa_qk", warm_args,
+                           warm_ab)
     # Only the CONFIG paths are warmed, not the SIMD task-firing path. Warming that too --
     # a full tiny softmax here -- does remove the first tile's cold run, but it re-times the
     # pipeline so that later softmax runs land under the K/V stream instead, and their
@@ -1101,6 +1113,13 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
     head = _build_head(ctx, cfg, c, h_all, buf)
     warm_gemm, warm = head["warm_gemm"], head["warm"]
     ld_q, ld_az, perf = head["ld_q"], head["ld_az"], head["perf"]
+    gq = GemmQueue.of(ctx.dfg, True) if cfg.gemm_async else None
+
+    def matmul(name, kernel, args, deps):
+        # the blocking task, or a queued dispatch's wait: what the matmul's consumers depend on
+        if gq is None:
+            return g.node(name, ctx.gemm, kernel, args, deps)
+        return (gq.qk if kernel.endswith("_qk") else gq.pv)(g, name, args, deps, "fa")
     load, xload = head["load"], head["xload"]
 
     KBYTES = cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size
@@ -1397,8 +1416,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
             # WAR on the score buffer: QK(i) overwrites the tile SM(i-NSCORE) read.
             if i >= cfg.nscore_war:
                 deps.append(sm[i - cfg.nscore_war])
-            qk.append(g.node(f"QK_{j}_{q}", ctx.gemm,
-                             "__snax_bingo_kernel_gemm_fa_qk",
+            qk.append(matmul(f"QK_{j}_{q}", "__snax_bingo_kernel_gemm_fa_qk",
                              SnaxBingoKernelGemmFaQkArgs(kbuf(j), q8[q], cz,
                                                          s16[i % cfg.nscore].view(64), cfg.m, cfg.k, cfg.n,
                                                          perf_addr=perf, d_shift=cfg.dshift),
@@ -1448,8 +1466,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
             # O back through the C-path scaler with THIS tile's corr, which the softmax left
             # in the beat after its row sum.
             pbuf = p8[p % cfg.nscore]
-            pv.append(g.node(f"PV_{pj}_{pq}", ctx.gemm,
-                             "__snax_bingo_kernel_gemm_fa_pv",
+            pv.append(matmul(f"PV_{pj}_{pq}", "__snax_bingo_kernel_gemm_fa_pv",
                              SnaxBingoKernelGemmFaPvArgs(
                                  vbuf(pj), pbuf, oacc[pq] if pj else 0, oacc[pq],
                                  cfg.s2_m, cfg.s2_k, cfg.s2_n, perf_addr=perf,

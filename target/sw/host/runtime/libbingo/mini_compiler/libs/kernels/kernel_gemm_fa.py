@@ -60,7 +60,8 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
                  corr_addr: Union[BingoMemAlloc, int] = 0,
                  d_shift: int = 0,
                  b_pitch: int = 0):
-        is_pv = self.KERNEL_NAME == "__snax_bingo_kernel_gemm_fa_pv"
+        is_pv = self.KERNEL_NAME in ("__snax_bingo_kernel_gemm_fa_pv",
+                                     "__snax_bingo_kernel_gemm_fa_pv_start")
         if M <= 0 or K <= 0 or N <= 0:
             raise ValueError(f"M, K, N must be positive block counts, got {M}, {K}, {N}")
         if flags & ~(self.B_KMAJOR | self.C_COLSCALE | self.D_FP16):
@@ -169,4 +170,44 @@ class SnaxBingoKernelGemmFaPvArgs(_SnaxBingoKernelGemmFaArgs):
     """O^T += V^T.P^T, accumulated in place in INT32 (converter off, C == D)."""
     KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_pv"
 
+
+class _SnaxBingoKernelGemmFaStartArgs(_SnaxBingoKernelGemmFaArgs):
+    """One FlashAttention matmul queued: configure and start the cluster's `seq`-th VersaCore
+    dispatch (from 1, in GEMM core order, every dispatch of the cluster numbered) and return.
+    The result is there once the matching __snax_bingo_kernel_gemm_wait (SnaxBingoKernelGemmWaitArgs
+    with the same seq) has returned, never when this task ends, so a consumer depends on the wait.
+
+    The operands are read when this task runs (PV's corr factors included), so their producers
+    precede the START, not the wait. No perf_addr: the array's counters reset on every
+    configuration write, so a queued dispatch cannot account its own."""
+
+    def __init__(self, *args, seq: int, **kwargs):
+        if int(seq) < 1:
+            raise ValueError(f"seq={seq}: dispatches are numbered from 1")
+        if kwargs.get("perf_addr") or (len(args) > 7 and args[7]):
+            raise ValueError("a queued FlashAttention matmul takes no perf_addr")
+        super().__init__(*args, **kwargs)
+        self.seq = int(seq)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_fa_start_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = super().get_c_field_assignments(handle_name_map)
+        del a["perf_addr"]
+        a["seq"] = str(self.seq)
+        return a
+
+
+class SnaxBingoKernelGemmFaQkStartArgs(_SnaxBingoKernelGemmFaStartArgs):
+    """S^T = K.Q^T queued (gemm_fa_qk's operands and shapes)."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_qk_start"
+
+
+class SnaxBingoKernelGemmFaPvStartArgs(_SnaxBingoKernelGemmFaStartArgs):
+    """O^T += V^T.P^T queued (gemm_fa_pv's operands, shapes and flags)."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_pv_start"
+    B_KMAJOR = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR
+    C_COLSCALE = SnaxBingoKernelGemmFaPvArgs.C_COLSCALE
+    D_FP16 = SnaxBingoKernelGemmFaPvArgs.D_FP16
 

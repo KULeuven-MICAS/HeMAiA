@@ -5,6 +5,8 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | file | |
 |---|---|
 | `flash_attention.py` | `FlashAttention` over one or more clusters, and `FaCfg`, which holds every parameter it has. |
+| `gemm_async.py` | `GemmQueue`: a GEMM as a start task and a wait task (`gemm_start`, `gemm_fa_qk_start`, `gemm_fa_pv_start`, completed by `gemm_wait`), the cluster's dispatch numbering, and the core program order that lets the next start run before the previous wait. `FlashAttention` and `MlaAttention` take `gemm_async`. |
+| `fa_sweep.py` | `fa_sweep`, the FlashAttention sweep of one cluster over `nq` query tiles and `nt` key tiles of a caller's tile stream, on queued matmuls: a function, not a block. The multi-chip FA prefill builds on it. |
 | `collective.py` | Collectives across chips -- `all_gather`, `send`, `scatter` -- built as small graphs of blocks on the application's chips (a `Fabric`), each with interchangeable implementations behind `impl`: `"idma"` (local write, remote read; optional per-chip chain, two-level tree, per-chip hierarchy) and, for the all-gather, `"bcast"` (`BcastPut`: each part and a landed flag to every compute chip by D2D broadcast; `FlagFetch`: spin on the flags, read the whole array locally -- the waits are ordering-only edges, `BingoDFG.bingo_add_order_edge`, so they spend no dependency tag). Functions, not blocks. |
 | `gather.py` | `fa_gather`, the in-fabric fold of attention's per-cluster partials. A function, not a block. |
 | `moe.py` | `MoeFFN` — a mixture-of-experts feed-forward layer with CERF-skipped losers — and `MoeCfg`. |

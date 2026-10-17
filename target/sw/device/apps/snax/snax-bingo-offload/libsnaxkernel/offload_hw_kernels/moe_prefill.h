@@ -23,7 +23,8 @@
 //   simd_quant_rows      A16 rows times each row's route weight, quantised to INT8 rows of a
 //                        row-major GEMM A operand
 //   simd_scatter_add_rows
-//                        an expert's output rows added into the token rows they belong to
+//                        an expert's output rows added into the token rows they belong to,
+//                        optionally dequantised first (simd_mul_tiles' pass, in place)
 //
 // D LAYOUT (array shape 3, FP16): blocks of 8 rows x 16 columns, 256 B, row r of a block at
 // r * 32 B; blocks in (row tile, column tile) order, so row i of a matrix of NT column tiles
@@ -679,6 +680,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_scatter_add_rows(void *arg) {
         sp->return_value = a->y_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
+    }
+    if (a->s_addr) {
+        // the dequantisation of the n rows' row tiles, in place, before they are added
+        BINGO_SIMD_REQUIRE_LOCAL(a->s_addr, "simd_scatter_add_rows", "scale");
+        const uint32_t tiles = (a->n + 7u) / 8u;
+        for (uint32_t m = 0; m < tiles; m++) {
+            const uint32_t x = a->d_addr + m * a->d_tile_stride;
+            if (m == 0u) {
+                moe_pf_ew2_program((void *)x, (void *)a->s_addr, 8u * a->nt, SIMD_BEAT_BYTES,
+                                   (void *)x, 8u * a->nt, SIMD_BEAT_BYTES, 1u, 0u, SIMD_EW_MUL);
+            } else {
+                moe_pf_ew2_repoint(x, a->s_addr, x);
+            }
+            snax_simd_fire();
+        }
+        if (moe_pf_drain("simd_scatter_add_rows") != BINGO_RET_SUCC) return BINGO_RET_FAIL;
     }
     for (uint32_t i = 0; i < a->n; i++) {
         const uint32_t t = ids[i];

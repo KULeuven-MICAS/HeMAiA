@@ -356,7 +356,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_copy_slot_args {
 
 // One chunk of an L3 weight ring into L1 (offload_hw_kernels/idma.h): wait until the
 // slot's flag holds `seq`, copy the slot, write `seq` into its release word. flag_addr
-// and release_addr are this chiplet's local 32-bit L3 addresses.
+// and release_addr are this chiplet's local 32-bit L3 addresses. release_addr 0: no release
+// word is written (one of several readers of the slot; the last reader's load writes it).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t flag_addr;
   uint32_t seq;           // the chunk's sequence number in its ring, from 1
@@ -509,7 +510,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_quant_rows_args {
 } __snax_bingo_kernel_simd_quant_rows_args_t;
 
 // y[ids[i]] += d[i], i < n: FP16 rows of nt column tiles, both D layout (row tiles
-// y_tile_stride / d_tile_stride apart); ids uint16 in this cluster's L1. SIMD core.
+// y_tile_stride / d_tile_stride apart); ids uint16 in this cluster's L1. s_addr non-zero: d's
+// row tiles are first multiplied in place by the one-row-tile scale tile at s_addr (nt blocks),
+// as simd_mul_tiles does. SIMD core.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_scatter_add_rows_args {
   uint32_t y_addr;
   uint32_t y_tile_stride;
@@ -518,6 +521,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_scatter_add_rows_args {
   uint32_t nt;
   uint32_t ids_addr;
   uint32_t n;
+  uint32_t s_addr;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_scatter_add_rows_args_t;
 
@@ -1753,3 +1757,26 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_fa_args {
   uint32_t b_pitch;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_fa_args_t;
+
+// The two FlashAttention matmuls split in two tasks, as gemm_start / gemm_wait split gemm_full
+// (offload_hw_kernels/gemm_fa.h): __snax_bingo_kernel_gemm_fa_qk_start and ..._pv_start
+// configure and start the cluster's seq-th VersaCore dispatch (from 1, in GEMM core order,
+// every dispatch of the cluster numbered) and return; the next dispatch is programmed while the
+// array runs this one, and __snax_bingo_kernel_gemm_wait (gemm_wait_args) returns once the array
+// has retired it. The fields are gemm_fa_args' without perf_addr: the array's counters reset on
+// every configuration write, so a queued dispatch cannot account its own.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_fa_start_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t input_C_addr;
+  uint32_t output_D_addr;
+  uint32_t M;
+  uint32_t K;
+  uint32_t N;
+  uint32_t flags;          // GEMM_FA_*, PV only (gemm_fa_args)
+  uint32_t corr_addr;
+  uint32_t d_shift;
+  uint32_t b_pitch;
+  uint32_t seq;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_fa_start_args_t;
