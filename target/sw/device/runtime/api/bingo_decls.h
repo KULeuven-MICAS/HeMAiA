@@ -8,7 +8,7 @@ typedef struct {
   uint32_t dev_arg_list_ptr;
   uint32_t dev_kernel_list_ptr;
   uint32_t gid_to_dev_tid_list_ptr;
-  uint32_t gid_table_fmt16;   // 1: the compact table (int16 local ids), see bingo.h
+  uint32_t gid_table_fmt;     // the table format, BINGO_GID_FMT_* in bingo.h
 } bingo_hw_offload_unit_t;
 
 

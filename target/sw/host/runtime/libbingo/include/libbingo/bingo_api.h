@@ -640,6 +640,19 @@ void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_ke
                                      uint64_t bingo_hw_scheduler_task_desc_list_base,
                                      uint32_t bingo_hw_scheduler_num_task_desc);
 
+// The gid lists (mini compiler gid_lists, with the compact task tables). A cluster's device tasks
+// are numbered core by core, each core's in the order the manager dispatches them, and its L1 gets
+// one block of the list at dev_gid_lists_base_addr instead of a table indexed by global id:
+// BINGO_GID_LIST_MAGIC, the core count `ncores`, ncores + 1 core bases, then the global id of each
+// task in local id order. Its L1 cost grows with the cluster's own tasks, not the whole graph's.
+// Block c starts where block c - 1 ends, each a whole number of 8 bytes.
+#define BINGO_GID_LIST_MAGIC 0xB16D0032u
+void bingo_hw_scheduler_init_gid_lists(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr,
+                                       const uint32_t *cluster_dev_base,
+                                       uint64_t dev_gid_lists_base_addr, uint32_t ncores,
+                                       uint64_t bingo_hw_scheduler_task_desc_list_base,
+                                       uint32_t bingo_hw_scheduler_num_task_desc);
+
 uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);
 
 // COMPACT ID MAPS. The binary every chiplet runs holds every chiplet's tables, so a table

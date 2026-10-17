@@ -946,6 +946,40 @@ void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_ke
     bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
 }
 
+void bingo_hw_scheduler_init_gid_lists(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr,
+                                       const uint32_t *cluster_dev_base,
+                                       uint64_t dev_gid_lists_base_addr, uint32_t ncores,
+                                       uint64_t bingo_hw_scheduler_task_desc_list_base,
+                                       uint32_t bingo_hw_scheduler_num_task_desc){
+    const uint8_t chip = get_current_chip_id();
+    writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
+    uint64_t block = (uint64_t)chiplet_addr_transform_full(chip, dev_gid_lists_base_addr);
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++)
+    {
+        const uint32_t lo = cluster_dev_base[i], n = cluster_dev_base[i + 1] - lo;
+        const uint32_t list_bytes = ALIGN_UP((n ? n : 1u) * (uint32_t)sizeof(uint32_t), 8u);
+        // magic, ncores, ncores + 1 bases, n ids
+        const uint32_t block_bytes = ALIGN_UP((3u + ncores + n) * (uint32_t)sizeof(uint32_t), 8u);
+        uint64_t ptr_dev_arg_base = bingo_l1_alloc(chip, i, list_bytes);
+        uint64_t ptr_dev_kernel_base = bingo_l1_alloc(chip, i, list_bytes);
+        uint64_t ptr_gids = bingo_l1_alloc(chip, i, block_bytes);
+        if (n) {
+            sys_dma_blk_memcpy(chip, ptr_dev_arg_base,
+                               (uint64_t)chiplet_addr_transform_full(chip, dev_arg_base_addr) + lo * sizeof(uint32_t),
+                               n * sizeof(uint32_t));
+            sys_dma_blk_memcpy(chip, ptr_dev_kernel_base,
+                               (uint64_t)chiplet_addr_transform_full(chip, dev_kernel_base_addr) + lo * sizeof(uint32_t),
+                               n * sizeof(uint32_t));
+        }
+        sys_dma_blk_memcpy(chip, ptr_gids, block, block_bytes);
+        block += block_bytes;
+        writew(ptr_dev_arg_base,    (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr(i)));
+        writew(ptr_dev_kernel_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
+        writew(ptr_gids,            (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
+    }
+    bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
+}
+
 int16_t *bingo_g2l16_build(int16_t *dense, const int16_t *tmpl, uint32_t num_total_tasks,
                            const uint32_t *idx, const int16_t *val, uint32_t n){
     const uint32_t bytes = ALIGN_UP(4u + num_total_tasks * (uint32_t)sizeof(int16_t), 8u);

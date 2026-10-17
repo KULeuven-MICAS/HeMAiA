@@ -52,7 +52,7 @@ PARAMETERS (params.hjson): the platform (num_chiplets, num_clusters, model), tok
 w_chunk_bytes and w_buffers (the ring chunk and the L1 slabs), weight_ring, weight_crest (false),
 bcast, reduce, sync, barrier_mode, barrier_fence, gemm_async, static_l1, l1_capacity, d2d_ddr, and
 n_calib (calibration tokens), kv_cache and weights (paths under the repository), root_slice (the
-root's pull slice), compact_id_maps. The orders and buffers (each explained where it is read):
+root's pull slice), compact_id_maps, gid_lists. The orders and buffers (each explained where it is read):
 x_puts_first, prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
 wo_split_rows. The checks: checks (y | stages), y_windows (3 | 4). For bisecting a failure: stop
 (full | q8 | sweep | post | x), x_root, x_put_cluster, x_ring.

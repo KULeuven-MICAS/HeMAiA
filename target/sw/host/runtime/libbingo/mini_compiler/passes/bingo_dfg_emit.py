@@ -396,13 +396,21 @@ class BingoDFGEmitMixin:
         Original numbering: node-id order, every cluster's tasks interleaved (the local index is
         unused). compact_task_tables: cluster by cluster, node-id order within a cluster, so a
         cluster's tasks are one contiguous slice [bases[c], bases[c + 1]) and the runtime copies
-        only that slice into its L1 (bingo_hw_scheduler_init_compact)."""
+        only that slice into its L1 (bingo_hw_scheduler_init_compact). gid_lists: within a
+        cluster, core by core, each core's tasks in stream order, the order the manager
+        dispatches them (bingo_hw_scheduler_init_gid_lists)."""
         dev = [n for n in sorted(self.node_list, key=lambda n: n.node_id)
                if n.assigned_chiplet_id == chiplet_id and n.kernel_name
                and n.kernel_name.startswith("__snax")]
         ncl = self.num_clusters_per_chiplet
+        gid_lists = getattr(self, "gid_lists", False)
         if not getattr(self, "compact_task_tables", False):
+            if gid_lists:
+                raise ValueError("gid_lists needs compact_task_tables")
             return {n.node_id: (i, i) for i, n in enumerate(dev)}, None
+        if gid_lists:
+            pos = {n.node_id: i for i, n in enumerate(self.bingo_stream_order())}
+            dev.sort(key=lambda n: (n.assigned_core_id, pos[n.node_id]))
         ids, bases, k = {}, [], 0
         for c in range(ncl):
             bases.append(k)
@@ -414,8 +422,8 @@ class BingoDFGEmitMixin:
         if len(ids) != len(dev):
             raise ValueError(f"compact_task_tables: {len(dev) - len(ids)} device tasks on a "
                              f"cluster outside 0..{ncl - 1}")
-        if max((len([n for n in dev if n.assigned_cluster_id == c]) for c in range(ncl)),
-               default=0) > 32767:
+        if not gid_lists and max((len([n for n in dev if n.assigned_cluster_id == c])
+                                  for c in range(ncl)), default=0) > 32767:
             raise ValueError("compact_task_tables: more than 32767 device tasks on one cluster "
                              "(the table is int16)")
         return ids, bases
@@ -434,6 +442,29 @@ class BingoDFGEmitMixin:
         # Also need to emit num_dev_tasks for each chiplet
         for chiplet_id in chiplets_to_process:
             dev_ids, bases = self._dev_task_numbering(chiplet_id)
+            if getattr(self, "gid_lists", False):
+                # gid lists: one block a cluster, which the host copies into its L1 whole
+                # (bingo_hw_scheduler_init_gid_lists): BINGO_GID_LIST_MAGIC, the core count K,
+                # K + 1 core bases, then the global id of each of the cluster's device tasks in
+                # local id order -- core by core, each core's in dispatch order -- so core r's
+                # tasks are [base[r], base[r + 1]) and its next one is the entry after its
+                # previous one. Each block a whole number of 8 bytes.
+                ncores = self.num_cores_per_cluster
+                local = sorted((dev_ids[n.node_id][0], n) for n in all_nodes if n.node_id in dev_ids)
+                words = []
+                for c in range(len(bases) - 1):
+                    mine = [n for k, n in local if bases[c] <= k < bases[c + 1]]
+                    core_base = [sum(1 for n in mine if n.assigned_core_id < r)
+                                 for r in range(ncores + 1)]
+                    block = (["BINGO_GID_LIST_MAGIC", ncores] + core_base +
+                             [n.node_id for n in mine])
+                    words += block + [0] * (len(block) % 2)
+                mapping_str += _c_static_list(f"__bingo_gid_lists_chip_{chiplet_id:02x}",
+                                              "uint32_t", words)
+                mapping_str += (f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {bases[-1]};\n")
+                mapping_str += (f"uint32_t cluster_dev_base_chip_{chiplet_id:02x}[{len(bases)}] = "
+                                f"{{{', '.join(str(b) for b in bases)}}};\n")
+                continue
             if bases is not None and getattr(self, "compact_id_maps", False):
                 # compact id maps: this chiplet's (global id, local id) pairs only; the dense table
                 # (magic word, -1 for every other task) is built at boot from the shared template
@@ -503,7 +534,7 @@ class BingoDFGEmitMixin:
 
         # 2. Emit global_task_id_to_host_task_id
         for chiplet_id in chiplets_to_process:
-            if getattr(self, "compact_id_maps", False):
+            if getattr(self, "compact_id_maps", False) or getattr(self, "gid_lists", False):
                 # the chiplet's host tasks' global ids, ascending: a host task id is a position
                 # in this list (bingo_hw_scheduler_sparse)
                 gids = [idx for idx, node in enumerate(all_nodes)
@@ -1153,7 +1184,15 @@ class BingoDFGEmitMixin:
         f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        if getattr(self, "compact_task_tables", False):
+        if getattr(self, "gid_lists", False):
+            f.write(f"        bingo_hw_scheduler_init_gid_lists((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                cluster_dev_base_chip_{chiplet_id:02x},\n")
+            f.write(f"                                (uint64_t)(uintptr_t)__bingo_gid_lists_chip_{chiplet_id:02x},\n")
+            f.write(f"                                {self.num_cores_per_cluster}u,\n")
+            f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+        elif getattr(self, "compact_task_tables", False):
             f.write(f"        bingo_hw_scheduler_init_compact((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                cluster_dev_base_chip_{chiplet_id:02x},\n")
@@ -1170,7 +1209,7 @@ class BingoDFGEmitMixin:
             f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
         
-        if getattr(self, "compact_id_maps", False):
+        if getattr(self, "compact_id_maps", False) or getattr(self, "gid_lists", False):
             f.write(f"        uint32_t err = bingo_hw_scheduler_sparse(host_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                                 host_kernel_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                                 __bingo_g2h_gids_chip_{chiplet_id:02x},\n")
@@ -1204,7 +1243,8 @@ class BingoDFGEmitMixin:
 
             # Step 2b: the compact id maps' shared template and the one dense table each
             # chiplet builds from it at boot
-            if getattr(self, "compact_id_maps", False) and getattr(self, "compact_task_tables", False):
+            if (getattr(self, "compact_id_maps", False) and getattr(self, "compact_task_tables", False)
+                    and not getattr(self, "gid_lists", False)):
                 n = len(self.node_list)
                 length = -(-(2 + n) // 4) * 4
                 f.write(_c_static_table("__bingo_g2l16_template", "int16_t", length,

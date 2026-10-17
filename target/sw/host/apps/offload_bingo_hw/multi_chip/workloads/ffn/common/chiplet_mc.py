@@ -196,6 +196,9 @@ class ChipletBuild:
         dfg.compact_task_tables = bool(p.get("compact_tables", True))
         # each chiplet's id maps hold its own entries only (bingo_g2l16_build, bingo_hw_scheduler_sparse)
         dfg.compact_id_maps = bool(p.get("compact_id_maps", False))
+        # each cluster's L1 holds its own tasks' global ids instead of a table of every task's
+        # (bingo_hw_scheduler_init_gid_lists): its L1 cost no longer grows with the whole graph
+        dfg.gid_lists = bool(p.get("gid_lists", False))
         dfg.static_args_image = bool(p.get("static_args_image", True))
         # the generator's faster host init (bingo_dfg_emit: L1 addresses at compile time, the kernel list
         # by one loop, the symbol lookup by signature, the g2l table runs by DMA)

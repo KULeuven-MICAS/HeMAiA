@@ -233,7 +233,7 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
       bingo_cfg: {
         dep_tag_width: 4
-        task_id_width: 16
+        task_id_width: 32
         task_desc_width: 128
         waiting_queue_depth: 128
       },
