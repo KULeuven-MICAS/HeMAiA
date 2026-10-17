@@ -30,3 +30,10 @@ target/tapeout/tcl/*
 tmp/
 # Boot ROM linker script, generated from bootrom.ld.tpl by gen_bootrom_ld.py
 target/rtl/bootrom/shared/bootrom.ld
+
+# The private modules target/tapeout/1_git_pull_private_modules.sh clones, and the sweeps' build lock
+hw/hemaia/hemaia_d2d_link/
+hw/hemaia/tech_cells_tsmc16/
+hw/hemaia/hemaia_clk_rst_controller/
+target/tapeout/HeMAiAv2_tapeout/
+.hsweep_build.lock
