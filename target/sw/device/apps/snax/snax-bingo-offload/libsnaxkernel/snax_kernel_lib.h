@@ -116,6 +116,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_qk),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_pv),
+    // The two matmuls queued (completed by __snax_bingo_kernel_gemm_wait).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_qk_start),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_pv_start),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_perf_report),
     // The one-token GEMV on the (1, 4, 32) shape: x in row 0 of a 16-row A operand, W in
     // the ordinary B layout read two column blocks a pass, y a plain FP16 row.

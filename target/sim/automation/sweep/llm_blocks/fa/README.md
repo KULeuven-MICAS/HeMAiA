@@ -1,7 +1,7 @@
 # L2 FA: MLA decode over a real 8K-token cache on 16 compute + 4 memory chiplets, with an ablation
 
 One button: `./run.sh all` runs every variant (the cache must exist: `real_kv_cache.py` once).
-- `./run.sh run dsv2_l1/full dsv2_l1/base` runs a subset.
+- `./run.sh run dsv2_l1/all dsv2_l1/base` runs a subset.
 - `./run.sh parse` re-parses into `results/fa.csv`; `../ffn/plot_l2.py` draws the figure.
 
 ## Question
@@ -104,13 +104,32 @@ folded (O^T, l).
 pass 1, m* made on the root, m* in every cluster, pass 2, the chip fold, the reduce, the
 normalised output.
 
+## Prefill (T = 256): the PoC and the real size as one 128-token chunk
+
+The same layer as a prefill over the 8K cache (`workloads/fa/common/fa_prefill_mc.py` generates it): head parallel
+(chip = head, cluster = half of a chunk's tokens), K/V tiles of 256 keys. The ladder
+`dsv2_l1_prefill/{base,bcast,bcast_reduce,all}` is the design at 4 chunks of 64 tokens; it has not run at the real
+size (a 256-token image exceeds the 16-bit task id). What runs: `dsv2_l1_prefill/v5` (one 128-token chunk over all
+8,192 keys, y byte for byte, 1,542.4 us = 78.7 % MAC) and `v6` (+ a gather per W_O block, not yet run); the PoC
+`dsv2_l1_prefill_tiny/{all, v17, v18, v19}` over the first 1,024 keys. Every run with its finding is in
+`results/prefill_stages.md`; the FA Prefill Tracker artifact has the figures.
+
+`estimate_prefill.py` (writes `results/prefill_estimate.md`) is the estimate made before the first run (from the
+decode run's task times, the MoE's GEMM and push rates, E2 / E3). It found `all` at ~89 % (nominal) and ~80 %
+(stress); it did not model the weight and cache stream per chunk, which the runs showed binds 64-token chunks.
+
 ## Files
 
 - `real_kv_cache.py`: the cache into `cache/`.
 - `run.sh`: the runs, through `common/launch.sh` (watchdog, sim slots).
 - `parse_fa.py`: `results/fa.csv`, with `../ffn/parse_ffn.py`.
+- `estimate_prefill.py`: the prefill's MAC utilisation estimate (`results/prefill_estimate.md`).
+- `stages.sh`: a prefill run, `poc_<variant>` (tiny) or `full_<variant>`, with its watchdog (`common/sim_watchdog.py`,
+  profile `fa_prefill`).
+- `fa_trace.py`: a prefill run's window from the scheduler's events: MAC, engine shares, phases, the ring pushed per
+  memory chip, the arrays' share; `results/<run>/{summary.txt, series.json, window.png, chips.png}`.
 - **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/fa/`.
-  - `common/fa_mc.py`: the driver, on `ffn/common/chiplet_mc.py`.
+  - `common/fa_mc.py`: the decode driver, on `ffn/common/chiplet_mc.py`; `common/fa_prefill_mc.py`: the prefill's driver and generator.
   - `common/fa_data.py`: the cache, the query, scales, golden.
   - `common/fa.mk`: the build.
-  - `dsv2_l1/<variant>/params.hjson`: one directory per variant.
+  - `dsv2_l1/<variant>/params.hjson`: one directory per decode variant; `dsv2_l1_prefill/`, `dsv2_l1_prefill_tiny/`: the prefill's.

@@ -1,0 +1,30 @@
+// DeepSeek-V2-Lite's layer-1 MLA attention (16 heads, absorbed) as a 256-token prefill over the 8,192-token latent cache, 4 chunks of 64 tokens, head parallel (chip = head,
+// cluster = half of a chunk's tokens: two 16-row query tiles), K/V tiles of 256 keys, INT8, on
+// hemaia_16c4m_8MBL3_2cluster.
+// Variant all: x and the cache multicast; every chunk's partials folded in transit (xDMA ChainGather); cross-chip dependencies in the BINGO hardware scheduler (per edge), so a chunk's reduce and the next chunk's x run under the next sweep.
+// What each field does is in ../../common/fa_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l1
+  tokens: 256
+  chunk: 64
+  keys: 8192
+  bc: 256
+  w_chunk_bytes: 147456
+  w_buffers: 4
+  weight_ring:
+  {
+    slots: 16
+    batch: 4
+    policy: 1
+  }
+  weight_crest: false
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  gemm_async: true
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+}

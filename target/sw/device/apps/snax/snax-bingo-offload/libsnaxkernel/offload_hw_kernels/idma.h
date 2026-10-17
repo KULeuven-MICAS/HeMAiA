@@ -116,6 +116,21 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// Wait for one iDMA transfer by its id. dmstat 0 is the id of the last transfer the ND midend
+// retired; transfer ids grow by one per issue (2, 3, ... wrapping to 2), so the transfer `tid` has
+// retired once the completed id has reached it. Unlike snrt_dma_wait_all, which polls the busy bit
+// (backend or ND midend busy), this cannot return while a just-issued transfer is still waiting in
+// the frontend's request FIFO or between the midend and the backend.
+static inline void bingo_dma_wait_id(snrt_dma_txid_t tid) {
+    uint32_t done;
+    do {
+        register uint32_t r asm("t0");
+        asm volatile(".word (0b0000100 << 25) | (0b00000 << 20) | (0b000 << 12) | ((5) << 7) | (0b0101011 << 0)\n"
+                     : "=r"(r));
+        done = r;
+    } while ((int32_t)(done - (uint32_t)tid) < 0);
+}
+
 // A broadcast collective's destination: spin until each producer's landed flag (64 B apart,
 // in this chip's memory) holds `value` -- the producers are ordering-only edges, not
 // dependencies, so the flags are the proof their parts are here -- then copy the gathered
@@ -146,8 +161,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
         volatile uint32_t *seen = (volatile uint32_t *)(uintptr_t)(uint32_t)dst;
         uint32_t polls = 0, i = 0;
         for (;;) {
-            snrt_dma_start_2d_wideptr(dst, flags, 4, 4, 64, n);
-            snrt_dma_wait_all();
+            // wait for this transfer by its id, not the busy bit: the core reads what it wrote next
+            bingo_dma_wait_id(snrt_dma_start_2d_wideptr(dst, flags, 4, 4, 64, n));
             while (i < n && seen[i] == value) i++;   // flags already seen stay landed
             if (i == n) break;
             // a flag that never lands means a producer never ran: say which, keep waiting
@@ -443,7 +458,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
         flag[0] = 0u;
         flag[1] = 0u;
     }
-    *release = a->seq;
+    // release_addr 0: this load is one of several readers of the slot (a chunk both clusters of a
+    // chip read); the reader that comes last, whose task follows the others, writes the release.
+    if (release) *release = a->seq;
     sp->return_value = (uint32_t)dst;
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;

@@ -1,0 +1,25 @@
+// DeepSeek-V2-Lite's layer-1 MLA attention on hemaia_16c4m_8MBL3_2cluster: one decode
+// token over a real 8192-token latent cache, split by key over the 32 clusters.
+// Variant reduce_sync: q and m* pulled by every cluster (iDMA); the chips' maxima (FP16 MAX) and the partials folded in transit (xDMA ChainGather); cross-chip dependencies in the BINGO hardware scheduler (per edge).
+// What each field does is in ../../common/fa_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  tokens: 1
+  keys: 8192
+  w_chunk_bytes: 36864
+  w_buffers: 3
+  weight_ring:
+  {
+    slots: 16
+    batch: 4
+    policy: 1
+  }
+  weight_crest: false
+  bcast: pull
+  reduce: chain
+  sync: edge
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+}
