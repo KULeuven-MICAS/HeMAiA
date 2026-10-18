@@ -11,12 +11,13 @@
 # the simulator it watches when the workload stops moving.
 C=$(cd "$(dirname "$0")" && pwd)
 SW=$(dirname "$C")
+T=$(git -C "$C" rev-parse --show-toplevel)     # the checkout this script sits in
 source /users/micas/fkong/no_backup/src_hemaia_eda.sh >/dev/null 2>&1
 [ "${VCS_HOME##*/}" = "W-2024.09-SP2" ] || { echo "BAD EDA ENV: $VCS_HOME"; exit 1; }
 mode=$1; shift
 case $mode in
   build)
-    cfg=$1; tree=${2:-/users/micas/fkong/no_backup/HeMAiA}
+    cfg=$1; tree=${2:-$T}
     R=$C/builds/$(basename "$cfg" .hjson)_$(date +%m%d_%H%M); mkdir -p "$(dirname "$R")"
     L=$R.log
     setsid nohup bash -c "cd '$tree' && python3 -u '$C/hsweep.py' build --cfg '$cfg' --tree '$tree' > '$L' 2>&1" > /dev/null 2>&1 &
@@ -28,7 +29,7 @@ case $mode in
     # simv writes its transcript live (-l), so an assertion is visible while the runner still
     # holds the captured output
     export SIM_PLUSARGS="${SIM_PLUSARGS:--l sim_live.log}"
-    setsid nohup bash -c "cd /users/micas/fkong/no_backup/HeMAiA && python3 -u '$C/hsweep.py' run --exp '$exp' --tag '$tag' --points '$pts' $* > '$L' 2>&1" > /dev/null 2>&1 &
+    setsid nohup bash -c "cd '$T' && python3 -u '$C/hsweep.py' run --exp '$exp' --tag '$tag' --points '$pts' $* > '$L' 2>&1" > /dev/null 2>&1 &
     ;;
   *) echo "usage: launch.sh build <cfg> [tree] | run <exp> <tag> <points.yaml> [args]"; exit 1;;
 esac

@@ -3,7 +3,7 @@ import sys, os, re, glob, json, collections
 from pathlib import Path
 import argparse
 import hjson
-REPO = "/users/micas/fkong/no_backup/HeMAiA"
+REPO = str(next(p for p in Path(__file__).resolve().parents if (p / "Bender.yml").exists()))
 W = f"{REPO}/target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/ffn"
 sys.path.insert(0, f"{W}/common"); sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, f"{REPO}/target/sim/automation/sweep/llm_blocks/ffn")

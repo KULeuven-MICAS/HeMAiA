@@ -6,7 +6,7 @@
 # gen_check.sh <workload dir under workloads/moe> <out dir> <log>: the generator alone, its static checks included, with
 # every output (headers, final_dfg.csv, the HBM image) written to <out dir>, never into the workload directory (a running
 # simulation maps that directory's build/hbm image).
-H=/users/micas/fkong/no_backup/HeMAiA
+H=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 W=$H/target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/moe
 SN=$H/deps/snitch_cluster
 export PATH=$H/target/sim/automation/sweep/llm_blocks/ffn/tools/bin:$PATH

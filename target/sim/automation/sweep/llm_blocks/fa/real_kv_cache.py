@@ -34,6 +34,7 @@ import os
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 
@@ -51,8 +52,8 @@ _spec.loader.exec_module(cf)
 
 
 def _dsv2_util():
-    sn = os.environ.get("SNAX_DSV2", "/users/micas/fkong/no_backup/snax_cluster/target/"
-                                     "snitch_cluster/sw/apps/dsv2")
+    repo = next(p for p in Path(HERE).resolve().parents if (p / "Bender.yml").exists())
+    sn = os.environ.get("SNAX_DSV2", str(repo / "deps/snitch_cluster/target/snitch_cluster/sw/apps/dsv2"))
     if sn not in sys.path:
         sys.path.insert(0, sn)
     from util import model, reference

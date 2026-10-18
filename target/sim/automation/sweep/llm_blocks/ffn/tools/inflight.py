@@ -2,7 +2,7 @@ import re, os, glob, sys, collections
 # NOTE: scratch output goes to /tmp/opencode/w (mkdir -p it); run with the shims first on PATH (tools/bin)
 from pathlib import Path
 from multiprocessing import Pool
-sys.path.insert(0, "/users/micas/fkong/no_backup/HeMAiA/target/sim/automation/sweep/llm_blocks/ffn")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))     # llm_blocks/ffn
 import trace_ffn as TF, trim_traces
 task = Path(sys.argv[1]); wl = trim_traces.wl_dir_of(task)
 orders = TF.core_orders(wl / "offload_bingo_hw.h", wl / "final_dfg.csv")

@@ -1,6 +1,6 @@
 #!/bin/bash
 # gen_one.sh <workload dir under workloads/ffn> <log>: the generator alone
-H=/users/micas/fkong/no_backup/HeMAiA
+H=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 W=$H/target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/ffn
 SN=$H/deps/snitch_cluster
 export PATH=$H/target/sim/automation/sweep/llm_blocks/ffn/tools/bin:$PATH

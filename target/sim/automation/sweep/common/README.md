@@ -16,10 +16,11 @@ It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
 
 **Rules this enforces:**
 - `run` refuses to start when the standing simv was built for another cfg. Rebuild first.
-- App builds take a lock on the tree, and take
-  `/users/micas/fkong/no_backup/snax_cluster/.hsweep_chisel.lock` SHARED, since they only read the snax tree.
-  RTL builds take it exclusively, and so must anything else that runs sbt there (`flock` does by
-  default), so a generation never overlaps an app build in any tree.
+- App builds take a lock on the tree, and take `.hsweep_chisel.lock` in the tree's snax checkout
+  (`deps/snitch_cluster`, or the path `Bender.local` overrides `snitch_cluster` to) SHARED, since they
+  only read the snax tree. RTL builds take it exclusively, and so must anything else that runs sbt
+  there (`flock` does by default), so a generation never overlaps an app build in any tree that
+  builds against the same checkout.
 - At most `SIM_SLOTS` (default 3) of this session's simulations run at once, across trees. A run waits for a free slot.
   Taking a slot happens under `common/.sim_slots.lock` until the new simulation process exists, so
   runners that wait together do not overshoot.
