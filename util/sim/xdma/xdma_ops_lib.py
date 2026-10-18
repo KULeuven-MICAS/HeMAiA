@@ -60,12 +60,12 @@ import bingo_kernel_args as _bka  # noqa E402  (layout classes are resolved by s
 # any node is built, because none of them is a constant of the software:
 #
 #   DMA_CORE   the iDMA, which snRuntime puts on the LAST cluster core
-#   XDMA_CORE  the transfer engine -- a SEPARATE hart on the split cluster, where it used
-#              to share one with the iDMA. An xDMA kernel placed on the DM core does not
-#              fault: it programs THAT hart's accelerator at the same CSR offsets.
+#   XDMA_CORE  the transfer engine -- a SEPARATE hart on the split cluster. An xDMA kernel
+#              placed on the DM core does not fault: it programs THAT hart's accelerator at
+#              the same CSR offsets.
 #   HOST_CORE  the chiplet-local host core, one past the last SNAX core
 #
-# They were 1, 1 and 2 on the two-core cluster and are 3, 2 and 4 on the four-engine one.
+# On the four-engine cluster they are 3, 2 and 4.
 DMA_CORE = 1
 XDMA_CORE = 1
 HOST_CORE = 2

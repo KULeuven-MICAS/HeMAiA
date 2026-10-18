@@ -24,24 +24,22 @@ uint64_t global_task_id = 0; // Internal monotonically increasing id source, not
 int bingo_hemaia_system_mmap_init(){
     // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
     uint64_t comm_buffer = chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
-    // printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), comm_buffer);
     // L2 heap init. Starts just above the comm buffer, in the narrow SPM.
     //
     // Take the whole narrow SPM above the comm buffer, less a guard at the top for the
     // HOST STACK.
     //
-    // THE STACK IS IN THE NARROW SPM, not in WIDE_SPM. An older comment here claimed the
-    // opposite on the strength of host.ld's __return_pointer$, but host.ld never loads sp:
-    // its `la sp, __stack_pointer$` is commented out, so the host runs on whatever the boot
-    // ROM left, and bootrom.ld sets __stack_pointer$ to the TOP OF THE NARROW SPM. The
+    // THE STACK IS IN THE NARROW SPM, not in WIDE_SPM. The host never loads sp (the
+    // `la sp, __stack_pointer$` in start.S is commented out), so it runs on whatever the
+    // boot ROM left, and bootrom.ld sets __stack_pointer$ to the TOP OF THE NARROW SPM. The
     // stack therefore grows down into the top of this heap, and the guard below is the only
     // thing keeping the two apart.
     //
-    // SIZE THE GUARD FOR THE DEEPEST CALL PATH, not for a round number -- an earlier 1 KiB
-    // was measured overrun. Nothing detects the collision: the allocator hands out space it
-    // believes is free, the caller writes its data, and only later -- once the host has
-    // called deep enough -- does the stack overwrite the tail of it. The failure therefore
-    // surfaces far from its cause, as a consumer reading a structure whose end is corrupt.
+    // SIZE THE GUARD FOR THE DEEPEST CALL PATH, not for a round number. Nothing detects the
+    // collision: the allocator hands out space it believes is free, the caller writes its
+    // data, and only later -- once the host has called deep enough -- does the stack
+    // overwrite the tail of it. The failure therefore surfaces far from its cause, as a
+    // consumer reading a structure whose end is corrupt.
     //
     // This heap is where bingo_task_create() and the task-descriptor list allocate from, so
     // its size is the hard cap on how large one data-flow graph may be.
@@ -51,8 +49,6 @@ int bingo_hemaia_system_mmap_init(){
     uint64_t l2_heap_used  = l2_heap_start - comm_buffer;
     uint64_t l2_heap_size  = NARROW_SPM_SIZE - l2_heap_used - 4096u;
     uint64_t l2_heap_manager = bingoHeapInit(l2_heap_start, l2_heap_size);
-    // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_manager, l2_heap_size>>10);
-    // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(l2_heap_manager==0UL) {
         printf("Error when initializing L2 heap. \r\n");
         return -1;
@@ -63,8 +59,6 @@ int bingo_hemaia_system_mmap_init(){
     uint64_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
     uint64_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
     uint64_t l3_heap_manager = bingoHeapInit(l3_heap_start, l3_heap_size);
-    // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_manager, l3_heap_size>>10);
-    // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(l3_heap_manager==0UL) {
         printf("Error when initializing L3 heap.\r\n");
         return -1;
@@ -525,7 +519,7 @@ static void bingo_broadcast_completion(const bingo_task_t *t, uint8_t src_chip) 
             .payload = dst_task
         };
         uint64_t word = bingo_msg_encode(mf);
-        // Blocking write (timeout 0 => infinite)
+        // Write into the destination chip's H2H mailbox without checking FULL
         bingo_write_h2h_mailbox(dst_chip, word, 0, NULL);
     }
 }
@@ -575,7 +569,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     while (readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr())) == 0) {
     }
     // The read-back above proves the quadrant is programmed; now release the clusters,
-    // which poll this word in the L2 comm buffer (HW-15, device bingo.h).
+    // which poll this word in the L2 comm buffer (device bingo.h).
     ((volatile comm_buffer_t *)(uintptr_t)bingo_get_l2_comm_buffer(get_current_chip_id()))
         ->host_init_done = 1;
     asm volatile("fence" ::: "memory");
@@ -786,13 +780,12 @@ void bingo_hw_scheduler_init_pm(){
     BINGO_PRINTF(1, "Chip(%x, %x): [Host] Initializing HW Scheduler Power Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Init the power manager
     // We need to prepare the following registers:
-    // 1. quad_ctrl_idle_power_level_addr: set to the desired power level for idle state
-    // For simulation we can set to roughly 1/4 of the normal speed (6)
+    // 1. quad_ctrl_idle_power_level_addr: set to the power level (core clock divider) for the
+    // idle state, BINGO_PM_IDLE_POWER_LEVEL
     writew(BINGO_PM_IDLE_POWER_LEVEL,    (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_idle_power_level_addr()));
-    // 2. quad_ctrl_norm_power_level_addr: set to the desired power level for normal state
-    // For simulation the default value is 6
-    // This is due to the 4Ghz PLL divided by 16 gives
-    // For chip testing, we should choose another value derived from the 4Ghz PLL
+    // 2. quad_ctrl_norm_power_level_addr: set to the power level for the normal state,
+    // BINGO_PM_NORMAL_POWER_LEVEL. Both levels are the same value unless the platform sets
+    // them apart (see bingo_api.h). For chip testing, choose a value derived from the 4Ghz PLL.
     writew(BINGO_PM_NORMAL_POWER_LEVEL,  (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_norm_power_level_addr()));
     // 3. quad_ctrl_pm_base_hi_addr: set to the high 32 bits of the power manager base address
     uint64_t CLK_CONTROLLER_ADDR = chiplet_addr_transform(HEMAIA_CLK_RST_CONTROLLER_BASE_ADDR);
@@ -801,22 +794,23 @@ void bingo_hw_scheduler_init_pm(){
     writew((uint32_t)(CLK_CONTROLLER_ADDR),           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_pm_base_lo_addr()));
     // 5. quad_ctrl_core_power_domain_addr: set to the core power domain
     // First iterate the cores and then clusters
-    // cluster 0 core0, cluster 0 core1 cluster 0 core2, cluster 1 core 1
+    // cluster 0 core 0 .. cluster 0 core N_CORES_PER_CLUSTER, cluster 1 core 0 ...
     // From the hardware design, we have the following power domain mapping:
     // Domain 0: Host core
     // Domain 1: Cluster 0
     // Domain 2: Cluster 1
     // ...
     // At most we have 32 domains (0-31)
-    // However, we put the host core to the core 2 of cluster 0
-    // and we not want to change the host core domain
+    // However, the host core sits at core index N_CORES_PER_CLUSTER of cluster 0
+    // (the one past the last SNAX core; occamy_quad_ctrl.sv.tpl connects it there)
+    // and we do not want to change the host core domain
     // So we need to special case the host core here
     uint32_t core_power_domain;
     uint32_t idx;
     for (uint32_t cluster = 0; cluster < N_CLUSTERS_PER_CHIPLET; cluster++){
         for (uint32_t core = 0; core < N_CORES_PER_CLUSTER + 1; core++){ // +1 for the host core
             idx = cluster * (N_CORES_PER_CLUSTER + 1) + core;
-            if (cluster == 0 && core == 2){
+            if (cluster == 0 && core == N_CORES_PER_CLUSTER){
                 // Host core, do not change its power domain
                 // In Bingo HW scheduler, it will read this value and compare it with the 32
                 // to decide whether this is a valid domain or not
@@ -832,9 +826,8 @@ void bingo_hw_scheduler_init_pm(){
     // and normal levels differ. Enabled, the PM rewrites every cluster domain's clock divider
     // once as soon as it starts (bingo_hw_manager_pm.sv tracks each domain's level from a
     // reset value of 0, so every domain looks out of date), and a cluster transaction in
-    // flight across that rewrite is lost: the clusters that were reading at that moment
-    // stalled for good and the layer never started (HW-15: 4 of 7 builds). With
-    // equal levels the PM has nothing to do but that rewrite.
+    // flight across that rewrite is lost and the cluster stalls. With equal levels the PM
+    // has nothing to do but that rewrite.
     writew(BINGO_PM_IDLE_POWER_LEVEL != BINGO_PM_NORMAL_POWER_LEVEL,
            (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
     asm volatile("fence" ::: "memory");
@@ -906,7 +899,7 @@ static void bingo_hw_scheduler_start(uint64_t bingo_hw_scheduler_task_desc_list_
     while (readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr())) == 0) {
     }
     // The read-back above proves the quadrant is programmed; now release the clusters,
-    // which poll this word in the L2 comm buffer (HW-15, device bingo.h).
+    // which poll this word in the L2 comm buffer (device bingo.h).
     ((volatile comm_buffer_t *)(uintptr_t)bingo_get_l2_comm_buffer(get_current_chip_id()))
         ->host_init_done = 1;
     asm volatile("fence" ::: "memory");
