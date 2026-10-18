@@ -23,6 +23,8 @@ separate ELF through the corresponding `single_chip` or `multi_chip` Makefile.
 ### Multi-chip workloads
 - **gemm_broadcast_4chiplet_1cluster**: Four-chiplet GEMM that broadcasts shared operands across chiplets.
 - **xdma_mempool_4chiplet_1cluster**: Four-chiplet xDMA test moving data across chiplet memory pools.
+- **sync_latency_smoke_1cluster**: Cross-chip synchronisation latency of the Bingo software manager at correctness-check size: one-to-one and one-to-all round trips anchored on chiplet `00`, for P = 2 and 4 participating chiplets.
+- **sync_latency_sweep_1cluster**: The same probe, swept over P = 2, 4, 8 and 16 chiplets. Both sync-latency workloads include `sync_latency_common/sync_latency_impl.h`, which is not a workload itself.
 
 ## Build Command
 ```bash
