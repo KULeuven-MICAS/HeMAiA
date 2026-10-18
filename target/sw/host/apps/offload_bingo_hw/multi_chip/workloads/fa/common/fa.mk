@@ -74,7 +74,7 @@ clean-data:
 	rm -f $(DATA_H)
 	rm -rf $(MK_DIR)build/hbm
 clean-offload:
-	rm -rf $(OFFLOAD_H) $(MK_DIR)*.png $(MK_DIR)*.csv $(MK_DIR)block_dfg
+	rm -rf $(OFFLOAD_H) $(MK_DIR)per_chip_ids $(MK_DIR)*.png $(MK_DIR)*.csv $(MK_DIR)block_dfg
 clean: clean-data clean-offload
 
 # Checks print only failures, and each chip one "Checks: N PASS, M FAIL" line at exit.

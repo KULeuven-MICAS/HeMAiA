@@ -3,5 +3,6 @@
 */*/*.png
 */*/*.h
 */*/*.csv
+*/*/per_chip_ids
 */*/block_dfg/
 __pycache__/

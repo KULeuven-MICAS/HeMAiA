@@ -156,6 +156,10 @@ class ChipletBuild(FabricBase):
         # each cluster's L1 holds its own tasks' global ids instead of a table of every task's
         # (bingo_hw_scheduler_init_gid_lists): its L1 cost does not grow with the whole graph
         dfg.gid_lists = bool(p.get("gid_lists", False))
+        # params per_chip_image: one host image per chiplet, holding the shared code and data and that chiplet's
+        # own tables only (target/sw/host/apps/per_chip_image.py), so an image's L3 share does not grow with the
+        # other chiplets' tasks; needs the one-function-per-chiplet host code (split_chip_functions)
+        dfg.per_chip_image = bool(p.get("per_chip_image", False))
         dfg.static_args_image = bool(p.get("static_args_image", True))
         # the generator's faster host init (bingo_dfg_emit: L1 addresses at compile time, the kernel list
         # by one loop, the symbol lookup by signature, the g2l table runs by DMA)

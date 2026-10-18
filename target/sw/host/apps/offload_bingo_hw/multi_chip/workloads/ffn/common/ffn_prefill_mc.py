@@ -202,6 +202,12 @@ class PBuild(cm.ChipletBuild):
               f"{sorted({len(c) for c in self.chunks.values()})}")
         self.XB = R * self.D                    # X_i, INT8
         self.YB = R * self.D * 2                # a partial / Y_raw_i, FP16
+        # params l3_overlay (single pass, dn_split cols): Y_raw_i is stored over X_i's source and landing buffers in L3,
+        # one region a pass ([source | landing], as long as Y_raw_i), so the image holds Y beside neither; pass i's
+        # stores follow every reader of X_i (the root's put and its clusters' fetches) through the pass's GEMMs
+        self.l3_overlay = bool(p.get("l3_overlay", False))
+        if self.l3_overlay and not (self.single and self.dn_cols):
+            raise ValueError("params l3_overlay: single_pass with dn_split cols only")
         self.SL = int(p.get("root_slice", 32 * 1024))
         self._stage()
         self.make_streams()
@@ -246,10 +252,15 @@ class PBuild(cm.ChipletBuild):
         R = self.ROWS
         # the prompt's rows, A layout per iteration: the root's source and every chip's landing
         xs = [lay.to_a(d.hq[i * R:(i + 1) * R]) for i in range(self.NI)]
-        self.h_xsrc = st.put(f"{T}_xsrc", "int8_t", np.concatenate(xs).astype(np.int8))
-        st.put_zeros(f"{T}_xland", "int8_t", self.NI * self.XB, preload=True)
+        if self.l3_overlay:                     # per pass: X_i's source, its landing area; Y_raw_i over both
+            zero = np.zeros(self.XB, dtype=np.int8)
+            st.put(f"{T}_xy", "int8_t", np.concatenate([b for x in xs for b in (x.astype(np.int8), zero)]))
+        else:
+            self.h_xsrc = st.put(f"{T}_xsrc", "int8_t", np.concatenate(xs).astype(np.int8))
+            st.put_zeros(f"{T}_xland", "int8_t", self.NI * self.XB, preload=True)
         st.put_zeros(f"{T}_xflag", "uint8_t", self.NI * 64 * max(1, self.x_blocks))
-        st.put_zeros(f"{T}_y", "uint8_t", self.NI * self.YB, preload=True)
+        if not self.l3_overlay:
+            st.put_zeros(f"{T}_y", "uint8_t", self.NI * self.YB, preload=True)
         self.img, self.chunk_off, self.sdup = {}, {}, {}
         for g, (c0, n) in self.cols.items():
             k = self.chip(g)
@@ -342,14 +353,35 @@ class PBuild(cm.ChipletBuild):
         return ld, si, slab
 
     # ---- the stages of one iteration --------------------------------------------------------
+    def _xsrc(self, off, **kw):
+        """The root's X source at byte `off` (of all passes' X, A layout): params l3_overlay puts each pass's in its
+        region of the overlay symbol."""
+        if self.l3_overlay:
+            return BingoMemSymbol(f"{self.TAG}_xy", offset=off // self.XB * self.YB + off % self.XB, **kw)
+        return BingoMemSymbol(f"{self.TAG}_xsrc", offset=off, **kw)
+
+    def _xland(self, off):
+        """Where X lands in every chip's L3, at byte `off`; with params l3_overlay after its pass's source."""
+        if self.l3_overlay:
+            return BingoMemSymbol(f"{self.TAG}_xy", offset=off // self.XB * self.YB + self.XB + off % self.XB)
+        return BingoMemSymbol(f"{self.TAG}_xland", offset=off)
+
+    def _ysym(self, off, **kw):
+        """Y_raw in the root's L3 at byte `off`; params l3_overlay: over the X buffers, at the same offset."""
+        return BingoMemSymbol(f"{self.TAG}_{'xy' if self.l3_overlay else 'y'}", offset=off, **kw)
+
+    def _xflag(self, i):
+        """The offset of X_i's landed flag (64 B each): with params x_blocks, iteration 0's blocks take the
+        first flags and a later iteration (single pass) the one after them."""
+        return 64 * (i if self.x_blocks == 1 else self.x_blocks + i - 1)
+
     def stage_x_put(self, i, after):
         """The root multicasts X_i into every chip's L3 (bcast_l1). Returns the put."""
         T, R = self.TAG, self.ROOT
         return self.node(R, 0, self.roles["dm"], f"x_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
                          SnaxBingoKernelIdmaPutFlaggedArgs(
-                             BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB),
-                             BingoMemSymbol(f"{T}_xland", offset=i * self.XB), self.XB,
-                             BingoMemSymbol(f"{T}_xflag", offset=i * 64), value=1, bcast=True,
+                             self._xsrc(i * self.XB), self._xland(i * self.XB), self.XB,
+                             BingoMemSymbol(f"{T}_xflag", offset=self._xflag(i)), value=1, bcast=True,
                              also_here=True), list(after))
 
     def stage_x_put_block(self, b, after):
@@ -357,8 +389,7 @@ class PBuild(cm.ChipletBuild):
         T, R, nb = self.TAG, self.ROOT, self.XB // self.x_blocks
         return self.node(R, 0, self.roles["dm"], f"x_bput_i0b{b}", "__snax_bingo_kernel_idma_put_flagged",
                          SnaxBingoKernelIdmaPutFlaggedArgs(
-                             BingoMemSymbol(f"{T}_xsrc", offset=b * nb),
-                             BingoMemSymbol(f"{T}_xland", offset=b * nb), nb,
+                             self._xsrc(b * nb), self._xland(b * nb), nb,
                              BingoMemSymbol(f"{T}_xflag", offset=b * 64), value=1, bcast=True,
                              also_here=True), list(after))
 
@@ -368,7 +399,7 @@ class PBuild(cm.ChipletBuild):
         k, c = self.chip(g), self.c(g)
         nd = self.node(k, c, dm, f"x_wait_i0b{b}_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
                        SnaxBingoKernelIdmaFetchFlaggedArgs(
-                           BingoMemSymbol(f"{T}_xland", offset=b * nb), self.xbuf[g][0].view(b * nb), nb,
+                           self._xland(b * nb), self.xbuf[g][0].view(b * nb), nb,
                            BingoMemSymbol(f"{T}_xflag", offset=b * 64), 1, 1),
                        list(after) + ([put] if k == self.ROOT else []))
         if k != self.ROOT:
@@ -387,15 +418,15 @@ class PBuild(cm.ChipletBuild):
             if self.bcast_impl == "bcast_l1":
                 nd = self.node(k, c, dm, f"x_wait_i{i}_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
                                SnaxBingoKernelIdmaFetchFlaggedArgs(
-                                   BingoMemSymbol(f"{T}_xland", offset=i * self.XB), xb, self.XB,
-                                   BingoMemSymbol(f"{T}_xflag", offset=i * 64), 1, 1),
+                                   self._xland(i * self.XB), xb, self.XB,
+                                   BingoMemSymbol(f"{T}_xflag", offset=self._xflag(i)), 1, 1),
                                deps + ([put] if k == self.ROOT else []))
                 if k != self.ROOT:
                     self.dfg.bingo_add_order_edge(put, nd)
             else:
                 nd = self.node(k, c, dm, f"x_pull_i{i}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
                                SnaxBingoKernelIdma1dCopyArgs(
-                                   BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB, chip_id=self.ROOT),
+                                   self._xsrc(i * self.XB, chip_id=self.ROOT),
                                    xb, self.XB), deps)
             out[g] = nd
         return out
@@ -527,7 +558,8 @@ class PBuild(cm.ChipletBuild):
 
     def _post_quant(self, g, i, b, rs):
         """Post block b of A16a quantised into A8 (buffer i mod 2). dn_split cols: one quantise per row tile into
-        this cluster's run of the chip's A8, each run then copied into the other cluster's A8 (self.ex_push)."""
+        this cluster's run of the chip's A8, each run then copied into the other cluster's A8 (self.ex_push[(g, i)]);
+        a later pass's first copy also follows self.push_war[g]."""
         k, c, n = self.chip(g), self.c(g), self.cols[g][1]
         mb, m0 = self.MT // self.post_blocks, b * (self.MT // self.post_blocks)
         war = self.a8_reader[g][i % 2]
@@ -545,10 +577,12 @@ class PBuild(cm.ChipletBuild):
                                                                 inv_scale_f32bits=self.d.inv_a),
                               [rs] + ([war] if war is not None else []))
                 self.q_tile.setdefault(g, {})[m] = q
-                self.ex_push.setdefault(g, []).append(
-                    self.node(k, c, self.roles["dm"], f"a8_push_m{m}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+                first = (g, i) not in self.ex_push
+                self.ex_push.setdefault((g, i), []).append(
+                    self.node(k, c, self.roles["dm"], f"a8_push_m{m}_g{g}" if i == 0 else f"a8_push_i{i}m{m}_g{g}",
+                              "__snax_bingo_kernel_idma_1d_copy",
                               SnaxBingoKernelIdma1dCopyArgs(self.a8[g][0].view(off), self.a8[other][0].view(off), 16 * n),
-                              [q]))
+                              [q] + (self.push_war.get(g, []) if first else [])))
             return q
         return self.node(k, c, self.roles["simd"], f"quant_i{i}b{b}_g{g}", "__snax_bingo_kernel_simd_fp16_to_int8",
                          SnaxBingoKernelSimdFp16ToInt8Args(self.a16a[g].view(m0 * 16 * n * 2), self.a8[g][i % 2].view(m0 * 16 * n),
@@ -700,7 +734,8 @@ class PBuild(cm.ChipletBuild):
         self.war_a16 = self.sync == "edge" and not self.p.get("no_war_a16", False)
         self.d2a, self.quant, self.swi0, self.last_swi = {}, {}, {}, {}
         self.post_made = set()                  # (g, i) whose post blocks the split last chunk made
-        self.ex_push = {}                       # dn_split cols: {g: its A8 runs copied to the other cluster}
+        self.ex_push = {}                       # dn_split cols: {(g, i): its A8 runs copied to the other cluster}
+        self.push_war = {}                      # dn_split cols: {g: what its first A8 copy of the pass follows}
         self.q_tile = {}                        # dn_split cols: {g: {row tile: its quantise}}
         self.dn_load_early = bool(self.p.get("dn_load_early", False)) and self.dn_cols
         # params relay_on_simd (single pass): dep-tag relays of xDMA tasks (the gathers) go to the SIMD cores first,
@@ -732,13 +767,23 @@ class PBuild(cm.ChipletBuild):
         go = self.setup(extra=pre)
         after_x = {g: [go[self.chip(g)]] for g in range(self.G)}
         if self.single:
-            if self.NI != 1 or self.sync != "edge" or self.bcast_impl != "bcast_l1" or self.reduce_impl != "chain":
-                raise ValueError("params mapping=single_pass needs rows = tokens, sync edge, bcast bcast_l1, reduce chain")
+            if self.sync != "edge" or self.bcast_impl != "bcast_l1" or self.reduce_impl != "chain":
+                raise ValueError("params mapping=single_pass needs sync edge, bcast bcast_l1, reduce chain")
+            if self.NI != 1 and not self.dn_cols:
+                raise ValueError("params mapping=single_pass with rows < tokens (passes) needs dn_split cols")
             (self._build_single_cols if self.dn_cols else self._build_single)(go, after_x)
         elif self.sync == "edge":
             self._build_pipelined(go, after_x)
         else:
             self._build_bsp(go, after_x)
+        if self.NI > 1:
+            # an iteration after the first copies every weight chunk from the ring slot it landed in, so no slot may be
+            # pushed twice: each ring holds all of its cluster's chunks
+            for k in self.chips:
+                for r, e in enumerate(self.rings[k].entries[:self.NC]):
+                    if len(e) > self.n_slots:
+                        raise ValueError(f"params weight_ring slots={self.n_slots}: chip {k:02x} ring {r} takes {len(e)} "
+                                         f"chunks, and the iterations after the first read each from its slot")
 
     def _build_pipelined(self, go, after_x):
         R = self.ROOT
@@ -1019,36 +1064,43 @@ class PBuild(cm.ChipletBuild):
         at a time into slot (slice mod 2) of its symmetric buffer, so the slot holds the chip's sum and the root's
         cluster c gathers slot s of every chip's cluster c straight into its fold buffer and stores it. The gathers
         run one at a time, alternating between the two clusters' xDMAs; the first waits for every A8 copy, so no copy
-        into a cluster runs while a gather passes through it."""
+        into a cluster runs while a gather passes through it.
+
+        With rows < tokens the passes (rows each) run one after the other, each this single pass over its rows. Pass
+        0 loads the weights from the ring; a later pass copies every chunk from the L3 slot it landed in (the ring
+        holds them all). X_(i+1) is multicast right behind pass i's gate|up loads in the root DM core's program, and
+        pass i's first gather follows that put, so no multicast meets a gather. X_(i+1) comes into L1 after the last
+        gate|up GEMM that reads the buffer. A pass's first A8 copy follows the previous pass's last gather (no copy
+        into a cluster while a gather passes through it) and the receiving cluster's last down GEMM (its A8); its
+        first down GEMMs follow the previous pass's gathers of their slots; the stores keep their lag across passes."""
         R, dm, xdma, gemm = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["gemm"]
         if self.x_blocks > 1:
             self._xputs = []
             for b in range(self.x_blocks):
                 self._xputs.append(self.stage_x_put_block(b, [go[R]] + self._xputs[-1:]))
+            puts = list(self._xputs)
             x = {g: self.x_wait_block(g, 0, self._xputs[0], after_x[g]) for g in range(self.G)}
         else:
-            put = self.stage_x_put(0, [go[R]])
-            x = self.stage_x(0, put, after_x)
-        sw, _ = self.stage_gu(0, x)
-        post = self.stage_post(0, sw)
+            puts = [self.stage_x_put(0, [go[R]])]
+            x = self.stage_x(0, puts[0], after_x)
         SL, others, h = self.SLICE, self.order[1:], self.NDN // self.NC
         p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
-        ex_last = {g: self.ex_push[g][-1] for g in range(self.G)}
         sym_reader, p1_reader, stores, pending = {}, {}, [], []
         lag = int(self.p.get("store_lag", 0))
         # params split_first_dn (dn_split cols): each cluster's first down slice as one GEMM per post block, each behind
         # its block's quantise and A8 copy only, so the end of the post-processing runs under down GEMMs
         split0 = bool(self.p.get("split_first_dn", False))
 
-        def load(jl):
+        def load(i, jl):
             if jl == 0 and self.dn_first_load:
                 return dict(self.dn_first_load)
-            return {g: self._load(g, 0, len(self.chunks[g]) + jl) for g in range(self.G)}
+            return {g: self._load(g, i, len(self.chunks[g]) + jl) for g in range(self.G)}
 
-        def store(c, j, red, s):
+        def store(c, i, j, red, s):
             o0, w = self.dn_sl[c][j - c * h]
-            st = self.node(R, c, dm, f"y_store_j{j}", "__snax_bingo_kernel_idma_1d_copy",
-                           SnaxBingoKernelIdma1dCopyArgs(self.p1c[c].view(s * SL), BingoMemSymbol(f"{self.TAG}_y", offset=o0 * self.ROWS * 2),
+            st = self.node(R, c, dm, f"y_store_j{j}" if i == 0 else f"y_store_i{i}j{j}", "__snax_bingo_kernel_idma_1d_copy",
+                           SnaxBingoKernelIdma1dCopyArgs(self.p1c[c].view(s * SL),
+                                                         self._ysym(i * self.YB + o0 * self.ROWS * 2),
                                                          self.ROWS * w * 2),
                            [red])
             stores.append(st)
@@ -1059,62 +1111,84 @@ class PBuild(cm.ChipletBuild):
         pairs = bool(self.p.get("gather_pairs", False))
         # params first_gather_waits_copies (default true): the first gather also waits for every A8 copy. False: only
         # the copies into cluster c precede cluster c's gathers, through cluster c's own down GEMMs
-        copies = list(ex_last.values()) if bool(self.p.get("first_gather_waits_copies", True)) else []
-        lds = load(0)
-        last_red, prev_pair = None, []
-        for jl in range(h):
-            s = jl % 2
-            dn = {}
+        wait_copies = bool(self.p.get("first_gather_waits_copies", True))
+        nxb = len(self.xbuf[0])
+        last_red, prev_pair, last_gu, last_dn = None, [], {}, {}
+        for i in range(self.NI):
+            if i:
+                # X_i into the buffer once the last gate|up GEMM that read it (pass i - buffers) is done
+                x = self.stage_x(i, puts[-1], {g: list(after_x[g]) + ([last_gu[i - nxb][g]] if i >= nxb else [])
+                                               for g in range(self.G)})
+                self.push_war = {g: [last_dn[self.gs(self.chip(g))[1 - self.c(g)]], last_red] for g in range(self.G)}
+            sw, last_gu[i] = self.stage_gu(i, x)
+            next_put = None
+            if i + 1 < self.NI:
+                next_put = self.stage_x_put(i + 1, [go[R]] + puts[-1:])
+                puts.append(next_put)
+            post = self.stage_post(i, sw)
+            ex_last = {g: self.ex_push[(g, i)][-1] for g in range(self.G)}
+            copies = list(ex_last.values()) if wait_copies else []
+            lds = load(i, 0)
+            for jl in range(h):
+                s = jl % 2
+                dn = {}
+                for g in range(self.G):
+                    k, c = self.chip(g), self.c(g)
+                    ld, si, slab = lds[g]
+                    other, kn = self.gs(k)[1 - c], self.kcols[k][1]
+                    nt = self.dn_sl[c][jl][1] // BLK        # this slice's column tiles
+                    kargs = dict(input_B_addr=slab, input_C_addr=0, K=kn // 4, N=nt, array_shape_idx=0,
+                                 transpose_A=0, transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=self.int4_b,
+                                 d_shift=self.d.k_dn)
+                    if split0 and jl == 0:          # one GEMM per post block, behind that block's A8 rows only
+                        mb = self.MT // self.post_blocks
+                        for b in range(self.post_blocks):
+                            m1 = (b + 1) * mb - 1   # the block's last row tile: its quantise and copy come last
+                            dn[g] = self.node(k, c, gemm, f"dn_c{c * h}_i{i}b{b}_g{g}", "__snax_bingo_kernel_gemm_full",
+                                              SnaxBingoKernelGemmFullArgs(
+                                                  input_A_addr=self.a8[g][0].view(b * mb * 16 * kn),
+                                                  output_D_addr=self.sym[(k, c)].view(s * SL + b * mb * nt * TILE),
+                                                  M=mb, **kargs),
+                                              [ld, self.q_tile[g][m1], self.ex_push[(other, i)][m1]]
+                                              + sym_reader.get((k, c, s), []))
+                    else:
+                        dn[g] = self.node(k, c, gemm, f"dn_c{c * h + jl}_i{i}_g{g}", "__snax_bingo_kernel_gemm_full",
+                                          SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[g][0],
+                                                                      output_D_addr=self.sym[(k, c)].view(s * SL),
+                                                                      M=self.MT, **kargs),
+                                          [ld, post[g], ex_last[other]] + sym_reader.get((k, c, s), []))
+                    self.ls[g].release(si, dn[g])
+                if jl + 1 < h:
+                    lds = load(i, jl + 1)
+                while len(pending) > lag * self.NC:
+                    store(*pending.pop(0))
+                for c in range(self.NC):
+                    j = c * h + jl
+                    # params chain_alt: cluster 1's gathers run the ring the other way, so each gather's data follows the
+                    # previous gather's finish back along the links instead of meeting it
+                    ordr = others[::-1] if self.chain_alt and c == 1 else others
+                    ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                        cm.remote, R, c, ordr, src=self.sx(c, s * SL), dst=f"({p1x[c]} + {s * SL})",
+                        size=self.ROWS * self.dn_sl[c][jl][1] * 2,
+                        junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.p1c[c]])
+                    if pairs:
+                        first = list(copies) + list(prev_pair) if jl == 0 else list(prev_pair)
+                    else:
+                        first = ([last_red] if last_red is not None else []) + (list(copies) if jl == 0 else [])
+                    if next_put is not None and jl == 0 and c == 0:
+                        first.append(next_put)
+                    red = self.node(R, c, xdma, f"y_chain_j{j}" if i == 0 else f"y_chain_i{i}j{j}",
+                                    "__snax_bingo_kernel_xdma_chain_gather", ga,
+                                    [dn[g] for g in range(self.G) if self.c(g) == c] + p1_reader.get((c, s), []) + first)
+                    last_red = red
+                    pair_now = (pair_now if c else []) + [red]
+                    for k in self.chips:
+                        sym_reader[(k, c, s)] = [red]
+                    pending.append((c, i, j, red, s))
+                prev_pair = pair_now
+            last_dn = dict(dn)
             for g in range(self.G):
-                k, c = self.chip(g), self.c(g)
-                ld, si, slab = lds[g]
-                other, kn = self.gs(k)[1 - c], self.kcols[k][1]
-                nt = self.dn_sl[c][jl][1] // BLK        # this slice's column tiles
-                kargs = dict(input_B_addr=slab, input_C_addr=0, K=kn // 4, N=nt, array_shape_idx=0,
-                             transpose_A=0, transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=self.int4_b,
-                             d_shift=self.d.k_dn)
-                if split0 and jl == 0:          # one GEMM per post block, behind that block's A8 rows only
-                    mb = self.MT // self.post_blocks
-                    for b in range(self.post_blocks):
-                        m1 = (b + 1) * mb - 1   # the block's last row tile: its quantise and copy come last
-                        dn[g] = self.node(k, c, gemm, f"dn_c{c * h}_i0b{b}_g{g}", "__snax_bingo_kernel_gemm_full",
-                                          SnaxBingoKernelGemmFullArgs(
-                                              input_A_addr=self.a8[g][0].view(b * mb * 16 * kn),
-                                              output_D_addr=self.sym[(k, c)].view(s * SL + b * mb * nt * TILE),
-                                              M=mb, **kargs),
-                                          [ld, self.q_tile[g][m1], self.ex_push[other][m1]])
-                else:
-                    dn[g] = self.node(k, c, gemm, f"dn_c{c * h + jl}_i0_g{g}", "__snax_bingo_kernel_gemm_full",
-                                      SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[g][0],
-                                                                  output_D_addr=self.sym[(k, c)].view(s * SL),
-                                                                  M=self.MT, **kargs),
-                                      [ld, post[g], ex_last[other]] + sym_reader.get((k, c, s), []))
-                self.ls[g].release(si, dn[g])
-            if jl + 1 < h:
-                lds = load(jl + 1)
-            while len(pending) > lag * self.NC:
-                store(*pending.pop(0))
-            for c in range(self.NC):
-                j = c * h + jl
-                # params chain_alt: cluster 1's gathers run the ring the other way, so each gather's data follows the
-                # previous gather's finish back along the links instead of meeting it
-                ordr = others[::-1] if self.chain_alt and c == 1 else others
-                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                    cm.remote, R, c, ordr, src=self.sx(c, s * SL), dst=f"({p1x[c]} + {s * SL})",
-                    size=self.ROWS * self.dn_sl[c][jl][1] * 2,
-                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.p1c[c]])
-                if pairs:
-                    first = list(copies) if jl == 0 else list(prev_pair)
-                else:
-                    first = list(copies) if last_red is None else [last_red]
-                red = self.node(R, c, xdma, f"y_chain_j{j}", "__snax_bingo_kernel_xdma_chain_gather", ga,
-                                [dn[g] for g in range(self.G) if self.c(g) == c] + p1_reader.get((c, s), []) + first)
-                last_red = red
-                pair_now = (pair_now if c else []) + [red]
-                for k in self.chips:
-                    sym_reader[(k, c, s)] = [red]
-                pending.append((c, j, red, s))
-            prev_pair = pair_now
+                self.a8_reader[g] = [dn[g], dn[g]]
         while pending:
             store(*pending.pop(0))
         self.end_window(stores[-self.NC:])          # the last store of each of the root's clusters
@@ -1152,7 +1226,7 @@ class PBuild(cm.ChipletBuild):
             img = np.concatenate([lay.to_d(rows[:, c0:c0 + w], self.d.mesh)
                                   for c0, w in self.y_slices()]).astype(np.float16).view(np.uint8)
             for name, off in ((f"y_i{i}_a", 0), (f"y_i{i}_b", self.YB - n)):
-                checks.append((name, BingoMemSymbol(f"{T}_y", offset=i * self.YB + off, chip_id=R),
+                checks.append((name, self._ysym(i * self.YB + off, chip_id=R),
                                img[off:off + n], n))
         g = self.gs(R)[0]
         c0, ncol = self.kcols[R] if self.dn_cols else self.cols[g]   # dn_split cols: the chip's A8, both clusters
@@ -1253,7 +1327,7 @@ class PBuild(cm.ChipletBuild):
                 bad.append(f"{what}: {a.node_name} is not before {b.node_name}")
 
         nxb = len(self.xbuf[0])
-        for g in range(self.G):
+        for g in range(self.G if not self.single else 0):     # the iterations mapping's buffers
             nG = len(self.chunks[g])
             for i in range(self.NI):
                 get = lambda base: by.get(base)
@@ -1275,24 +1349,59 @@ class PBuild(cm.ChipletBuild):
                     rd = byk.get((f"part_push_i{i}", k, 1)) if self.c(g) == 1 else byk.get((f"loc_add_i{i}", k, 0))
                     ordered(rd, get(f"dn_c0_i{i + 1}_g{g}"), f"partial g{g} i{i}->i{i + 1}")
         if self.single and self.dn_cols:
-            # cluster c's slot s: its gather of a slice before the down GEMM two slices later; the root's fold slot:
-            # the store of a slice before the gather two slices later; every A8 copy before the first gather
-            R, h = self.ROOT, self.NDN // self.NC
+            # cluster c's slot s: its gather of a slice before the next down GEMM into that slot (two slices later, or
+            # in the next pass); the root's fold slot: the store of a slice before the next gather into it; every A8
+            # copy into a cluster before that cluster's first gather of the pass. Between passes: the A8, A16, A16a and X
+            # buffers' last readers of a pass before their first writers of the next
+            R, h, pb = self.ROOT, self.NDN // self.NC, self.post_blocks
+            chain = lambda i, j, c: byk.get((f"y_chain_j{j}" if i == 0 else f"y_chain_i{i}j{j}", R, c))
+            store = lambda i, j, c: byk.get((f"y_store_j{j}" if i == 0 else f"y_store_i{i}j{j}", R, c))
+            push = lambda i, m, g: by.get(f"a8_push_m{m}_g{g}" if i == 0 else f"a8_push_i{i}m{m}_g{g}")
+
+            def dn_first(i, c, jl, g):     # the first down GEMM of a slice (a split first slice: its block 0)
+                return by.get(f"dn_c{c * h + jl}_i{i}_g{g}") or by.get(f"dn_c{c * h}_i{i}b0_g{g}")
             for c in range(self.NC):
-                for jl in range(h - 2):
-                    j = c * h + jl
+                uses = [(i, jl) for i in range(self.NI) for jl in range(h)]
+                for n_, (i, jl) in enumerate(uses):
+                    nxt = next(((i2, jl2) for i2, jl2 in uses[n_ + 1:] if jl2 % 2 == jl % 2), None)
+                    if nxt is None:
+                        continue
+                    j, j2 = c * h + jl, c * h + nxt[1]
                     for g in range(self.G):
                         if self.c(g) == c:
-                            ordered(byk.get((f"y_chain_j{j}", R, c)), by.get(f"dn_c{j + 2}_i0_g{g}"),
-                                    f"output slot g{g} j{j}->j{j + 2}")
-                    ordered(byk.get((f"y_store_j{j}", R, c)), byk.get((f"y_chain_j{j + 2}", R, c)),
-                            f"root fold slot c{c} j{j}->j{j + 2}")
-            for g in range(self.G):          # every copy into cluster c before cluster c's first gather
-                c = self.c(g)
-                first = byk.get((f"y_chain_j{c * h}", R, c))
-                other = self.gs(self.chip(g))[1 - c]
-                for m in range(self.MT):
-                    ordered(by.get(f"a8_push_m{m}_g{other}"), first, f"A8 copy m{m} into g{g} before its first gather")
+                            ordered(chain(i, j, c), dn_first(nxt[0], c, nxt[1], g), f"output slot g{g} i{i}j{j}->i{nxt[0]}j{j2}")
+                    ordered(store(i, j, c), chain(nxt[0], j2, c), f"root fold slot c{c} i{i}j{j}->i{nxt[0]}j{j2}")
+            for i in range(self.NI):
+                for g in range(self.G):          # every copy into cluster c before cluster c's first gather of the pass
+                    c = self.c(g)
+                    first = chain(i, c * h, c)
+                    other = self.gs(self.chip(g))[1 - c]
+                    for m in range(self.MT):
+                        ordered(push(i, m, other), first, f"A8 copy i{i}m{m} into g{g} before its first gather")
+                    if i == 0:
+                        continue
+                    nG = len(self.chunks[g])
+                    last_dn = by.get(f"dn_c{c * h + h - 1}_i{i - 1}_g{g}")
+                    ordered(last_dn, by.get(f"quant_i{i}b0m0_g{g}"), f"A8 g{g} i{i - 1}->i{i} (quantise)")
+                    ordered(last_dn, push(i, 0, other), f"A8 g{g} i{i - 1}->i{i} (copy from g{other})")
+                    ordered(chain(i - 1, self.NDN - 1, self.NC - 1), push(i, 0, g),
+                            f"g{g}'s first A8 copy of pass {i} after the last gather of pass {i - 1}")
+                    ordered(by.get(f"d2a_i{i - 1}b{pb - 1}_g{g}"), by.get(f"swi_c0m0_i{i}_g{g}"), f"a16d g{g} i{i - 1}->i{i}")
+                    ordered(by.get(f"quant_i{i - 1}b{pb - 1}m{self.MT - 1}_g{g}"), by.get(f"d2a_i{i}b0_g{g}"),
+                            f"a16a g{g} i{i - 1}->i{i}")
+                    if i >= nxb:
+                        lg = by.get(f"gu_c{nG - 1}_i{i - nxb}b{pb - 1}_g{g}") or by.get(f"gu_c{nG - 1}_i{i - nxb}_g{g}")
+                        ordered(lg, by.get(f"x_wait_i{i}_g{g}"), f"x g{g} i{i - nxb}->i{i}")
+            if self.l3_overlay:
+                # Y_raw_i over X_i's L3 buffers: the root's put and its clusters' fetches of X_i before every store of pass i
+                for i in range(self.NI):
+                    blk = [f"i0b{b}" for b in range(self.x_blocks)] if i == 0 and self.x_blocks > 1 else [f"i{i}"]
+                    readers = [byk.get((f"x_bput_{t}", R, 0)) for t in blk]
+                    readers += [by.get(f"x_wait_{t}_g{g}") for g in self.gs(R) for t in blk]
+                    for c in range(self.NC):
+                        for jl in range(h):
+                            for r in readers:
+                                ordered(r, store(i, c * h + jl, c), f"X_{i} read before the store over it, y i{i}j{c * h + jl}")
         elif self.single:
             # slot j mod 2: every reader of slice j before the first writer of slice j + 2
             R = self.ROOT
