@@ -15,9 +15,9 @@
 # so the app root, the repo root and everything else are found from it, never by counting ../
 # levels (which is right for one depth only).
 #
-# Build and run on hemaia_twochiplet_16MBL3_4cluster.hjson, the only cfg whose memory chiplet
-# has an HBM:
+# two_chiplet is built and run on hemaia_twochiplet_16MBL3_4cluster.hjson:
 #     python3 target/sim/automation/sweep/llm_layer/dsv2/run_dsv2_sweep.py
+# six_chiplet and sixteen_chiplet run on the cfg their Makefile names.
 
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
@@ -56,6 +56,7 @@ BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h \
                  $(wildcard $(DSV2_DIR)/util/*.py) \
                  $(wildcard $(DSV2_ROOT)/common/*.py) \
+                 $(wildcard $(DSV2_ROOT)/common/mc_stages/*.py) \
                  $(wildcard $(dir $(MK_DIR:/=))*/main_bingo.py)
 
 # ONE run makes all three: a grouped target (&:, GNU make >= 4.3). As three plain targets of one

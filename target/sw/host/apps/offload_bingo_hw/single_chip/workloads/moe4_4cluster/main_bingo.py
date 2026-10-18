@@ -223,9 +223,9 @@ mechanism test.
 #          18  act[2]      0x00          not selected
 #          19  act[3]      0x01          selected
 #
-# Those two words are the run's own, read back off the UART. They sum to exactly 1.0f, and
-# they match a float32 recomputation of the renormalisation to within one ULP on w[1] and
-# bit-exactly on w[3] -- which is the check `moe_w` performs.
+# Those two words sum to exactly 1.0f, and match a float32 recomputation of the
+# renormalisation to within one ULP on w[1] and bit-exactly on w[3] -- which is the check
+# `moe_w` performs.
 #
 # The gate also writes one thing that is NOT memory: the CERF register in the quadrant
 # controller. It owns bits 0..3 (cerf_controlled_mask = 0x0000000f) because this fork has four
@@ -297,6 +297,7 @@ mechanism test.
 # WHAT THIS WORKLOAD BUILDS
 #
 #   router                        host softmax over the expert logits
+#   ZeroYbuf                      clears the landing area before any push    (dm, cluster 0)
 #   __gating_router               inserted by the compiler from the fork's select=
 #   for each expert e, on cluster e, all inside branch e:
 #     ld_x, ld_wup, ld_wgate, ld_wdown    operands in                        (dm)
@@ -306,8 +307,8 @@ mechanism test.
 #     quant                               fp16 -> int8                       (simd)
 #     gemm_down                           int8 x int8 -> fp16 = y_e          (gemm)
 #     push                                y_e -> cluster 0's landing slot    (dm)
-#     Store_y / Check_y                   per-expert result check            (host)
 #   combine                       SUM w_e * y_e over the winners             (simd, cluster 0)
+#   StoreYbuf / CheckYbuf         the whole landing area, one ungated check  (host)
 #   Store_w / Check_w             the renormalised weights                   (host)
 #   Store_out / Check_out         the layer output                           (host)
 #
@@ -415,10 +416,8 @@ def get_args():
 def load_hw_params(cfg_path, hwcfg_path):
     """Merge the workload's shapes with the array the RTL was actually elaborated with.
 
-    The mesh is READ from the cluster cfg rather than assumed. The Makefile used to pass
-    snax_versacore_to_cluster.hjson while the RTL is four snax_split_clusters, and
-    array_shape 1 picked (1,16,32) out of it -- a cluster with no SIMD core and a mesh
-    this workload never runs on. Every descriptor was built for that shape, silently.
+    The mesh is READ from the cluster cfg rather than assumed, and the workload refuses any
+    shape other than (16, 4, 16): every descriptor is built for the array, silently.
     """
     with open(cfg_path) as f:
         param = hjson.loads(f.read())
@@ -500,8 +499,7 @@ def reshape_6d(hw, src, dst):
     # block on the source and a whole (k, r, s) block on the destination. Leaving it out
     # transfers only the FIRST m tile: at M_T=2 exactly half of `act_a` is never written,
     # stays uninitialised TCDM (= X), and the X reaches the host through quant -> down
-    # GEMM -> push. It cost a full build+sim cycle to find, because at M_T=1 the bounds
-    # are identical either way and everything passes.
+    # GEMM -> push. At M_T=1 the bounds are identical either way, so everything passes.
     src_m = hw["N_up"] * mr * mc * eb
     dst_m = hw["K_down"] * mr * ts * eb
 
@@ -723,9 +721,8 @@ def main():
     #
     # The host core dispatches IN ORDER, so a check placed behind `router` sits between the
     # router and the gating node and delays every expert lane by its whole duration.
-    # Measured at T=32/d=256/h=128: 95,016 ns of the 371,640 ns layer -- 25.6% of the
-    # window spent printing a four-element comparison to the UART while four clusters
-    # waited for a predicate that was already computable. `probs` is written once by the
+    # A check there would print a four-element comparison to the UART while four clusters
+    # wait for a predicate that is already computable. `probs` is written once by the
     # router and read by nothing else, so checking it later is exactly as strong.
     g.node("CheckSoftmax", HOST_CORE, "__host_bingo_kernel_check_result",
            HostBingoKernelCheckResultArgs(

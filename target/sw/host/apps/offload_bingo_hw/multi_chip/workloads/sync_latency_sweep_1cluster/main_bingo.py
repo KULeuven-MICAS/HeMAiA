@@ -24,8 +24,8 @@
 #
 # Phases, in order:
 #   0            untimed WARM-UP: one-to-all over the largest rectangle. Not optional --
-#                a chiplet's first touch costs ~1000 cc more than later ones, which broke
-#                arm C's P=2 identity check until this was added.
+#                a chiplet's first touch is slower than later ones, which would break
+#                arm C's P=2 identity check.
 #   1..2n        per rectangle: one-to-one (0x00 -> furthest -> back) then one-to-all
 #                (0x00 -> every other participant -> back)
 #   last         local control: the same chain entirely on chip 0x00, i.e. the manager's

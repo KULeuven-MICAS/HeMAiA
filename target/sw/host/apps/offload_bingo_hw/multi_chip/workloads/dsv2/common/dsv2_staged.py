@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""The shared driver of the staged DeepSeek-V2-Lite workloads (workloads/dsv2/<platform>/stage*/).
+"""The shared driver of the staged DeepSeek-V2-Lite workloads (workloads/dsv2/two_chiplet/*/; the
+multi-chiplet ones use dsv2_mc.py).
 
 A STAGE is one workload directory whose main_bingo.py holds that stage's code and nothing
 else, as two functions:
@@ -14,9 +15,9 @@ else, as two functions:
 
 Each stage builds on the one before it: its `build` first calls the previous stage's
 (`load_stage`), and so does its `checks`. So the stage-N workload builds stages 1..N, in
-the order one monolithic builder would -- every stage's compute, then every stage's checks
--- and the graph (node order, and with it every core's in-order task stream) is the one the
-measured runs used.
+this order -- every stage's compute, then every stage's checks -- and the graph (node order,
+and with it every core's in-order task stream) is the same whichever stage directory builds
+it.
 
 What the stages share lives here: the arguments and params, the golden and its staging, the
 weight streams and rings, the helpers a stage builds with (`S.gemv`, `S.deq`, `S.view`,
@@ -217,7 +218,7 @@ class Build:
             dfg.prune_fanout = bool(p["prune_fanout"])
         # params compact_tables: each cluster's L1 holds only its own tasks' arg and kernel
         # pointers and an int16 id table (bingo_hw_scheduler_init_compact) instead of the three
-        # SoC-wide tables -- 64.8 -> ~25 KiB a cluster at the 4-token layer's 9,091 tasks
+        # SoC-wide tables
         dfg.compact_task_tables = bool(p.get("compact_tables", False))
         ctx = self.ctx = Ctx(dfg=dfg, mesh=MESH, roles=core_roles(plat), hw=hw, chiplet=CHIP)
         self.pipe = Pipeline(ctx, verbose=True, gate_sources=True)
@@ -410,8 +411,8 @@ def run(stage):
 
     with open(args.cfg) as f:
         p = dict(hjson.load(f))
-    # the stage is the directory's, not a param; a params file written for the monolithic
-    # builder may still name it, and then it must agree
+    # the stage is the directory's, not a param; a params `stop` key, if present, must agree
+    # with it
     if int(p.get("stop", stage.STAGE)) != stage.STAGE:
         raise ValueError(f"{args.cfg}: stop={p['stop']}, but this is stage {stage.STAGE}")
     plat = parse_platform_cfg(args.platformcfg)

@@ -17,8 +17,8 @@ Each cluster computes one K chunk:
 
 Partial D_i buffers are reduced on cluster 0 of chiplet 0. Remote partials are
 staged into chiplet-local L3 symbols, then copied directly into chiplet 0
-cluster 0 TCDM receive slots. The graph only checks the final INT32 reduction
-result and the final dequantized FP32 output.
+cluster 0 TCDM receive slots. The graph checks only the final INT32 reduction
+result.
 
 Remote partials are staged from L1/TCDM back to chiplet-local L3 because the L1
 buffers are dynamic BingoMemAlloc objects. Their generated C pointer variables
@@ -401,7 +401,7 @@ def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx):
         raise ValueError("SNAX XDMA pull must terminate in chip00 cluster0 TCDM")
 
     # SNAX XDMA only works when either src or dst is attached to the issuing
-    # XDMA core. These pulls run on chip00 C0's DMA core, so the destination
+    # XDMA core. These pulls run on chip00 C0's xDMA core, so the destination
     # must stay in chip00 C0 TCDM.
     return add_node(
         dfg,

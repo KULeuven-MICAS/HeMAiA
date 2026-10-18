@@ -33,7 +33,7 @@ beside it, and its weights never cross another compute chiplet's link:
 ## The mapping, and how it differs from six_chiplet
 
 Tensor parallel, as on six chiplets: every weight is split by output columns over the clusters, in whole
-32-column pairs, and every link streams its compute chiplet's share. Three things differ, all forced by
+32-column pairs, and every link streams its compute chiplet's share. Five things differ, all forced by
 the platform:
 
 - **The per-head work runs on eight of the twelve chiplets.** This covers W_Q, the RoPE, W_UK and W_UV.
@@ -57,11 +57,11 @@ the platform:
 
 ## What the platform needs from the D2D link
 
-Stage 8 needs a fix in `hw/hemaia/hemaia_d2d_link` (`network_framing/hemaia_d2d_link_framer.sv`;
-uncommitted at the time of writing). Received read requests wait in a queue of their own, not at the head of the
-framer's receive stream.
+Stage 8 needs the received-read-request queue of `hw/hemaia/hemaia_d2d_link`
+(`src/network_framing/hemaia_d2d_link_framer.sv`): received read requests wait in a queue of their own, not at
+the head of the framer's receive stream.
 
-Without the fix, two chips that read each other's L3 at once can deadlock:
+Without the queue, two chips that read each other's L3 at once can deadlock:
 - each holds a read request at its receive head;
 - that request waits for its own interconnect, which takes no new read while its responses cannot
   leave;
@@ -69,7 +69,7 @@ Without the fix, two chips that read each other's L3 at once can deadlock:
 
 Here this happened between two row leaders of the all-gather tree. The six-chiplet platform never
 filled the interconnect's read limit, so it never hit it. `make sim-framer-mutual-reads-tb` in that
-repository reproduces it: the old framer times out, the fixed one passes.
+repository reproduces it: the testbench times out without the read-request queue and passes with it.
 
 ## Stages
 
@@ -90,9 +90,15 @@ same in every directory, except stages 3 and 4, which build W_DKV where they can
 
 ## Running a stage
 
-The same as `../six_chiplet`: build the RTL for the cfg above once, then run a stage's workload, e.g.
-`WORKLOAD=dsv2/sixteen_chiplet/stage1_rmsnorm` with `HOST_APP_TYPE=offload_bingo_hw`,
-`CHIP_TYPE=multi_chip` and `DEV_APP=snax-bingo-offload`.
+Build the RTL for the cfg above once, then run a stage's workload (inside the container), e.g.
+
+```bash
+make apps CFG_OVERRIDE=target/rtl/cfg/hemaia_sixteenchiplet_16MBL3_2cluster.hjson \
+     HOST_APP_TYPE=offload_bingo_hw CHIP_TYPE=multi_chip DEV_APP=snax-bingo-offload \
+     WORKLOAD=dsv2/sixteen_chiplet/stage1_rmsnorm
+```
+
+`six_chiplet/` stages build the same way, with `hemaia_sixchiplet_16MBL3_2cluster_l3b64.hjson`.
 
 ## Status
 

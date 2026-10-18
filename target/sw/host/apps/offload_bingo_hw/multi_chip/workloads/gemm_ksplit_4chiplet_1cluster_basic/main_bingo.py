@@ -28,12 +28,9 @@
 #
 # Reduction on chip00 host:
 #   Check_D_partial_k0 + Copy_D_partial_k1_to_Chip00_L3 -> Add_k0_to_k1
-#   Add_k0_to_k1 -> Load_Golden_sum_k0_to_k1 -> Check_sum_k0_to_k1
-#   Check_sum_k0_to_k1 + Copy_D_partial_k2_to_Chip00_L3 -> Add_k0_to_k2
-#   Add_k0_to_k2 -> Load_Golden_sum_k0_to_k2 -> Check_sum_k0_to_k2
-#   Check_sum_k0_to_k2 + Copy_D_partial_k3_to_Chip00_L3 -> Add_k0_to_k3
-#   Add_k0_to_k3 -> Load_Golden_sum_k0_to_k3 -> Check_sum_k0_to_k3
-#   Check_sum_k0_to_k3 -> Dequant_Chip00 -> Load_Golden_fp32_D -> Check_fp32_D
+#   Add_k0_to_k1 + Copy_D_partial_k2_to_Chip00_L3 -> Add_k0_to_k2
+#   Add_k0_to_k2 + Copy_D_partial_k3_to_Chip00_L3 -> Add_k0_to_k3
+#   Add_k0_to_k3 -> Dequant_Chip00 -> Load_Golden_fp32_D -> Check_fp32_D
 # END WORKLOAD DESCRIPTION AND TASK GRAPH
 
 """
@@ -45,8 +42,8 @@ Each chiplet i computes one K chunk:
 
 After local checks, remote partial D_i buffers are copied directly into a
 shared chiplet 0 L3 receive slot.
-Chiplet 0 performs the running int32 reductions, checks each running sum,
-then dequantizes and checks the FP32 output.
+Chiplet 0 performs the running int32 reductions, then dequantizes and checks the
+FP32 output.
 """
 
 import argparse
@@ -193,10 +190,8 @@ def main():
     l1_B = {}
     l1_D = {}
     # Only the first CHECK_BYTES of each result are verified (like
-    # gemm_double_buffer's "first 64 B" check). Staging a full D_bytes golden for
-    # every check needed a 4 KiB L3 scratch per chiplet, which -- with the 88 KiB
-    # device binary -- overflowed chip 0x00's 128 KiB L3 heap. The real-data
-    # buffers (D_partial) stay full size; only the check scratch shrinks.
+    # gemm_double_buffer's "first 64 B" check), to keep the L3 check scratch small. The
+    # real-data buffers (D_partial) stay full size; only the check scratch is small.
     CHECK_BYTES = 64
     l3_D_local = {}
     l3_check_scratch = {}
@@ -357,12 +352,11 @@ def main():
             reduce_ready[i] = node_copy_D_to_chip0[i]
 
     # sequence the reduction on the reduction chiplet
-    # The K-partials are reduced in-place into prev_sum. The intermediate
-    # per-step sum checks (Load_Golden_sum + Check_sum) are dropped: each adds two
-    # host nodes on chip 0x00, and 15+ host nodes overflow the 128 KiB L3 heap once
-    # the 88 KiB device binary is included. Correctness is still validated by the
-    # final Check_fp32_D on the fully reduced + dequantized result below (and each
-    # partial D_i is still checked on its own chiplet).
+    # The K-partials are reduced in-place into prev_sum. There are no intermediate
+    # per-step sum checks (Load_Golden_sum + Check_sum): each would add two host nodes
+    # on chip 0x00, and the host-node count is bounded by the L3 heap. Correctness is
+    # validated by the final Check_fp32_D on the fully reduced + dequantized result
+    # below (and each partial D_i is checked on its own chiplet).
     prev_sum = l3_D_reduce[0]
     prev_ready = reduce_ready[0]
     final_check = None

@@ -32,15 +32,15 @@ Elementwise junction's FP16 MAX; root, the root pulls every chip's beat into one
 the max over it. The broadcasts (the query, m*) follow bcast, the synchronisation sync.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
@@ -48,10 +48,10 @@ sys.path.insert(0, HERE)
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
     simd_fp16_lanes, SnaxBingoKernelGemmFaPvArgs, SnaxBingoKernelGemmFaQkArgs, SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelIdmaRingLoadArgs, SnaxBingoKernelSimdFaSoftmaxArgs,
+    SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelSimdMlaNormaliseArgs, SnaxBingoKernelXdmaChainGatherArgs,
-    SnaxBingoKernelXdmaCrestExpandArgs, SnaxBingoKernelXdmaTranspose2dArgs)
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
+    SnaxBingoKernelXdmaTranspose2dArgs,
+    XDMA_EWJCT_FMT_FP16, XDMA_EWJCT_OP_MAX, xdma_ewjct_csr0)
 from libs import at_offset  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -70,7 +70,7 @@ SB = BEAT + BC * BR * 2                   # a score tile with its prefix beat
 QB = BR * D_QK                            # Q8
 OB = D_V * BR * 2                         # O^T, FP16
 PB = OB + XFER                            # a cluster's partial: O^T, then its row sums
-EW_F16_MAX = (0 << 4) | 2                 # elementwise junction CSR(0): fmt FP16, op MAX
+EW_F16_MAX = xdma_ewjct_csr0(XDMA_EWJCT_OP_MAX, XDMA_EWJCT_FMT_FP16)
 PVK = SnaxBingoKernelGemmFaPvArgs
 LAY = FA.layout(BC, 1)
 ARENA = FA.arena_bytes(BC, 1)
@@ -158,29 +158,14 @@ class FaBuild(cm.ChipletBuild):
         """One chunk of cluster g's cache image through its ring into the next slab of its
         stream: (the task after which the slab holds it, slab index, slab)."""
         k, c = self.chip(g), self.c(g)
-        dm, xdma = self.roles["dm"], self.roles["xdma"]
         ls = self.ls[g]
-        rings = ls.rings
         si, slab, war = ls.take(nbytes)
-        sl, fl, rl, seq, crest, pushed = rings.take_ex(c, src=self.img[g].address + off,
-                                                       nbytes=nbytes)
-        prev = [rings.last[c]] if rings.last.get(c) is not None else []
-        after = list(dict.fromkeys(war + prev + list(deps)))
-        if crest & 1:
-            ld = self.node(k, c, dm, f"Ld_{name}", "__snax_bingo_kernel_idma_ring_load",
-                           SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl,
-                                                           at_offset(slab, ls.slab_bytes - pushed),
-                                                           pushed, rl, trailer=bool(crest & 2)),
-                           after)
-            ready = self.node(k, c, xdma, f"Ex_{name}", "__snax_bingo_kernel_xdma_crest_expand",
-                              SnaxBingoKernelXdmaCrestExpandArgs(slab, ls.slab_bytes), [ld])
-        else:
-            ld = self.node(k, c, dm, f"Ld_{name}", "__snax_bingo_kernel_idma_ring_load",
-                           SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl), after)
-            ready = ld
-        rings.last[c] = ld
-        ld.exec_chunk = rings.last_take
-        return ld, ready, si, slab
+        ld, ex, _ = ls.rings.load_chunk(
+            lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
+            f"Ld_{name}", src=self.img[g].address + off, nbytes=nbytes, slab=slab, war=war,
+            deps=deps, dm=self.roles["dm"], xdma=self.roles["xdma"], slab_bytes=ls.slab_bytes,
+            expand_name=f"Ex_{name}")
+        return ld, ld if ex is None else ex, si, slab
 
     def _l1(self, g, name, nbytes):
         return self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{self.TAG}_{name}", nbytes)
@@ -245,12 +230,10 @@ class FaBuild(cm.ChipletBuild):
         duties = []                     # the root DM core's tasks of the exchange
         msrc = self.sv(R, 0, self.OFF_MR + MRUN)
         if self.reduce_impl == "chain":
-            ga = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=cm.remote(R, self.sx(0, self.OFF_MLOC)),
-                chain=[cm.remote(k, self.sx(0, self.OFF_MLOC)) for k in others] +
-                      [cm.remote(R, self.sx(0, self.OFF_MR + MRUN))],
-                size=XFER, junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_MAX,
-                hops=[(k, 0) for k in others] + [(R, 0)])
+            ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                cm.remote, R, 0, others, src=self.sx(0, self.OFF_MLOC),
+                dst=self.sx(0, self.OFF_MR + MRUN), size=XFER,
+                junction=self.jct["Elementwise"], jct_csr0=EW_F16_MAX)
             made = self.node(R, 0, xdma, "mg_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                              list(dict.fromkeys(before[k] for k in self.chips)))
         else:
@@ -353,23 +336,11 @@ class FaBuild(cm.ChipletBuild):
         self.run_checks(checks)
 
 
+def _app_name(S):
+    return (f"DeepSeek-V2-Lite layer 1 MLA attention, one token over {S.keys} keys, "
+            f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
+            f"bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+
+
 def run():
-    ap = argparse.ArgumentParser(description="fa workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = FaBuild(args, p, plat, hw)
-    S.build()
-    S.finish(f"DeepSeek-V2-Lite layer 1 MLA attention, one token over {S.keys} keys, "
-             f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
-             f"bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+    run_driver("fa workload generator", FaBuild, _app_name)

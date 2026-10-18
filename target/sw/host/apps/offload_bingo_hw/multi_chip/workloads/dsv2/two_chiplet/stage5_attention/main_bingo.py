@@ -60,8 +60,7 @@ def _one_token(S):
     # params fence_s4: every cluster's later weight loads (W_UV, W_O, ...) wait for its
     # part of the attention's inputs -- cluster 0's cache append, the attention
     # cluster's Q8, the others' q~ -- so the in-order DM core does not park that work
-    # behind a ring chunk the prefetcher has not pushed yet (measured: cluster 0's RoPE,
-    # factor load and append 40 us late, the attention with them)
+    # behind a ring chunk the prefetcher has not pushed yet
     if p.get("fence_s4", False):
         fence_at = {c: (S.qt16[c], None) for c in range(NCL)}
         fence_at[0], fence_at[ATT] = (app, "key"), (q8, None)
@@ -71,7 +70,8 @@ def _one_token(S):
     # params att_stream: the attention's K and V tiles through one slab each of their own
     # (36 + 32 KiB), so the attention cluster's weight stream -- its W_UV and W_O
     # chunks -- keeps loading while the attention runs instead of queueing behind it.
-    # Two 68 KiB K|V slabs overflowed cluster 1's L1 by stage 6.
+    # One slab each, not a pair of 68 KiB K|V slabs, keeps cluster 1's L1 within budget
+    # through stage 6.
     if p.get("att_stream", False):
         att_ls = LoadStream(S.ctx, ATT, nbytes=dg.BC * KV, nbuf=1, name="kstream")
         att_vs = LoadStream(S.ctx, ATT, nbytes=KVR * dg.BC, nbuf=1, name="vstream")

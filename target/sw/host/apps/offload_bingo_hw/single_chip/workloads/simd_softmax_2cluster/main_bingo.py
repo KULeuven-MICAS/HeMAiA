@@ -12,18 +12,18 @@
 #   cluster 1:  Load (memchip->L1) -> softmax [2, 64]  -> Store (L1->L3) -> Check
 #
 # Same fused all-device kernel as simd_softmax_1cluster (whole reduce(MAX) -> EXP ->
-# integer-reciprocal -> normalize pipeline inside one SIMD-core kernel); the two chains are
+# reciprocal -> normalize pipeline inside one SIMD-core kernel; the reciprocal is the integer
+# one at rows == 1 and rsqrt(s*s) otherwise); the two chains are
 # independent and never synchronize, so this covers both SIMD clusters running SIMD softmax
 # at the same time against their own L1/L3 buffers. Host store/check nodes all sit on
-# cluster 0 core 2 -- there is one host core per chiplet, and the bingo mini-compiler
+# cluster 0's host core -- there is one host core per chiplet, and the bingo mini-compiler
 # requires every host kernel to sit on it, even when the buffer it moves lives in another
 # cluster's L1.
 #
-# Deliberately minimal: the wide-SPM L3 heap left over on this cfg is only ~18 KiB (the
-# rest of the 128 KiB holds .data/.bss plus the embedded device binary). The full rows x
-# cols cost-LUT sweep does NOT fit -- two 4 KiB output buffers plus 80 task descriptors
-# OOM the heap. Take the softmax cycle LUT from simd_softmax_1cluster (reproduced there);
-# this workload only asserts that both clusters compute the right answer.
+# Deliberately minimal: the full rows x cols cost-LUT sweep does not fit this cfg's L3 heap
+# (.data/.bss and the embedded device binary take most of it). Take the softmax cycle LUT
+# from simd_softmax_1cluster; this workload only asserts that both clusters compute the
+# right answer.
 
 import os
 import sys
@@ -65,7 +65,7 @@ HOST_CLUSTER = 0
 CHECK_FP16_TOL = 2
 
 # One config per cluster; CONFIGS[i] runs on cluster i. Keep these small -- see the L3
-# heap note above. cols must be a multiple of 32.
+# heap note above. cols must be a multiple of SIMD_FP16_LANES.
 CONFIGS = [
     {"rows": 1, "cols": 64},   # cluster 0: single-row fast path
     {"rows": 2, "cols": 64},   # cluster 1: multi-row path
@@ -137,7 +137,7 @@ def build_chain(dfg, cluster, meta):
     load = node(f"Load_c{cluster}", cluster, DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b),
                 None)
-    # reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
+    # reduce-MAX, negate, sub-max, merged EXP+Sexp, reciprocal, normalize.
     sm = node(f"Softmax_c{cluster}", cluster, SIMD_CORE,
               "__snax_bingo_kernel_simd_softmax_f16_f16",
               SnaxBingoKernelSimdSoftmaxF16F16Args(l1_x, l1_y, rows, D), load)

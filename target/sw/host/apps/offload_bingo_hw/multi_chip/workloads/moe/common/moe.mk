@@ -8,7 +8,7 @@
 # WORKLOAD, then includes this file:
 #
 #     MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-#     WORKLOAD  = moe/dsv2_l1/full
+#     WORKLOAD  = moe/dsv2_l1/all
 #     include $(MK_DIR)../../common/moe.mk
 #
 # WORKLOAD is the directory's path under workloads/, so the roots are found from it rather than
@@ -49,6 +49,7 @@ BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h \
                  $(wildcard $(DSV2_DIR)/util/*.py) \
                  $(wildcard $(WL_ROOT)/ffn/common/*.py) $(wildcard $(WL_ROOT)/moe/common/*.py) \
+                 $(wildcard $(WL_ROOT)/common/*.py) \
                  $(WEIGHTS_MANIFEST)
 
 # ONE run makes all three: a grouped target (&:, GNU make >= 4.3)

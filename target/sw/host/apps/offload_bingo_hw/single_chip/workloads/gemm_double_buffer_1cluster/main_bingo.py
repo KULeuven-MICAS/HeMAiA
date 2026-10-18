@@ -5,7 +5,7 @@
 
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
-# And then the mini-compiler will emit the WORKLOAD.h file
+# And then the mini-compiler emits the offload_bingo_hw.h file
 
 # BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
 # Tiled single-cluster GEMM with ping-pong A and D buffers. Matrix B is loaded
@@ -179,7 +179,7 @@ def define_memory_handles(params):
     # Computation Flow (num_double_buffers Tiles):
     # We use separate DMA cores/channels for Load and Store to maximize overlap.
     # -------------------------------------------------------------------------------------------------------
-    # Time Step | Core 1 (DMA Load)             | Core 0 (Compute)              | Core 2 (Host DMA Store)
+    # Time Step | DM core (Load)                | GEMM core (Compute)           | Host core (Store)
     # -------------------------------------------------------------------------------------------------------
     # Prologue  | Load B                        |                               |
     #           | Load A0 -> A_ping             |                               |
@@ -211,8 +211,7 @@ def create_dfg(params, mem_handles, platform):
     host_core_id = roles["host"]
 
     # 1. Initialize DFG for chip 0x00 only (single-chip workload). Building for all
-    # 4 platform chiplets would allocate empty-chip scheduler structures / global
-    # task-id maps (~7 KiB) that this 33-node DFG can't spare in the 128 KiB L3 heap.
+    # platform chiplets would allocate scheduler structures for the absent chiplets.
     bingo_dfg = BingoDFG(
         num_chiplets=1,
         num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
@@ -254,12 +253,12 @@ def create_dfg(params, mem_handles, platform):
         node_copy_A = BingoNode(
             assigned_chiplet_id=cur_chiplet_id,
             assigned_cluster_id=cur_cluster_id,
-            assigned_core_id=dma_core_id, # Core 1 for Load
+            assigned_core_id=dma_core_id, # DM core for Load
             kernel_name="__snax_bingo_kernel_idma_1d_copy",
             kernel_args=SnaxBingoKernelIdma1dCopyArgs(
                 src_addr=mem_handles[f'A{i}_data_L3_symbol'], # A0..Anum_double_buffers
                 dst_addr=current_l1_A,
-                size=params['A_tile_size'] # 4KB
+                size=params['A_tile_size']
             )
         )
         task_copy_A_nodes.append(node_copy_A)
@@ -310,11 +309,11 @@ def create_dfg(params, mem_handles, platform):
         node_copy_D = BingoNode(
             assigned_chiplet_id=cur_chiplet_id,
             assigned_cluster_id=cur_cluster_id,
-            assigned_core_id=host_core_id, # Core 2 for Store
+            assigned_core_id=host_core_id, # host core for Store
             kernel_name="__host_bingo_kernel_idma",
             kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=current_l1_D,
-                dst_addr=mem_handles[f'D{i}_L3_buf'], # D0..D3
+                dst_addr=mem_handles[f'D{i}_L3_buf'], # D0..D{num_double_buffers-1}
                 size=params['D_tile_size']
             )
         )
@@ -329,7 +328,7 @@ def create_dfg(params, mem_handles, platform):
         task_check_result = BingoNode(
             assigned_chiplet_id=cur_chiplet_id,
             assigned_cluster_id=cur_cluster_id,
-            assigned_core_id=host_core_id, # Core 2 for Host
+            assigned_core_id=host_core_id, # host core for Check
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
                 name=f"D{i}",

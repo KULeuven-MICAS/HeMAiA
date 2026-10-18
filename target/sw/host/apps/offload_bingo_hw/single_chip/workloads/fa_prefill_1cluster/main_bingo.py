@@ -33,7 +33,7 @@
 #     PV(j)  gemm core   O^T += V^T.P^T, in place     -> oacc32
 #
 # THREE NODES PER TILE, not one per accelerator task. One node per SIMD task would be 11
-# nodes a tile; at roughly 80 cycles per BINGO edge that is more scheduling than
+# nodes a tile; a BINGO edge costs more than a SIMD task, so that is more scheduling than
 # softmax. The eleven tasks are one kernel (__snax_bingo_kernel_simd_fa_softmax) that
 # fires them back to back into the block's own task queue and drains once at the end,
 # which is exactly what the reference's inner loop does.
@@ -110,7 +110,7 @@ CHECK_FP16_TOL = 2
 CHECK_INT32_RELTOL = 5
 
 # ---- the tile ------------------------------------------------------------------------
-# VersaCore's single spatial unrolling on this cluster; the same numbers the device reads
+# VersaCore shape 0 on this cluster; the same numbers the device reads
 # out of gemm_shapes.h. Shapes below are in ARRAY BLOCKS, as the streamer states them.
 MESH_ROW, TILE_SIZE, MESH_COL = 16, 4, 16
 
@@ -118,8 +118,7 @@ MESH_ROW, TILE_SIZE, MESH_COL = 16, 4, 16
 # data/params.hjson exactly, so the cycle counts are comparable point for point. Shrink M
 # there to get a fast debug loop -- same graph, same tasks, a fraction of the sim time.
 M = K = N = NKV = None   # filled by _load_params() before anything derived is computed
-# K and V both stream on the iDMA. Moving V to the xDMA hart wedges the run mid-pipeline,
-# with the GEMM core short of its task count and the SIMD core stuck in its drain.
+# K streams on the iDMA, V on the xDMA.
 CHECK_O = 0              # params.hjson: validate the O accumulator (perturbs timing)
 NQ = 1                   # params.hjson: query tiles sharing one K/V pass
 
@@ -203,8 +202,8 @@ def build_data():
     # descriptors walk them: A is [M][K][meshRow][tileSize], B is [N][K][meshCol][tileSize].
     a = rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE).astype(np.int8) >> QSHIFT
     b = rng.randint(-128, 127, size=N * K * MESH_COL * TILE_SIZE).astype(np.int8) >> QSHIFT
-    # V for the second matmul: [S2_M][S2_K][meshRow][tileSize]. Its value never reaches a
-    # check (O is a cycle measurement), but it must be a real operand so the matmul does
+    # V for the second matmul: [S2_M][S2_K][meshRow][tileSize]. Its value reaches a
+    # check only through O (CHECK_O), but it must be a real operand so the matmul does
     # the work -- a zero V would still take the same cycles, but a denormal-free operand
     # keeps the array off any slow path.
     v = rng.randint(-128, 127,
@@ -254,8 +253,8 @@ def build_data():
 
     # ---- and now put O where the D32 port ACTUALLY writes it ---------------------------
     #
-    # This block is the difference between an O check that passes and one that reports
-    # 3338 of 4096 elements wrong while the hardware is perfectly correct.
+    # This block maps O to where the D32 port writes it: a golden in canonical block order
+    # would not match what the host reads back, although the hardware is correct.
     #
     # The C/D spatial map is chosen so the FP16 score tile lands row-major -- one key per
     # 64 B beat, which is what the LANEWISE reduce needs. C and D share those strides and
@@ -380,10 +379,9 @@ def build(dfg, h, m, rowsum):
     # golden relies on that, and m stops moving after tile 0 -- but they are RE-FETCHED per
     # tile, so the memory traffic is what a real KV stream would cost. Loading once and
     # replaying leaves the iDMA idle and makes any utilisation figure exclude memory.
-    # TWO K buffers. A third would let the loads run one tile further ahead, which is the
-    # right diagnosis -- every QK is gated by its own K load -- but it also raises the
-    # number of simultaneously-ready DMA nodes past what the manager's ready set tolerates,
-    # and the run wedges in teardown. Revisit only alongside that limit.
+    # TWO K buffers. A third would let the loads run one tile further ahead (every QK is
+    # gated by its own K load), but it also raises the number of simultaneously-ready DMA
+    # nodes past what the manager's ready set tolerates.
     k8 = [g.l1(f"fa_k8_{i}", M * K * MESH_ROW * TILE_SIZE) for i in range(2)]
     q8 = [g.l1(f"fa_q8_{q}", N * K * MESH_COL * TILE_SIZE)      # B of the score matmul
           for q in range(NQ)]
@@ -392,10 +390,10 @@ def build(dfg, h, m, rowsum):
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
     cz = g.l1("fa_cz", MESH_ROW * MESH_COL * 4)                 # C base ptr, never read
-    # TWO score buffers. A third lets QK run three deep and does remove the WAR edge it
-    # targets, but it loses overall: the extra QK streams A, B and D through TCDM alongside
-    # the softmax, and the softmax is the critical path. Slack bought for the GEMM is paid
-    # for in SIMD bandwidth.
+    # TWO score buffers. A third would let QK run three deep and remove the WAR edge it
+    # targets, but the extra QK streams A, B and D through TCDM alongside the softmax, and
+    # the softmax is the critical path. Slack bought for the GEMM is paid for in SIMD
+    # bandwidth.
     # ONE BEAT OF HEADROOM in front of each score buffer. The softmax's fused exp pass reads
     # [-m_new][the tile] as a single contiguous stream. Reserving the beat here lets that
     # pass read the GEMM's own output buffer directly, instead of copying the whole tile
@@ -432,11 +430,11 @@ def build(dfg, h, m, rowsum):
     # the first matmul by their own duration.
     # ---- warm every core's config path BEFORE the first byte moves ---------------------
     # A core's FIRST dispatch of a given kernel costs far more than its next, and the
-    # difference is instruction-cache line refills. A refill is tens of cycles on an idle
-    # fabric and well over a thousand while the iDMA is streaming a tile through the same
-    # path, so what the first dispatch costs is decided by WHEN it runs, not by what it
-    # does. Left to itself every core takes its first dispatch with the load chain already
-    # saturating the fabric, and all three pay the contended price at once.
+    # difference is instruction-cache line refills. A refill is far cheaper on an idle
+    # fabric than while the iDMA is streaming a tile through the same path, so what the
+    # first dispatch costs is decided by WHEN it runs, not by what it does. Left to itself
+    # every core takes its first dispatch with the load chain already saturating the
+    # fabric, and all three pay the contended price at once.
     #
     # These three nodes take that hit while nothing else is running. They are tiny, they
     # write only their own scratch, and the whole load chain is anchored behind them, so
@@ -468,10 +466,9 @@ def build(dfg, h, m, rowsum):
     warm_gemm = g.node("WarmGemm", GEMM_CORE, "__snax_bingo_kernel_gemm_fa_qk",
                        SnaxBingoKernelGemmFaQkArgs(warm_a, warm_b, warm_b,
                                                    warm_buf.view(64), 1, 1, 1), warm_ab)
-    # Only the CONFIG paths are warmed, not the SIMD task-firing path. Warming that too --
-    # a full tiny softmax here -- does remove the first tile's cold run, but it re-times the
-    # pipeline so that later softmax runs land under the K/V stream instead, and their
-    # contended cost is larger than the cold run it saved. Net zero, so it is not done.
+    # Only the CONFIG paths are warmed, not the SIMD task-firing path: warming that too --
+    # a full tiny softmax here -- would re-time the pipeline so that later softmax runs land
+    # under the K/V stream instead.
     # ---- build the SIMD task geometry off the critical path ----------------------------
     # The per-tile SIMD kernel opens by writing its task-shape descriptors into the head of
     # the arena and memoises them, so only the first tile of each query tile pays. That
@@ -489,9 +486,9 @@ def build(dfg, h, m, rowsum):
     # passes PRIMED and takes the memo path. It moves no data and queues no accelerator
     # task, so it does not disturb m, l or O.
     #
-    # Making the prologue run the FULL kernel instead -- firing the tasks as well -- is a
-    # regression: its own run and drain then sit on the critical path ahead of the first
-    # real tile on the same in-order core, which costs more than the cold tail it saves.
+    # The prologue does not run the FULL kernel (firing the tasks as well): its own run and
+    # drain would then sit on the critical path ahead of the first real tile on the same
+    # in-order core.
     # One per query tile: the descriptors hold absolute pointers into their own arena.
     warm = [g.node(f"Geom{q}", SIMD_CORE, "__snax_bingo_kernel_simd_fa_softmax",
                    SnaxBingoKernelSimdFaSoftmaxArgs(
@@ -503,17 +500,15 @@ def build(dfg, h, m, rowsum):
     # Q is the query tile: fixed for the whole run, loaded once.
     ld_q = [load(f"Q{q}", "b", q8[q], N * K * MESH_COL * TILE_SIZE, [warm_gemm])
             for q in range(NQ)]
-    # No Czero load: with the C channels masked the score matmul never reads this buffer.
-    # That removes the single largest load from the head of the chain -- 64 KiB of zeros
-    # that QK(0) used to wait behind.
+    # No Czero load: with the C channels masked the score matmul never reads this buffer,
+    # so no zeros are loaded ahead of QK(0).
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
     # C, and C is oacc itself. A prefix of the same zero region does it.
 
     # The softmax's OWN running O lives in the arena and is a different buffer from the
-    # INT32 oacc32 above. simd_fa_init_state used to zero it with the SIMD core's stores:
-    # dhead beats, ~8 KiB, and the single largest serial bubble in the run. The DM core is
-    # idle here, so hand it the same zero region. The device side then only has to seed
-    # mrun/lrun, which is two beats.
+    # INT32 oacc32 above. Zeroing it with the SIMD core's stores would be dhead beats on the
+    # serial path, so the xDMA core zeroes it in place (below). The device side then only
+    # has to seed mrun/lrun, which is two beats.
     _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
     # ZERO THE O ACCUMULATOR ON THE xDMA, not the iDMA.
     #
@@ -522,16 +517,13 @@ def build(dfg, h, m, rowsum):
     # standing in front of K(0), which is the largest single gap in the fill. The xDMA core
     # is otherwise idle -- it owns nothing but its exit node -- so it generates the zeros in
     # place, with the reader channels disabled so no TCDM read is issued either.
-    #
-    # It no longer waits on ld_q: generating a constant needs no operand, so this runs from
-    # cycle zero and overlaps the Q load rather than queueing behind it.
     # THE WHOLE RECURRENCE STATE IS GENERATED, NOT LOADED.
     #
-    # m = -inf, l = 0 and O = 0 are constants. The SIMD kernel used to seed m and l itself
-    # on tile 0 and the iDMA carried O's zeros; both sat on the critical head, and at NQ
-    # query tiles that is NQ transfers standing in front of K(0) plus NQ scalar fills in
-    # front of the first softmax. None of it needs an operand, so the idle xDMA core
-    # generates all three in place -- reader channels disabled, so not even a TCDM read.
+    # m = -inf, l = 0 and O = 0 are constants. Seeded by the SIMD kernel or carried by the
+    # iDMA they would sit on the critical head: at NQ query tiles that is NQ transfers
+    # standing in front of K(0) plus NQ scalar fills in front of the first softmax. None of
+    # it needs an operand, so the idle xDMA core generates all three in place -- reader
+    # channels disabled, so not even a TCDM read.
     #
     # -65504 is FP16's most negative finite value, which is what the kernel used; a true
     # -inf would make the first exp(S - m) NaN rather than 0. The pattern is 32 bits
@@ -555,10 +547,10 @@ def build(dfg, h, m, rowsum):
                    SnaxBingoKernelXdmaMemsetArgs(
                        arena[q].view(_lay["oacc"]), DHEAD * 64,
                        SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), ld_q[q])
-        # m and l are one beat each and NOT adjacent (rmax, mrun, mnew, delta, corrL,
-        # lrun), so they are two fills rather than one. Chained after the O fill: they
-        # share the one xDMA engine, and stating the order costs nothing at run time while
-        # leaving the dep-tag allocator one chain instead of three concurrent ones.
+        # m and l are one beat each and NOT adjacent (mrun, corrL, lrun), so they are two
+        # fills rather than one. Chained after the O fill: they share the one xDMA engine,
+        # and stating the order costs nothing at run time while leaving the dep-tag
+        # allocator one chain instead of three concurrent ones.
         mfill = g.node(f"SeedM{q}", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
                        SnaxBingoKernelXdmaMemsetArgs(
                            arena[q].view(_lay["mrun"]), 64, NEG_INF16), z)
@@ -599,15 +591,13 @@ def build(dfg, h, m, rowsum):
                 k_after = ld_q if j < 2 else [qk[(j - 1) * NQ - 1]]
                 ld_k.append(load(f"K{j}", "a", k8[j % 2], KBYTES, k_after))
                 # Behind the arena fills, not just behind Q. Issuing V(0) BEFORE the
-                # fills instead does clear the first softmax of V traffic -- its config and
-                # run drop to their warm values -- but it pushes the fills far enough back
-                # that the head grows by more than the contention cost. The fills go first.
-                # V and the fills now share
-                # the xDMA engine, and the fills are needed by the FIRST softmax while V
-                # is not needed until the first PV. Left to the tie-break the V stream
-                # gets in front of them and the first softmax waits out two whole V
-                # transfers. The fills are a few tens of cycles, so stating the order
-                # costs nothing.
+                # fills would clear the first softmax of V traffic, but it would push the
+                # fills back and grow the head by more than the contention cost. The fills
+                # go first. V and the fills share the xDMA engine, and the fills are needed
+                # by the FIRST softmax while V is not needed until the first PV. Left to
+                # the tie-break the V stream gets in front of them and the first softmax
+                # waits out two whole V transfers. The fills are short, so stating the
+                # order costs nothing.
                 v_after = list(ld_az) if j < 2 else [pv[(j - 1) * NQ - 1]]
                 # V streams on the xDMA, K on the iDMA. The two engines then move their
                 # tiles CONCURRENTLY instead of queueing on one, which takes the K/V pair
@@ -694,8 +684,8 @@ def build(dfg, h, m, rowsum):
     tol_m = float(2 * np.max(np.spacing(m.astype(np.float16))))
     tol_s = float(4 * np.max(np.spacing(rowsum.astype(np.float16))))
     check("m", "mrun", "m", m, tol_m)
-    # rsum moved out of the arena into the LAST tile's p8 buffer, straight after its P
-    # beats, because that is where the fused pass's contiguous output stream puts it.
+    # rsum lives in the LAST tile's p8 buffer, straight after its P beats (not in the
+    # arena), because that is where the fused pass's contiguous output stream puts it.
     l3_rs = BingoMemAlloc("out_fa_rowsum", size=64, mem_level="L3")
     st_rs = g.node("Store_rowsum", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(p8[(NKV * NQ - 1) & 1].view((BC // 2) * 64),
@@ -716,17 +706,16 @@ def build(dfg, h, m, rowsum):
     # a wide margin. Chained after the rowsum check: unordered peers on the one host core
     # are free to the scheduler and expensive to the dep-tag allocator.
     #
-    # OFF BY DEFAULT, because the check is not free: staging a 16 KiB INT32 golden into the
-    # image and adding two host nodes MEASURABLY slows the cluster's scalar config paths --
-    # GEMM_FA_QK_CFG median 81 -> 1,299 cc, and the compute window 66,212 -> 74,720 cc
-    # (+12.8%). QK's config runs before the quantiser and writes only descriptor addresses,
-    # so this is not the operand values; it is more L3 traffic stalling scalar code, the
-    # same mechanism as the memo statics. Enable it for correctness runs, leave it off for
-    # anything whose cycles you intend to quote.
+    # OFF BY DEFAULT, because the check is not free: staging an INT32 golden into the image
+    # and adding two host nodes slows the cluster's scalar config paths. QK's config runs
+    # before the quantiser and writes only descriptor addresses, so this is not the operand
+    # values; it is more L3 traffic stalling scalar code, the same mechanism as the memo
+    # statics. Enable it for correctness runs, leave it off for anything whose cycles you
+    # intend to quote.
     # EVERY query tile is checked, not just the last one. All NQ of them load the SAME Q
     # (ld_q[q] reads h["b"] for every q), so all NQ accumulators must equal the same golden
     # -- which makes "check them all" free of extra golden data and the only way to catch a
-    # per-arena failure. Checking oacc[NQ-1] alone left query tiles 0..NQ-2 completely
+    # per-arena failure. Checking oacc[NQ-1] alone would leave query tiles 0..NQ-2
     # unvalidated, and those are exactly the ones whose arenas differ: arena 0 sits at the
     # bottom of the L1 heap and every later one does not.
     #

@@ -10,7 +10,7 @@
 # FA streams K/V in and writes (m, l, O) back only in its epilogue, and the tiled GEMMs put
 # all four Store_D at the end -- so none of them can tell whether the L3 front end serves a
 # read and a write in the same cycle or serialises them. That is exactly the property the
-# front end's read/write split changes (docs/l3_frontend.md), so it needs its own benchmark.
+# front end's read/write split changes, so it needs its own benchmark.
 #
 # Task dependency graph (NCL clusters, REPS transfers each, one iDMA engine per cluster so
 # a cluster's own transfers chain; the clusters run concurrently):

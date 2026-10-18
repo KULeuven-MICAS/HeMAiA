@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Data generator for dma_read_from_chip00_4chiplet_2cluster."""
+"""Data generator for xdma_read_from_chip00_4chiplet_2cluster."""
 
 import argparse
 import os

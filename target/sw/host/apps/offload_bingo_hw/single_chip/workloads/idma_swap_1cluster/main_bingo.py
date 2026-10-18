@@ -25,7 +25,7 @@ from xdma_ops_lib import run_op_workload  # noqa E402
 
 # Sweep total element count x element width. num_elems must be even (pairs never
 # cross the buffer end); elem_bytes 2 is the fp16 RoPE case. The iDMA does two
-# strided passes, so cost scales with num_elems (~2 cyc/elem).
+# strided passes, so cost scales with num_elems.
 _NE = [64, 256, 1024]
 CONFIGS = [{"num_elems": ne, "elem_bytes": eb} for ne in _NE for eb in (1, 2, 4)]
 

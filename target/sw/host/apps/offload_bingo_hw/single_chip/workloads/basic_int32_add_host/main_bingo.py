@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Attention test DFG for the int32 add host kernel (HostBingoKernelAraAddI32Args).
+# Host int32-add smoke test (HostBingoKernelAraAddI32Args).
 # Chains 3 add calls: ((p0 + p1) + p2) + p3 → golden_sum_final.
-# Validates the kernel needed for inter-cluster partial-D accumulation
-# in K-split GEMM schemes (used by attn_test_ksplit_gemm).
+# The same kernel does the inter-cluster partial-D accumulation in K-split GEMM
+# schemes (gemm_ksplit_4cluster).
 
 # BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
 # Host/Ara int32 addition smoke test. It forms running sums and checks each

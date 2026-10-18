@@ -194,11 +194,9 @@ def main():
     l1_B = {}
     l1_D = {}
     # Only the first CHECK_BYTES of each result are verified (like
-    # gemm_double_buffer's "first 64 B" check). Staging the FULL D_bytes golden on
-    # chip 0x00 for every check needed five 4 KiB L3 buffers -- ~20 KiB -- which
-    # overflows the 128 KiB L3 heap once the 88 KiB device binary is included. The
-    # real-data buffers (D_partial, D_sum_final) stay full size; only the golden /
-    # check-scratch buffers shrink to CHECK_BYTES.
+    # gemm_double_buffer's "first 64 B" check), to keep the L3 golden / check-scratch
+    # buffers on chip 0x00 small. The real-data buffers (D_partial, D_sum_final) stay
+    # full size; only the golden / check-scratch buffers are CHECK_BYTES.
     CHECK_BYTES = 64
     l3_D_local = {}
     l3_check_scratch = {}

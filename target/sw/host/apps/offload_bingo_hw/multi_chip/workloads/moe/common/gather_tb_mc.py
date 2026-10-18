@@ -31,24 +31,23 @@ runs the same image, so every chip holds the same partials (a cluster's and a sl
 CHECKS: the first and the last 256 B of every slice of y.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
-    SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaRingLoadArgs, SnaxBingoKernelXdmaChainGatherArgs)
+    SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelXdmaChainGatherArgs)
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 
@@ -146,18 +145,13 @@ class GatherTb(cm.ChipletBuild):
 
     def _load(self, g, j, deps):
         """Weight chunk j of cluster g from its ring into the next slab, released at once."""
-        k, c, dm = self.chip(g), self.c(g), self.roles["dm"]
+        k, c = self.chip(g), self.c(g)
         ls = self.ls[g]
         si, slab, war = ls.take(self.chunk)
-        rings = ls.rings
-        src = self.w_src[self.mem[k]] + j * self.chunk
-        sl, fl, rl, seq, kind, _ = rings.take_ex(c, src=src, nbytes=self.chunk)
-        prev = [rings.last[c]] if rings.last.get(c) is not None else []
-        ld = self.node(k, c, dm, f"Ld_w{j}_g{g}", "__snax_bingo_kernel_idma_ring_load",
-                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, self.chunk, rl, trailer=bool(kind & 2)),
-                       list(dict.fromkeys(war + prev + list(deps))))
-        rings.last[c] = ld
-        ld.exec_chunk = rings.last_take
+        ld, _, _ = ls.rings.load_chunk(
+            lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
+            f"Ld_w{j}_g{g}", src=self.w_src[self.mem[k]] + j * self.chunk, nbytes=self.chunk,
+            slab=slab, war=war, deps=deps, dm=self.roles["dm"], trailer=True)
         ls.release(si, ld)
         return ld
 
@@ -196,13 +190,10 @@ class GatherTb(cm.ChipletBuild):
             for c in range(self.NC):
                 ordr = self.chain_order(c)[:-1]
                 p1x = f"((uint64_t)({self.p1c[c].get_c_var_name()}))"
-                chain = ([cm.remote(k, self.sx(c, j * self.SL)) for k in ordr] +
-                         [cm.remote(R, f"({p1x} + {s2 * self.SL})")])
-                ga = SnaxBingoKernelXdmaChainGatherArgs(
-                    local_src=cm.remote(R, self.sx(c, j * self.SL)), chain=chain, size=self.SL,
-                    junction=str(self.jct["Elementwise"]), jct_csr0=cm.EW_F16_ADD,
-                    hops=[(k, c) for k in ordr] + [(R, c)])
-                ga.holds = [self.p1c[c]]
+                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                    cm.remote, R, c, ordr, src=self.sx(c, j * self.SL), dst=f"({p1x} + {s2 * self.SL})",
+                    size=self.SL, junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD,
+                    holds=[self.p1c[c]])
                 before = last_any if self.mode == "serial" else last_red[c]
                 red = self.node(R, c, xdma, f"y_chain_c{c}j{j}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                 [t for g in range(G) if self.c(g) == c for t in ready[g]]
@@ -227,22 +218,11 @@ class GatherTb(cm.ChipletBuild):
         self.run_checks(checks)
 
 
+def _app_name(S):
+    return (f"MoE reduce testbench, {S.NSLC} slices of {S.SL} B a cluster, chains {S.mode}, "
+            f"{S.LPS} weight loads a slice, {len(S.chips)} chips x {S.NC} clusters")
+
+
 def run():
-    ap = argparse.ArgumentParser(description="MoE reduce testbench generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", default=None, help="unused (moe.mk passes it)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = GatherTb(args, p, plat, hw)
-    S.build()
-    S.finish(f"MoE reduce testbench, {S.NSLC} slices of {S.SL} B a cluster, chains {S.mode}, "
-             f"{S.LPS} weight loads a slice, {len(S.chips)} chips x {S.NC} clusters",
-             x_prefixes=("x_copy_",))
+    run_driver("MoE reduce testbench generator", GatherTb, _app_name,
+               dsv2_dir={"default": None, "help": "unused (moe.mk passes it)"}, x_prefixes=("x_copy_",))

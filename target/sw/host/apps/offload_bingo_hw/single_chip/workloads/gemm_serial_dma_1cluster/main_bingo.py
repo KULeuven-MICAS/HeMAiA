@@ -3,7 +3,7 @@
 
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
-# And then the mini-compiler will emit the WORKLOAD.h file
+# And then the mini-compiler emits the offload_bingo_hw.h file
 
 # Conduct D=A*B in a single cluster with separate load and compute, store, and check result.
 # issue the load commands for A and B in sequential using the device DMA.
@@ -111,8 +111,7 @@ def define_memory_handles(params):
 def create_dfg(params, mem_handles, platform):
     # 1. Initialize DFG using HW params derived from occamy.h + RTL config.
     # Single-chip workload: build for chip 0x00 only so the empty-chip scheduler
-    # structures (~7 KiB of the 128 KiB L3 heap) are not allocated. Baking A/B/D
-    # into host WIDE_SPM left the heap too small for the full 4-chip bookkeeping.
+    # structures are not allocated.
     bingo_dfg = BingoDFG(
         num_chiplets=1,
         num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],

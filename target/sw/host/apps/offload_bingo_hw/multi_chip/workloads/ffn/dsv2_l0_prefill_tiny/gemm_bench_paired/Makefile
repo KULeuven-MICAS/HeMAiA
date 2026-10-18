@@ -4,7 +4,8 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# DeepSeek-V2-Lite's FFN prefill, small debug variant all_t64; the code is ../../common/ffn_prefill_mc.py.
+# DeepSeek-V2-Lite's FFN GEMM shapes alone on one cluster, variant gemm_bench_paired; the code is
+# ../../common/gemm_bench_mc.py.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = ffn/dsv2_l0_prefill_tiny/gemm_bench_paired
 include $(MK_DIR)../../common/ffn.mk

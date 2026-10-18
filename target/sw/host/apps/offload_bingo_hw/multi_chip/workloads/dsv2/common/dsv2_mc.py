@@ -5,9 +5,11 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the MULTI-CHIPLET staged DeepSeek-V2-Lite workloads
 (workloads/dsv2/six_chiplet/stage*/ and sixteen_chiplet/stage*/), the counterpart of
-dsv2_staged.py (one chiplet).
+dsv2_staged.py (one chiplet). The stages' code is mc_stages/stage*.py, the same for every
+platform; a platform's stage directory holds a stub that loads its stage (load_stage) and
+the Makefile and params.hjson.
 
-THE PLATFORM (hemaia_sixchiplet_16MBL3_2cluster): compute chiplets with two clusters each and
+THE PLATFORM (hemaia_sixchiplet_16MBL3_2cluster_l3b64): compute chiplets with two clusters each and
 memory chiplets between them, one C-M-C row per memory chiplet:
 
     C00 - M10 - C20        each memory chiplet feeds its west and its east neighbour, each
@@ -18,7 +20,7 @@ Any layout where every compute chip has a memory chip beside it works the same w
 chip feeds the compute chips beside it, one push engine each (hemaia_sixteenchiplet_16MBL3_2cluster:
 four memory chips on the edge of a 4 x 4 package, each feeding three).
 
-THE MAPPING: TENSOR PARALLEL (docs/dsv2_multichiplet_plan.md, R4). The clusters of every
+THE MAPPING: TENSOR PARALLEL. The clusters of every
 chip are one pool, global cluster g = (chip index) * clusters + cluster, chips in cfg order.
 Every weight is split by OUTPUT columns -- each output column one whole dot product on one
 cluster, so every value is the golden's to the bit -- and every link carries its share of
@@ -61,6 +63,7 @@ at the end, upstream first, byte-exact, reading the other chips' copies over the
 
 import argparse
 import fnmatch
+import importlib.util
 import os
 import sys
 from dataclasses import replace
@@ -68,7 +71,7 @@ from dataclasses import replace
 import hjson
 import numpy as np
 
-from dsv2_staged import ROOT_DIR, load_stage  # noqa: F401  (sets up the import paths)
+from dsv2_staged import ROOT_DIR  # noqa: F401  (sets up the import paths)
 
 from bingo_data_staging import DataStaging                             # noqa: E402
 from bingo_dfg import BingoDFG                                         # noqa: E402
@@ -98,6 +101,21 @@ F16, I8 = DType.F16, DType.I8
 RM, A, B, A_ROW = Layout.ROW_MAJOR, Layout.A, Layout.B, Layout.A_ROW
 STAGES = {1: "norm", 2: "W_Q", 3: "W_DKV", 4: "latent + absorb", 5: "attention",
           6: "MLA output", 7: "routing", 8: "the layer"}
+
+STAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mc_stages")
+
+
+def load_stage(caller, name):
+    """The stage `name` (mc_stages/<name>.py, shared by every multi-chiplet platform), loaded
+    once as module dsv2_<name>. A platform's stage directory and a stage that builds on the one
+    before it both come here; `caller` (the calling file) is not needed to find it."""
+    mod = f"dsv2_{name}"
+    if mod not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            mod, os.path.join(STAGES_DIR, f"{name}.py"))
+        sys.modules[mod] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[mod])
+    return sys.modules[mod]
 
 
 def f16(a):

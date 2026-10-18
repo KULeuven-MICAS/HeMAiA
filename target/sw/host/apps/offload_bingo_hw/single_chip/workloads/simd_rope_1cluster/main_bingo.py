@@ -17,21 +17,8 @@
 # permutation is a 2-byte reorder INSIDE one 8-byte TCDM word, and the reader's AGU places
 # whole words. `lane_stride` moves channels, not halfwords.
 #
-# There used to be a self-contained kernel that did the swap with a word-rotate loop on the
-# SIMD core. It was deleted, not kept as a fallback: the swap is rows*cols/2 element moves
-# against a few hundred cycles for all the arithmetic it feeds, so it dominated, and doing
-# it on the DM core's real byte-addressed DMA is strictly better. The LUT below was measured
-# on that kernel and every entry should fall.
-#
-# Measured cost LUT -- PRE-SPLIT, re-measure (single-chip RTL sweep, SIMD-core cycles)
-#     rows\cols     64     128     256
-#        1           -     1227    1675
-#        2         1227    1674    2574
-#        4         1674    2573    4367
-#        8         2573    4366      -     ((1,64) is the warm-up config; (8,256) dropped: the
-#                                           xswap/tmp1/tmp2 scratch overflowed the L1 pool.
-#                                           This kernel allocates NO scratch at all, so
-#                                           that exclusion may no longer be needed.)
+# The swap runs on the DM core's byte-addressed iDMA; the SIMD kernel does only the
+# arithmetic and allocates no scratch.
 
 import os
 import sys
@@ -76,7 +63,7 @@ ROPE_POS = 1
 
 # (rows, cols); D = cols. Each row is a distinct token position (ROPE_POS + r), so cos/sin/xswap
 # are per-row [rows, D] tables. A rows x cols grid for the cost LUT (bilinear, keyed
-# [rows, cols]): rows {1,2,4,8} x cols {64,128,256}, so the bilinear cols slope de-confounds from
+# [rows, cols]): rows {1,2,4,8} x cols {64,256}, so the bilinear cols slope de-confounds from
 # the rows==1 fast-path drop.
 # cols {64,256} (not {64,128,256}): rope loads 3 inputs/config, so its generated
 # scheduler code is the largest of the SIMD sweeps and the cols=128 column is

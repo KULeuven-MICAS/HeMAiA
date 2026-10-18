@@ -5,7 +5,7 @@ attn_reference — Clean Reference Attention Workload for HeMAiA
 =============================================================================
 
 This is the hand-crafted reference implementation of a single attention layer
-built from scratch using the proven patterns from the attn_test_* test suite.
+built from the quantize / K-split GEMM / softmax pattern helpers below.
 It is intentionally modular so that a future higher-level code emitter
 (ONNX/IR → main_bingo.py) can produce near-identical output by calling the
 same pattern helpers.
@@ -30,12 +30,12 @@ Each arrow is one of 3 patterns:
 
 Layout note: VersaCore writes D in block layout [M_T, N_T, meshRow, meshCol].
 For N_T > 1 (e.g. qk_matmul) this differs from row-major, so the K-split
-GEMM pattern emits an xdma_d_to_row_major kernel after dequantize to
-produce a row-major buffer that matches Python goldens and serves as the
-correct input for downstream ops like softmax. With the generalized
-layout-convert kernels (snax_kernel_lib.h), this reshape runs on the
-xDMA AGU for every VersaCore array_shape (the canonical 32x4x32 INT32
-case takes Path 2 — meshRow split as r_outerx8). The L3 fp32 src is
+GEMM pattern emits an xdma_d_to_row_major layout-convert reshape after
+dequantize to produce a row-major buffer that matches Python goldens and
+serves as the correct input for downstream ops like softmax. With the
+generalized layout-convert kernel (__snax_bingo_kernel_xdma_6d), this reshape
+runs on the xDMA AGU for every VersaCore array_shape (array_shape 0 is
+(32, 2, 32) on this cluster cfg). The L3 fp32 src is
 auto-IDMA-staged to local L1 by `xdma_layout_stage_in` (snax_xdma_lib.h);
 no host-side prefetch is needed.
 
@@ -47,8 +47,8 @@ Structure of this file:
   SECTION 5: main() composition
 
 In DEBUG mode every pattern emits check_result nodes that compare runtime
-buffers against goldens from attention_datagen.py. In RUN mode only the
-final checks are emitted (smaller DFG, faster simulation).
+buffers against goldens from attention_datagen.py. In RUN mode no
+check_result nodes are emitted.
 """
 
 # BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
@@ -193,11 +193,8 @@ class KSplitGemmSpec:
         M_T, K_T, N_T:     full tile dims BEFORE K-splitting.
         k_split:           total number of K-chunks.
         chunks_per_cluster: chunks_per_cluster[cid] = list of k-chunk indices
-                           assigned to cluster cid. For k_split == num_clusters,
-                           each cluster gets one chunk. For k_split > num_clusters
-                           (e.g. proj_o with k_split=8 on 4 clusters), each
-                           cluster handles multiple chunks and accumulates
-                           locally via accumPrevC on subsequent GEMMs.
+                           assigned to cluster cid. Exactly one chunk per
+                           cluster is supported (k_split == num_clusters).
         scale_sym_name:    C symbol name of the combined_scale[1] array used
                            by dequantize.
         check_tolerance:   fp32 absolute-tolerance for the final dequant check.
@@ -533,10 +530,7 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
     # golden (also row-major) expect. For N_T = 1 this reshape is a
     # no-op-equivalent memcpy but we keep the step uniform.
     #
-    # Path note: __snax_bingo_kernel_xdma_d_to_row_major picks the xDMA HW
-    # path for every VersaCore unrolling (see the coverage matrix in
-    # snax_kernel_lib.h). For array_shape 0 (32x4x32 with elem=4) it takes
-    # Path 2 (meshRow=32 split as r_outer=4 x spatial r_inner=8). The src
+    # The reshape runs the layout-convert path of __snax_bingo_kernel_xdma_6d. The src
     # buffer is in L3 — the kernel's stage-in helper auto-IDMAs it to local
     # L1 before the xDMA AGU runs.
     fp32_dblk_buf = mem[f"{name}_fp32_l3"]         # block layout
@@ -555,14 +549,12 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
     dfg.bingo_add_edge(last_reduc_node, dequant)
 
     # Reshape step: D-block layout → row-major, fp32 (elem_bytes=4).
-    # Runs on the DMA core (core 1) — the kernel asserts this requirement.
-    # the mesh + elem_bytes are the KERNEL, not its args: pick the wrapper bound to (meshRow, meshCol)
-    # at 4-byte elements; the mesh and the width go in with the args.
+    # Runs on the DMA core — the kernel asserts this requirement.
+    # One kernel for every mesh; the mesh and the element width go in with the args.
     d2rm_cls = xdma_conv_args("xdma_d_to_row_major")
     reshape = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name=f"Reshape_{name}_d2rm",
-        kernel_name=d2rm_cls.KERNEL_NAME,
         # D reads [M, N], so the row-major side is (M_T*meshRow, N_T*meshCol); the device
         # derives the tile counts from that and the mesh.
         kernel_args=d2rm_cls(
@@ -668,11 +660,11 @@ def build_attention_specs(hw: HwParams) -> dict:
     addNonZeroC=1 mode — every GEMM is a straight D = A*B with C_addr=0
     and accumPrevC=0. This is the simplest, most portable pattern.
 
-    For seq_len=64, d_model=32, d_head=32 on array_shape=0 (32x4x32):
-      proj_q/k/v:  M=2, K=8,  N=1,  K_tile=2  (k_split=4, 1 chunk/cluster)
-      qk_matmul:   M=2, K=8,  N=2,  K_tile=2
-      av_matmul:   M=2, K=16, N=1,  K_tile=4
-      proj_o:      M=2, K=8,  N=1,  K_tile=2
+    For seq_len=64, d_model=32, d_head=32 on array_shape=0 (32x2x32):
+      proj_q/k/v:  M=2, K=16, N=1,  K_tile=4  (k_split=4, 1 chunk/cluster)
+      qk_matmul:   M=2, K=16, N=2,  K_tile=4
+      av_matmul:   M=2, K=32, N=1,  K_tile=8
+      proj_o:      M=2, K=16, N=1,  K_tile=4
     """
     mR, tS, mC = hw.meshRow, hw.tileSize, hw.meshCol
 
@@ -714,8 +706,7 @@ def build_attention_specs(hw: HwParams) -> dict:
         'proj_o': KSplitGemmSpec(
             name='proj_o',
             M_T=hw.seq_len // mR, K_T=hw.d_head // tS, N_T=hw.d_model // mC,
-            # BASELINE: k_split=4 (was 8 with multi-chunk accumulation).
-            # Keeps all GEMMs on the same simple "one chunk per cluster" path.
+            # k_split=4: one chunk per cluster, like every other GEMM here.
             k_split=4, chunks_per_cluster=one_chunk_per_cluster(4),
             scale_sym_name='combined_scale_Y',
         ),

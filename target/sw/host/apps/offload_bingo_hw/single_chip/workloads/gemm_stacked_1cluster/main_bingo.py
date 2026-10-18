@@ -293,7 +293,7 @@ def create_dfg(params, mem_handles, platform):
             name="D2",
             golden_data_addr=mem_handles["D2_symbol_l3"],
             output_data_addr=mem_handles["D2_result_l3"],
-            data_size=params["D2_size"], # check first 64 bytes for simplicity
+            data_size=params["D2_size"],
         ),
     )
     # 3. Add Nodes to DFG
@@ -344,9 +344,8 @@ def main():
     platform = parse_platform_cfg(args.platformcfg)
     # Return, don't assert: guard_cluster_count() already removed $(OFFLOAD_H), and
     # common.mk keys the clean "[skip] … workload does not target this HW cfg" path
-    # off that file's absence plus a ZERO exit. Raising here instead made this the
-    # one workload of 37 that hard-failed `make sw` on any cfg whose cluster count
-    # it does not match.
+    # off that file's absence plus a ZERO exit. Raising here would hard-fail `make sw`
+    # on any cfg whose cluster count the workload does not match.
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
         return
     dfg = create_dfg(params, mem_handles, platform)

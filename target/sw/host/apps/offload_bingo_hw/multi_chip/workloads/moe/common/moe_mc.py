@@ -38,15 +38,15 @@ where moe_route picks the top 6 against the chip's own table; the record goes to
 params route: fold or gather -- the collectives' switch, with bcast and reduce.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
@@ -57,7 +57,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdSoftmaxRowArgs, SnaxBingoKernelSimdSoftmaxRowExtArgs,
     SnaxBingoKernelXdmaChainGatherArgs, XDMA_SSJ_GROUP_BYTES, xdma_softmax_stats_csrs)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
 from libs import DType, Layout, Port, PortSpec, at_offset  # noqa: E402
 from libs.blocks import (AddRow, Linear, ScaleCols, ScaleRowBySlot, SlotLoad,  # noqa: E402
                          SwigluARow, expert_table, record_bytes, record_spec)
@@ -377,23 +376,15 @@ class MBuild(cm.ChipletBuild):
             deps = list(dict.fromkeys(before[k] for k in self.chips))
             tk_dst = self._scratch(R, 0, "rt_topk", 64)
             st_dst = self._scratch(R, 1, "rt_stats", XDMA_SSJ_GROUP_BYTES)
-            tk = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=cm.remote(R, self.sx(0, self.OFF_TOPK)),
-                chain=[cm.remote(k, self.sx(0, self.OFF_TOPK)) for k in others] +
-                      [cm.remote(R, tk_dst.get_c_var_name())],
-                size=64, junction=str(self.jct["TopK"]), jct_csr0=TOPK_CSR,
-                hops=[(k, 0) for k in others] + [(R, 0)])
-            tk.holds = [tk_dst]
+            tk = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                cm.remote, R, 0, others, src=self.sx(0, self.OFF_TOPK), dst=tk_dst.get_c_var_name(),
+                size=64, junction=self.jct["TopK"], jct_csr0=TOPK_CSR, holds=[tk_dst])
             # one group, row 0 live; the logits are unscaled, so the key factor is 1.0
             st_csr0, st_csr1 = xdma_softmax_stats_csrs(1)
-            st = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=cm.remote(R, self.sx(1, self.OFF_STATS)),
-                chain=[cm.remote(k, self.sx(1, self.OFF_STATS)) for k in others] +
-                      [cm.remote(R, st_dst.get_c_var_name())],
-                size=XDMA_SSJ_GROUP_BYTES, junction=str(self.jct["SoftmaxStats"]),
-                jct_csr0=st_csr0, jct_csr1=st_csr1,
-                hops=[(k, 1) for k in others] + [(R, 1)])
-            st.holds = [st_dst]
+            st = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                cm.remote, R, 1, others, src=self.sx(1, self.OFF_STATS), dst=st_dst.get_c_var_name(),
+                size=XDMA_SSJ_GROUP_BYTES, junction=self.jct["SoftmaxStats"],
+                jct_csr0=st_csr0, jct_csr1=st_csr1, holds=[st_dst])
             g_tk = self.node(R, 0, xdma, "rt_topk_chain", "__snax_bingo_kernel_xdma_chain_gather",
                              tk, deps)
             g_st = self.node(R, 1, xdma, "rt_stats_chain", "__snax_bingo_kernel_xdma_chain_gather",
@@ -491,23 +482,11 @@ class MBuild(cm.ChipletBuild):
         self.run_checks(checks)
 
 
+def _app_name(S):
+    return (f"DeepSeek-V2-Lite layer {S.d.layer} MoE, one token, INT{S.wbits} experts, "
+            f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
+            f"route={S.route_impl} bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+
+
 def run():
-    ap = argparse.ArgumentParser(description="moe workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = MBuild(args, p, plat, hw)
-    S.build()
-    S.finish(f"DeepSeek-V2-Lite layer {S.d.layer} MoE, one token, INT{S.wbits} experts, "
-             f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
-             f"route={S.route_impl} bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+    run_driver("moe workload generator", MBuild, _app_name)

@@ -36,19 +36,20 @@ APPS += simd_rmsnorm_t_1cluster
 APPS += simd_silu_1cluster
 APPS += simd_swiglu_1cluster
 APPS += simd_rope_1cluster
-# The five chain stages armed one at a time, so the cost model has a per-operator
-# curve and not only whole-pipeline numbers.
+# The SIMD quantiser (fp16_to_int8) armed on its own, for a per-operator cost curve.
 APPS += simd_quant_1cluster
 # FlashAttention: the two matmuls on the GEMM core, the whole online softmax as one
 # kernel on the SIMD core, overlapped through the task graph.
-# The snax port: one kernel, NQ the only difference. NQ=1 is decode (one query
-# position per token, the whole KV cache read for it); NQ>1 is prefill, where many
-# query tiles attend the same resident K/V. Intensity = NQ*Br exactly.
+# One kernel for both; NQ is the main difference (fa_decode_1cluster also prints the
+# array's own counters). NQ=1 is decode (one query position per token, the whole KV
+# cache read for it); NQ>1 is prefill, where many query tiles attend the same resident
+# K/V. Intensity = NQ*Br exactly.
 APPS += fa_decode_1cluster
 APPS += fa_prefill_1cluster
-# KV-sharded across four clusters, with the cross-cluster online-softmax merge done
-# IN THE FABRIC by a ChainGather over the softmax-statistics junction -- not gathered
-# to one cluster and reduced there.
+# fa_prefill_4cluster: KV-sharded across four clusters, with the cross-cluster
+# online-softmax merge done IN THE FABRIC by a ChainGather over the softmax-statistics
+# junction -- not gathered to one cluster and reduced there.
+# fa_decode_4cluster: head-parallel by default (DECOMP), KV-sharded optionally.
 APPS += fa_decode_4cluster
 APPS += fa_prefill_4cluster
 APPS += xdma_row_to_a_1cluster
@@ -69,7 +70,7 @@ APPS += device_host_idma_check_1cluster
 # Placeholders for the 2-cluster tapeout CI suites (hemaia_tapeout_2c[_simd]).
 APPS += dummy_2cluster
 APPS += dummy_simd_2cluster
-# 2-cluster SIMD variant of the xDMA softmax sweep (hemaia_tapeout_2c_simd).
+# 2-cluster variant of the SIMD softmax sweep (hemaia_tapeout_2c_simd).
 APPS += simd_softmax_2cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 

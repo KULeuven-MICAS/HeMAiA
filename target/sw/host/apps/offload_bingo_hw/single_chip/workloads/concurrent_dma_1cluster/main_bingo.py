@@ -2,7 +2,7 @@
 
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
-# And then the mini-compiler will emit the WORKLOAD.h file
+# And then the mini-compiler emits the offload_bingo_hw.h file
 
 # BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
 # Concurrent DMA smoke test in one cluster. It compares device xDMA, device iDMA,

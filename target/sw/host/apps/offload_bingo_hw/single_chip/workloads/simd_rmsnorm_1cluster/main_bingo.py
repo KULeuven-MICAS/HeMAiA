@@ -9,29 +9,14 @@
 # runs in a single SIMD-core kernel; the host only loads the input, stores the output, and checks it.
 #
 #   Load x[rows,D] -> RMSNorm __snax_bingo_kernel_simd_rmsnorm -> Store + Check(fp16 tol)
-#   (also) the same kernel with out_i8=True -> int8 out + Check(int8 +-1)
 #
 # Args are HW-free: { input_addr, output_addr, rows, cols }; precision is in the kernel name.
 # Inside the one kernel, all on the SIMD core: reduce(SUMSQ) -> broadcast carrying
 # StreamMap(a=1/D, RSQRT) -> normalize (x * inv_rms) -> fused Fp16ToInt8.
 #
-# THE LUT BELOW IS STALE, and deliberately left in place to be re-measured. It was taken
-# when inv_rms was computed ON THE CORE -- six serial `divu` through the integer
-# sqrt_f16 + recip_f16 plus sixteen volatile stores a row, which at [32, 128] was 59% of
-# the kernel. StreamMap's RSQRT func now does it in the datapath, on the broadcast pass
-# that a per-row scalar needs anyway, so every entry here should fall and the rows slope
-# should flatten. The snax reference app measures 7,717 -> 3,135 cc at [32, 128].
-#
-# Measured cost LUT -- PRE-RSQRT, re-measure
-#     rows\cols     64     128     256
-#        1           -      901     964
-#        2         3207    1399    1599
-#        4         1755    1961    2361
-#        8         2676    3085    3886      ((1,64) is the warm-up config)
-#
-# NOTE the rows == 1 entries are no longer a distinct fast path: it existed only because a
-# single row's scalar could be folded into a StreamMap immediate once the core had it in a
-# register, and RSQRT keeps the scalar in the datapath where a CSR cannot reach it.
+# inv_rms is StreamMap RSQRT on the broadcast pass that a per-row scalar needs anyway, so
+# the core does no divide. rows == 1 takes the same path as every other row: RSQRT keeps the
+# scalar in the datapath, where a CSR cannot reach it.
 
 import os
 import sys
@@ -72,14 +57,13 @@ HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
 # NOTE: the fused FP16->INT8 rmsnorm variant (the same kernel with out_i8=True)
 # is dropped from THIS CI sweep for the same L3-heap reason as simd_softmax_1cluster
-# (48 host nodes don't fit the 128 KiB heap next to the 88 KiB device binary). The
-# f16 chain preserves the full rows x cols cost LUT.
+# (48 host nodes do not fit the L3 heap next to the device binary). The
+# f16 chain covers the full rows x cols cost LUT.
 
 
 # (rows, cols); each row is a length-cols tile (cols a power of two). A rows x cols grid for the
 # fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
-# row so the cols slope de-confounds from the rows slope. (The rows==1 fast path this grid
-# was designed to separate is gone; see the header.)
+# row so the cols slope de-confounds from the rows slope.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
 CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
@@ -89,10 +73,9 @@ def _rmsnorm_ref(rows, cols, i):
 
     The reduce accumulates in FP32 and narrows the scalar to FP16 before the rsqrt sees it,
     so this narrows too -- that step is in the datapath and is not an approximation the
-    reference gets to skip. What follows it, though, is now a hardware table accurate to
-    ~1 FP16 ULP, so the reference is the real 1/sqrt rather than a bit-exact model of the
-    core's integer sqrt+reciprocal. Modelling the old path here would score the device
-    against the 2-ULP error the RSQRT func was added to remove.
+    reference gets to skip. What follows it is a hardware table accurate to ~1 FP16 ULP,
+    so the reference is the real 1/sqrt rather than a bit-exact model of an integer
+    sqrt+reciprocal.
     """
     D = cols
     rng = np.random.RandomState(3300 + i)
@@ -152,7 +135,7 @@ def build_config(g, i, meta, l1_x, l1_f16, l3_f, prev):
     tot_b = rows * D * 2               # [rows, D] fp16 bytes
     off_in, off_golden = meta[i]
 
-    # One fused kernel runs the whole rmsnorm on the DM core; the host loads the input
+    # One fused kernel runs the whole rmsnorm on the SIMD core; the host loads the input
     # (from the memchip), stores the fp16 output, and checks it.
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b), prev)

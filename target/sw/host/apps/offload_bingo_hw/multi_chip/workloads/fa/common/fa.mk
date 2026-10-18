@@ -51,6 +51,7 @@ BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h \
                  $(wildcard $(DSV2_DIR)/util/*.py) \
                  $(wildcard $(WL_ROOT)/ffn/common/*.py) $(wildcard $(WL_ROOT)/fa/common/*.py) \
+                 $(wildcard $(WL_ROOT)/common/*.py) \
                  $(WEIGHTS_MANIFEST) $(KV_MANIFEST)
 
 # ONE run makes all three: a grouped target (&:, GNU make >= 4.3)

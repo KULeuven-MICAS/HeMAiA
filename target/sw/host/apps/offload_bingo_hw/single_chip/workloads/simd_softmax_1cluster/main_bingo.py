@@ -11,7 +11,6 @@
 #   Load x[rows,D] (iDMA L3->L1)
 #   Softmax  __snax_bingo_kernel_simd_softmax_f16_f16   x -> out[rows,D] fp16
 #   Store(out) + Check(fp16 tol)
-#   (also) __snax_bingo_kernel_simd_softmax_f16_i8      x -> out[rows,D] int8  + Check(int8 +-1)
 #
 # Precision is picked by KERNEL NAME (f16_f16 / f16_i8), not an arg -- the args are HW-free:
 # { input_addr, output_addr, rows, cols }. Inside the one kernel (offload_hw_kernels/simd.h)
@@ -19,26 +18,14 @@
 # row-sum as ONE pass -> the reciprocal -> normalize-MUL, and the fused Fp16ToInt8 quant for
 # the i8 variant.
 #
-# THE RECIPROCAL MOVED ONTO THE DATAPATH for rows > 1. This core cannot divide, so it used to
-# be an integer `divu` per row plus 16 volatile stores to splat the result across each row's
-# beat; rsqrt(s*s) = 1/s exactly, so the square is now one narrow elementwise pass and the
-# inversion rides the broadcast that had to replicate the scalar anyway. The core's integer
-# reciprocal survives at rows == 1 (one scalar folds into a StreamMap immediate, which is both
-# faster and ~0.5 ULP better) and past cols == 255 (where the FP16 square of Sexp overflows).
+# The reciprocal for rows > 1 rides the datapath: this core cannot divide, and rsqrt(s*s) = 1/s
+# exactly, so the square is one narrow elementwise pass and the inversion rides the broadcast
+# that replicates the scalar anyway. The core's integer reciprocal is used at rows == 1 (one
+# scalar folds into a StreamMap immediate) and past cols == 255 (where the FP16 square of Sexp
+# overflows).
 #
-# The golden below needs no change for any of that: it already uses the TRUE reciprocal rather
-# than a bit-exact model of the integer one, and the 2% tolerance covers both routes.
-#
-# THE LUT BELOW IS STALE -- it predates the change and every rows > 1 entry should fall. The
-# reference app measures the whole row-major path at 5,665 cc for [32, 128].
-#
-# Measured cost LUT -- PRE-RSQRT, re-measure (single-chip RTL sweep, SIMD-core cycles)
-#     rows\cols     64     128     256
-#        1           -      834     926
-#        2         3993    2048    2501
-#        4         2292    2752    3658
-#        8         3244    4159      -     ((1,64) is the warm-up config; (8,256) dropped: its
-#                                           scratch overflows the L1 pool -> a fixed malloc spike)
+# The golden below uses the TRUE reciprocal rather than a bit-exact model of the integer one;
+# the 2% tolerance covers both routes.
 
 import os
 import sys
@@ -78,14 +65,12 @@ DMA_CORE = _ROLES["dm"]
 HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
 # NOTE: the fused FP16->INT8 softmax variant (__snax_bingo_kernel_simd_softmax_f16_i8)
-# is exercised by the standalone snax-xdma-softmax app. It is dropped from THIS CI
-# sweep: keeping both the f16 and i8 check chains for all 12 configs needs 48 host
-# nodes whose bingo scheduler metadata (~25 KiB) does not fit the 128 KiB L3 heap
-# alongside the 88 KiB device binary. The f16 chain preserves the full rows x cols
-# cost LUT.
+# is exercised by the snax-simd-softmax app. This sweep keeps only the f16 chain: both
+# chains for all 12 configs need 48 host nodes, whose scheduler metadata does not fit the
+# L3 heap next to the device binary. The f16 chain covers the full rows x cols cost LUT.
 
 
-# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
+# (rows, cols); each row is a length-cols tile (cols a multiple of SIMD_FP16_LANES). A rows x cols grid for the
 # fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
 # row so the cols slope de-confounds from the rows==1 fast-path drop.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
@@ -107,7 +92,7 @@ def _softmax_ref(rows, cols, i):
         xs = (xf - m.astype(np.float32)).astype(np.float16)       # ew(ADD): x + (-max), fp16
         e16 = np.exp(xs.astype(np.float32)).astype(np.float16)    # map(EXP), fp16
         s = np.float16(np.float32(e16.astype(np.float32).sum()))  # reduce(ADD) -> fp16
-        inv16 = np.float16(np.float32(1.0) / s.astype(np.float32))  # host RECIP, fp16
+        inv16 = np.float16(np.float32(1.0) / s.astype(np.float32))  # 1/s, fp16 (as the device's rsqrt(s*s) route yields)
         y = (e16.astype(np.float32) * inv16.astype(np.float32)).astype(np.float16)  # ew(MUL)
         x_rows.append(x)
         y_rows.append(y)
@@ -157,7 +142,7 @@ def build_config(g, i, meta, l1_x, l1_f16, l3_f, prev):
     tot_b = rows * D * 2               # [rows, D] fp16 bytes (packed)
     off_in, off_golden = meta[i]
 
-    # One fused kernel runs the whole softmax on the DM core; the host only loads the
+    # One fused kernel runs the whole softmax on the SIMD core; the host only loads the
     # input (from the memchip), stores the fp16 output, and checks it.
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b), prev)

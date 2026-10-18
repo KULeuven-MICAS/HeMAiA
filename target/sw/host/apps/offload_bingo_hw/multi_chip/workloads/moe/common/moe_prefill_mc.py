@@ -42,15 +42,15 @@ PER CLUSTER, in the order the arrays run it:
 TIMING: the start anchor after every chip's setup; the end anchor after the last store.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
@@ -58,14 +58,14 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
     INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, INT4_B_LAYOUT_PARITY, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmShapeInitArgs,
-    SnaxBingoKernelGemmStartArgs, SnaxBingoKernelGemmWaitArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs,
+    SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs,
     SnaxBingoKernelIdmaFetchFlaggedArgs, SnaxBingoKernelIdmaGatherRowsArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
-    SnaxBingoKernelIdmaRingLoadArgs, SnaxBingoKernelMoeDispatchArgs, SnaxBingoKernelMoeTopkRowsArgs,
+    SnaxBingoKernelMoeDispatchArgs, SnaxBingoKernelMoeTopkRowsArgs,
     SnaxBingoKernelSimdDeqSwigluArgs, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdQuantRowsArgs,
     SnaxBingoKernelSimdScatterAddRowsArgs, SnaxBingoKernelSimdSoftmaxF16F16Args, SnaxBingoKernelWaitFlagsArgs,
     SnaxBingoKernelXdmaChainGatherArgs)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
+from libs.blocks import GemmQueue  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 import moe_prefill_data as md  # noqa: E402
@@ -229,7 +229,6 @@ class MBuild(cm.ChipletBuild):
         # so it programs the next dispatch while the array runs (VersaCore and its streamer queue a
         # configuration)
         self.gemm_async = bool(p.get("gemm_async", False))
-        self.gseq, self.gwait, self.gstart = {}, {}, {}
         # params gemm_shape_l1 (with gemm_async): each cluster's GEMM core first copies the array shape's
         # parameters into its L1 (gemm_shape_init), and every gemm_start reads them there instead of L3
         self.gemm_shape_l1 = bool(p.get("gemm_shape_l1", False))
@@ -666,18 +665,14 @@ class MBuild(cm.ChipletBuild):
     def _load(self, g, j, deps=()):
         """Weight chunk j of cluster g from its ring into the next slab. Returns (load, slab index,
         slab, offset of its scale tile)."""
-        k, c, dm = self.chip(g), self.c(g), self.roles["dm"]
+        k, c = self.chip(g), self.c(g)
         ls = self.ls[g]
         off, nb, soff = self.chunk_off[g][j]
         si, slab, war = ls.take(nb)
-        rings = ls.rings
-        sl, fl, rl, seq, kind, _ = rings.take_ex(c, src=self.img[g].address + off, nbytes=nb)
-        prev = [rings.last[c]] if rings.last.get(c) is not None else []
-        ld = self.node(k, c, dm, f"Ld_w{j}_g{g}", "__snax_bingo_kernel_idma_ring_load",
-                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl, trailer=bool(kind & 2)),
-                       list(dict.fromkeys(war + prev + list(deps))))
-        rings.last[c] = ld
-        ld.exec_chunk = rings.last_take
+        ld, _, _ = ls.rings.load_chunk(
+            lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
+            f"Ld_w{j}_g{g}", src=self.img[g].address + off, nbytes=nb, slab=slab, war=war,
+            deps=deps, dm=self.roles["dm"], trailer=True)
         return ld, si, slab, soff
 
     def gemm(self, k, c, name, a, a_pitch, b, dst, M, K, N, k_shift, deps, int4=1):
@@ -696,7 +691,6 @@ class MBuild(cm.ChipletBuild):
         if not self.gemm_async:
             return self.node(k, c, gc, name, "__snax_bingo_kernel_gemm_full", SnaxBingoKernelGemmFullArgs(**kw),
                              list(deps))
-        seq = self.gseq[(k, c)] = self.gseq.get((k, c), 0) + 1
         shape_addr = 0
         if self.gemm_shape_l1:
             if (k, c) not in self.gsh:
@@ -705,12 +699,9 @@ class MBuild(cm.ChipletBuild):
                           SnaxBingoKernelGemmShapeInitArgs(buf, SHAPE3))
                 self.gsh[(k, c)] = buf
             shape_addr = self.gsh[(k, c)]
-        st = self.node(k, c, gc, name, "__snax_bingo_kernel_gemm_start",
-                       SnaxBingoKernelGemmStartArgs(**kw, seq=seq, shape_addr=shape_addr), list(deps))
-        wt = self.node(k, c, gc, f"{name}_w", "__snax_bingo_kernel_gemm_wait", SnaxBingoKernelGemmWaitArgs(seq), [st])
         # the phase a start opens: a wait moves behind the next start of its own phase only
-        self.gwait[wt] = self.gstart[st] = gemm_phase(name)
-        return wt
+        return GemmQueue.of(self.dfg, True).dispatch(self.at(k, c), name, SnaxBingoKernelGemmFullArgs(**kw), list(deps),
+                                                     phase=gemm_phase(name), shape_addr=shape_addr)
 
     # ---- the prefill --------------------------------------------------------------------------
     def build(self):
@@ -1309,12 +1300,10 @@ class MBuild(cm.ChipletBuild):
             for c in range(self.NC):
                 ordr = self.chain_order(c)[:-1]
                 p1x = f"((uint64_t)({self.p1c[c].get_c_var_name()}))"
-                chain = [cm.remote(k, self.sx(c, s2 * self.SL)) for k in ordr] + [cm.remote(R, f"({p1x} + {s2 * self.SL})")]
-                ga = SnaxBingoKernelXdmaChainGatherArgs(
-                    local_src=cm.remote(R, self.sx(c, s2 * self.SL)), chain=chain, size=self.SL,
-                    junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                    hops=[(k, c) for k in ordr] + [(R, c)])
-                ga.holds = [self.p1c[c]]
+                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                    cm.remote, R, c, ordr, src=self.sx(c, s2 * self.SL), dst=f"({p1x} + {s2 * self.SL})",
+                    size=self.SL, junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD,
+                    holds=[self.p1c[c]])
                 first = list(copies_in[c]) if jl == 0 else []
                 before = last_red[c] if self.chain_concurrent else last_any
                 red = self.node(R, c, xdma, f"y_chain_c{c}j{jl}", "__snax_bingo_kernel_xdma_chain_gather", ga,
@@ -1400,68 +1389,8 @@ class MBuild(cm.ChipletBuild):
         """Each device core runs its tasks in creation order, except (params gemm_async) that a GEMM's
         wait trails the next GEMM's start of the same phase when nothing else sits between them on
         the GEMM core and the program stays acyclic with every dependency and order edge."""
-        import networkx as nx
-        dev = {self.roles[r] for r in ("gemm", "simd", "xdma", "dm")}
-        groups = {}
-        for t in self.dfg.node_list:
-            if t.assigned_core_id in dev:
-                groups.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id), []).append(t)
-        for ts in groups.values():
-            ts.sort(key=lambda t: t.node_id)
-        movable = set()
-        if self.gemm_async:
-            for ts in groups.values():
-                for a, b in zip(ts, ts[1:]):
-                    if a in self.gwait and self.gstart.get(b) == self.gwait[a]:
-                        movable.add(a)
-
-        def sequence(ts, moved):
-            out, held = [], None
-            for t in ts:
-                if held is not None and t is not held:
-                    out.append(t)
-                    out.append(held)
-                    held = None
-                    continue
-                if t in moved:
-                    held = t
-                    continue
-                out.append(t)
-            if held is not None:
-                out.append(held)
-            return out
-
-        def program_edges(moved):
-            edges = []
-            for ts in groups.values():
-                seq = sequence(ts, moved)
-                edges += list(zip(seq, seq[1:]))
-            return edges
-
-        moved = set(movable)
-        while True:
-            g = nx.DiGraph(self.dfg)
-            g.add_edges_from(self.dfg.order_edges)
-            g.add_edges_from(program_edges(moved))
-            try:
-                cyc = nx.find_cycle(g)
-            except nx.NetworkXNoCycle:
-                break
-            back = [u for u, _ in cyc if u in moved]
-            if not back:
-                raise ValueError(f"the program order closes a cycle: {[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
-            moved.discard(back[0])
-        added = 0
-        for a, b in program_edges(moved):
-            if not self.dfg.has_edge(a, b):
-                self.dfg.bingo_add_edge(a, b)
-                added += 1
-        if not nx.is_directed_acyclic_graph(self.dfg):
-            cyc = nx.find_cycle(self.dfg)
-            raise ValueError(f"the program order closes a cycle: {[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
-        print(f"[{self.TAG}] program order: {added} core-order edges"
-              + (f"; {len(moved)} of {len(self.gwait)} GEMM waits behind the next start "
-                 f"({len(movable) - len(moved)} kept in place by a cycle)" if self.gemm_async else ""))
+        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
+        return GemmQueue.of(self.dfg, self.gemm_async).program_order(self.dfg, dev, tag=self.TAG)
 
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
         self.chain_program_order()
@@ -1469,22 +1398,10 @@ class MBuild(cm.ChipletBuild):
         super().finish(app_name, x_prefixes)
 
 
+def _app_name(S):
+    return (f"DeepSeek-V2-Lite layer-1 MoE prefill, {S.T} tokens, {len(S.chips)} chips x {S.NC} clusters, "
+            f"bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+
+
 def run():
-    ap = argparse.ArgumentParser(description="moe prefill workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = MBuild(args, p, plat, hw)
-    S.build()
-    S.finish(f"DeepSeek-V2-Lite layer-1 MoE prefill, {S.T} tokens, {len(S.chips)} chips x {S.NC} clusters, "
-             f"bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+    run_driver("moe prefill workload generator", MBuild, _app_name)

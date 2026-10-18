@@ -27,14 +27,9 @@ PLATFORM_H = $(REPO_ROOT)/target/sw/shared/platform/generated/occamy.h
 # the two stay byte-identical; depend on it so an edit there rebuilds this too.
 DATAGEN = $(APP_ROOT)/workloads/xdma_remote_write_4chiplet_1cluster/xdma_remote_write_datagen.py
 
-# The generated header is EMITTED BY the mini_compiler and must match the kernel ABI in
-# device_kernel_args.h. Neither used to be a prerequisite here, so an ABI change silently
-# left every workload whose main_bingo.py had not changed building against a STALE header:
-# the struct gained a field, the generated init code did not set it, and the run wedged
-# mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
-# RECURSIVELY, which it was not: the mini_compiler is a package tree (graph/ mem/ libs/
-# passes/ platform/) and a flat $(wildcard .../*.py) matches only the one module left at the
-# top level. This tracked 1 file out of 52 -- it had stopped being a guard at all.
+# The generated headers depend on every mini_compiler .py file (found recursively: the
+# compiler is a package tree) and on the kernel-arg header device_kernel_args.h, so a change
+# to either regenerates them.
 BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
 

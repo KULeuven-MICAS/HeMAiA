@@ -19,7 +19,7 @@
 #              -> EW0(MUL) squaring -> bcast(RSQRT) -> ew2(MUL)
 #              A beat is 32 consecutive SCORES of one token, so a row's terms scatter over
 #              all 32 lanes and collapsing them is a serialised log-depth fold that holds
-#              the reader's input port low for ~35 cc PER ROW -- paid TWICE, once for the
+#              the reader's input port low for every row -- paid TWICE, once for the
 #              max and once for the sum. Each scalar then has to be replicated into a whole
 #              [T, D] plane before a 2-operand elementwise can read it.
 #
@@ -30,10 +30,9 @@
 #              the accumulators with no fold, and both scalars ride back in as sticky seed
 #              beats rather than replicated planes.
 #
-# Reference measurement on snax_split_cluster (target/snitch_cluster/sw/apps/
-# snax-simd-softmax): 5,665 cc row-major vs 1,748 cc transposed on the SIMD core, plus
-# 236 + 385 cc of xDMA for the two block transposes. THIS workload is what says whether
-# HeMAiA reproduces that.
+# The reference app (target/snitch_cluster/sw/apps/snax-simd-softmax) runs the same A/B on
+# snax_split_cluster, with the two block transposes on the xDMA. THIS workload is what says
+# whether HeMAiA reproduces it.
 #
 # ======================================================================================
 # WHAT EACH CHECK ISOLATES — the reason there are four and not one

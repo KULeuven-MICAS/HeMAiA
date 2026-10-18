@@ -122,7 +122,7 @@ def bingo_softmax_row(x_row):
     row_length in groups of 4, doing vfredosum per chunk with init=0,
     then adding chunk sum to scalar accumulator.
 
-    Algorithm (matches host_kernel_lib.h:215-275):
+    Algorithm (matches __host_bingo_kernel_softmax_f32 in host_kernel_lib.h):
       1. max_val = vfredmax reduction over x_row
       2. For each chunk of 4 elements:
            expv = bingo_exp_f32(x_row - max_val)

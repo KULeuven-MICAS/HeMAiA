@@ -8,10 +8,8 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # gemm_parallel_dma stages A, B and the golden D on the MEMCHIP (mempool.bin)
-# instead of baking them into the host WIDE_SPM `.data`. Baking D (int32,
-# ~24 KiB here) left the bingo L3 heap with only ~1 KiB and the runtime OOM'd
-# ("L3 malloc failed"). With the operands on the memchip the host image is small
-# and the L3 heap has ~26 KiB, matching gemm_mem_chip_1cluster.
+# instead of baking them into the host WIDE_SPM `.data`, which keeps the host image
+# small and the bingo L3 heap free, as in gemm_mem_chip_1cluster.
 
 import argparse
 import os
@@ -27,7 +25,7 @@ from gemm_sim_utils import generate_gemm_test_data  # noqa E402
 
 def emit_header_file(**kwargs):
     # Inputs + golden live in mempool.bin (see emit_matmul_data); the host data
-    # header only needs stdint for the (now empty) definitions list.
+    # header only needs stdint (its definitions list is empty).
     return "\n\n".join(["#include <stdint.h>", *emit_matmul_data(**kwargs)])
 
 

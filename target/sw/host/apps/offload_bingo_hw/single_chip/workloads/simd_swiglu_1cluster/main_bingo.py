@@ -51,8 +51,8 @@ DMA_CORE = _ROLES["dm"]
 HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
 
-# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
-# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
+# (rows, cols); each row is a length-cols tile (cols a multiple of SIMD_FP16_LANES). A rows x cols grid for the
+# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,256} -- cols varies at EVERY
 # row so the cols slope de-confounds from the rows==1 fast-path drop.
 # cols {64,256} (not {64,128,256}): swiglu loads 2 inputs/config; dropping the
 # cols=128 column keeps the L3 heap comfortable while preserving rows and both cols

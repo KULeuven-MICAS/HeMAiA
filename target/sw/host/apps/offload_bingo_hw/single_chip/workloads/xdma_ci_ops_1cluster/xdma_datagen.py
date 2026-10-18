@@ -105,7 +105,7 @@ def emit_xdma_data(**kwargs):
     data_str += [format_scalar_definition("uint32_t", "gather_count", gather_count)]
     data_str += [format_vector_definition("uint8_t", "golden_gather", gathered.astype(np.uint8))]
 
-    # 10. ELEMENTWISE-ADD (int32 writer extension): dst = sum of N operands.
+    # 10. ELEMENTWISE-ADD (int32 reader extension): dst = sum of N operands.
     # Each operand has eltadd_int32_per_operand int32 (multiple of 16 for the
     # 512-bit bus); operands are laid out contiguously in eltadd_input.
     eltadd_num_operands = 4

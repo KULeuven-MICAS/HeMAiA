@@ -52,26 +52,27 @@ end anchor after the root stores the last iteration's Y_raw. The weight stream i
 window.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, HERE)
 
 import _bingo_paths  # noqa: F401,E402
+from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
-    INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmMinimalArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
-    SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelIdmaRingLoadArgs,
+    INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
+    SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulF16Args,
     SnaxBingoKernelSimdSwigluF16F16Args, SnaxBingoKernelXdmaChainGatherArgs, simd_beats)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
+from libs.blocks import GemmQueue  # noqa: E402
 from libs.comm.nest import d_to_a_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -317,26 +318,8 @@ class PBuild(cm.ChipletBuild):
     def chain_program_order(self):
         """Each device core runs its tasks in creation order: an edge between consecutive tasks
         of every (chip, cluster, core). Returns the number of edges added."""
-        import networkx as nx
-        dev = {self.roles[r] for r in ("gemm", "simd", "xdma", "dm")}
-        groups = {}
-        for t in self.dfg.node_list:
-            if t.assigned_core_id in dev:
-                groups.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id,
-                                   t.assigned_core_id), []).append(t)
-        added = 0
-        for ts in groups.values():
-            ts.sort(key=lambda t: t.node_id)
-            for a, b in zip(ts, ts[1:]):
-                if not self.dfg.has_edge(a, b):
-                    self.dfg.bingo_add_edge(a, b)
-                    added += 1
-        if not nx.is_directed_acyclic_graph(self.dfg):
-            cyc = nx.find_cycle(self.dfg)
-            raise ValueError(f"the program order closes a cycle: "
-                             f"{[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
-        print(f"[{self.TAG}] program order: {added} core-order edges")
-        return added
+        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
+        return GemmQueue.of(self.dfg, False).program_order(self.dfg, dev, tag=self.TAG)
 
     def _load(self, g, i, j, deps=()):
         """Weight chunk j of cluster g into the next slab: a ring load in iteration 0, a copy from
@@ -346,14 +329,10 @@ class PBuild(cm.ChipletBuild):
         off, nb = self.chunk_off[g][j]
         si, slab, war = ls.take(nb)
         if i == 0:
-            rings = ls.rings
-            sl, fl, rl, seq, _, _ = rings.take_ex(c, src=self.img[g].address + off, nbytes=nb)
-            prev = [rings.last[c]] if rings.last.get(c) is not None else []
-            ld = self.node(k, c, dm, f"Ld_c{j}_i0_g{g}", "__snax_bingo_kernel_idma_ring_load",
-                           SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl),
-                           list(dict.fromkeys(war + prev + list(deps))))
-            rings.last[c] = ld
-            ld.exec_chunk = rings.last_take
+            ld, _, sl = ls.rings.load_chunk(
+                lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
+                f"Ld_c{j}_i0_g{g}", src=self.img[g].address + off, nbytes=nb, slab=slab, war=war,
+                deps=deps, dm=dm)
             self.slot[(g, j)] = (sl, ld)
         else:
             sl, first = self.slot[(g, j)]
@@ -664,12 +643,9 @@ class PBuild(cm.ChipletBuild):
         p1r = self.p1[R]
         p1x = f"((uint64_t)({p1r.get_c_var_name()}))"
         if self.reduce_impl == "chain":
-            chain = [cm.remote(k, self.sx(0, self.OFF_LOC)) for k in others] + [cm.remote(R, p1x)]
-            ga = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=cm.remote(R, self.sx(0, self.OFF_LOC)), chain=chain, size=self.YB,
-                junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                hops=[(k, 0) for k in others] + [(R, 0)])
-            ga.holds = [p1r]
+            ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                cm.remote, R, 0, others, src=self.sx(0, self.OFF_LOC), dst=p1x, size=self.YB,
+                junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[p1r])
             red = self.node(R, 0, xdma, f"y_chain_i{i}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                             list(dict.fromkeys(loc[k] for k in self.chips)))
             free = {k: red for k in self.chips}
@@ -972,12 +948,9 @@ class PBuild(cm.ChipletBuild):
                     sym_reader[(k, 1, s)] = (sym_reader[(k, 1, s)] if t else []) + [push]
                 ordr = others[::-1] if self.chain_alt and ngather % 2 else others
                 ngather += 1
-                chain = [cm.remote(k, self.sx(0, self.OFF_LOC + off)) for k in ordr] + [cm.remote(R, f"({p1x} + {off})")]
-                ga = SnaxBingoKernelXdmaChainGatherArgs(
-                    local_src=cm.remote(R, self.sx(0, self.OFF_LOC + off)), chain=chain, size=psz,
-                    junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                    hops=[(k, 0) for k in ordr] + [(R, 0)])
-                ga.holds = [p1r]
+                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                    cm.remote, R, 0, ordr, src=self.sx(0, self.OFF_LOC + off), dst=f"({p1x} + {off})", size=psz,
+                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[p1r])
                 red = self.node(R, 0, xdma, f"y_chain_j{j}{sfx}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                 list(loc.values()))
                 last_red = red
@@ -1126,12 +1099,10 @@ class PBuild(cm.ChipletBuild):
                 # params chain_alt: cluster 1's gathers run the ring the other way, so each gather's data follows the
                 # previous gather's finish back along the links instead of meeting it
                 ordr = others[::-1] if self.chain_alt and c == 1 else others
-                chain = [cm.remote(k, self.sx(c, s * SL)) for k in ordr] + [cm.remote(R, f"({p1x[c]} + {s * SL})")]
-                ga = SnaxBingoKernelXdmaChainGatherArgs(
-                    local_src=cm.remote(R, self.sx(c, s * SL)), chain=chain, size=self.ROWS * self.dn_sl[c][jl][1] * 2,
-                    junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                    hops=[(k, c) for k in ordr] + [(R, c)])
-                ga.holds = [self.p1c[c]]
+                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                    cm.remote, R, c, ordr, src=self.sx(c, s * SL), dst=f"({p1x[c]} + {s * SL})",
+                    size=self.ROWS * self.dn_sl[c][jl][1] * 2,
+                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.p1c[c]])
                 if pairs:
                     first = list(copies) if jl == 0 else list(prev_pair)
                 else:
@@ -1235,8 +1206,8 @@ class PBuild(cm.ChipletBuild):
                                             for g in range(self.G)], n)
 
     def _stage_checks(self, stop):
-        """The checks of a stopped run (params stop). check_bytes bytes a slice: a host compare
-        costs ~30 ns a byte."""
+        """The checks of a stopped run (params stop). check_bytes bytes a slice: the host
+        compares uncached L3 byte by byte."""
         n = int(self.p.get("check_bytes", 64))
         lay, mesh = self.lay, self.d.mesh
         checks = [self._check_x(n)]
@@ -1339,32 +1310,13 @@ class PBuild(cm.ChipletBuild):
                         ordered(byk.get((f"y_store_j{j}", R, 0)), w, f"root fold slot j{j}->j{j + 2} (store)")
         return bad
 
-    def reuse_gemm_config(self):
-        """params gemm_reuse: a GEMM whose configuration equals the previous GEMM's on the same core (every
-        field but the four operand addresses) becomes gemm_minimal, which rewrites the addresses and starts.
-        Each core runs its tasks in creation order (chain_program_order), so the previous GEMM there is the
-        one created before it. Returns the number converted."""
-        full = "__snax_bingo_kernel_gemm_full"
-        addr = ("input_A_addr", "input_B_addr", "input_C_addr", "output_D_addr")
-        prev, n = {}, 0
-        for t in sorted(self.dfg.node_list, key=lambda t: t.node_id):
-            if t.kernel_name != full:
-                continue
-            key = (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
-            sig = tuple(sorted((k, v) for k, v in vars(t.kernel_args).items() if k not in addr and not k.startswith("_")))
-            if prev.get(key) == sig:
-                a = t.kernel_args
-                t.kernel_name = "__snax_bingo_kernel_gemm_minimal"
-                t.kernel_args = SnaxBingoKernelGemmMinimalArgs(a.input_A_addr, a.input_B_addr, a.input_C_addr, a.output_D_addr)
-                n += 1
-            prev[key] = sig
-        print(f"[{self.TAG}] gemm_reuse: {n} GEMMs run as gemm_minimal")
-        return n
-
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
         self.chain_program_order()
         if self.p.get("gemm_reuse"):
-            self.reuse_gemm_config()
+            # params gemm_reuse: a GEMM whose configuration equals the previous GEMM's on its core (every
+            # field but the four operand addresses) runs as gemm_minimal; each core runs its tasks in
+            # creation order (chain_program_order), so the previous GEMM there is the one created before it
+            print(f"[{self.TAG}] gemm_reuse: {reuse_gemm_config(self.dfg)} GEMMs run as gemm_minimal")
         if self.sync == "edge":
             bad = self.check_hazards()
             if bad:
@@ -1375,23 +1327,11 @@ class PBuild(cm.ChipletBuild):
         super().finish(app_name, x_prefixes)
 
 
+def _app_name(S):
+    return (f"{S.p.get('model', 'dsv2-lite-l0')} FFN prefill, {S.T} tokens in {S.NI} x {S.ROWS}, "
+            f"{len(S.chips)} chips x {S.NC} clusters, bcast={S.bcast_impl} "
+            f"reduce={S.reduce_impl} sync={S.sync}")
+
+
 def run():
-    ap = argparse.ArgumentParser(description="ffn prefill workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = PBuild(args, p, plat, hw)
-    S.build()
-    S.finish(f"{p.get('model', 'dsv2-lite-l0')} FFN prefill, {S.T} tokens in {S.NI} x {S.ROWS}, "
-             f"{len(S.chips)} chips x {S.NC} clusters, bcast={S.bcast_impl} "
-             f"reduce={S.reduce_impl} sync={S.sync}")
+    run_driver("ffn prefill workload generator", PBuild, _app_name)

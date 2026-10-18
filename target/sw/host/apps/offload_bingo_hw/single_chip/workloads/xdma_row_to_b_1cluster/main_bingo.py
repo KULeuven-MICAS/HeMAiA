@@ -10,16 +10,16 @@
 # lives in util/sim/xdma/xdma_ops_lib.py.
 
 # BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
-# Per-op row-major to VersaCore B-layout conversion sweep over nine
-# configurations.
+# Per-op row-major to VersaCore B-layout conversion sweep over 81
+# configurations (3 array shapes x 3 element widths x 9 tile points).
 #
 # Task dependency graph:
 #
-# For each config i = 0..8:
+# For each config i = 0..80:
 #   Load_i -> Op_i -> Store_row_to_b_cfg[i] -> Check_row_to_b_cfg[i]
 #
 # Config ordering:
-#   Check_row_to_b_cfg[i] -> Load_[i+1]    for i = 0..7
+#   Check_row_to_b_cfg[i] -> Load_[i+1]    for i = 0..79
 # END WORKLOAD DESCRIPTION AND TASK GRAPH
 
 import os
@@ -36,8 +36,8 @@ from xdma_ops_lib import run_op_workload  # noqa E402
 # comes from each config's array_shape, and the B-operand it converts has shape
 # rows = K_T*tileSize, cols = N_T*meshCol.
 # Sweep every RUNNABLE variant of this converter: 3 array shapes x 3 element widths
-# x 9 (tile) points = 81 configs.  Each (shape, width) pair is a DISTINCT kernel and a
-# DISTINCT LUT (xdma_<family>_e<N>_<SHAPE>), so one workload run fills 9 LUTs.
+# x 9 (tile) points = 81 configs.  Each (shape, width) pair is a distinct LUT
+# (xdma_<family>_e<N>_<SHAPE>), so one workload run fills 9 LUTs; the kernel is the same.
 # The grid is capped so the largest single buffer stays <= 64 KiB: the L1 src/dst pair is
 # shared across configs (xdma_ops_lib), but it is sized at the max over all of them.
 CONFIGS = [{"M_T": 1, "K_T": k, "N_T": n, "elem_bytes": eb, "array_shape": s}

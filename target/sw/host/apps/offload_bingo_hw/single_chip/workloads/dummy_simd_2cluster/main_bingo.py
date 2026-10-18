@@ -44,7 +44,7 @@ cur_chiplet_id = 0
 
 # id abstraction aligned with the cmd processor hw
 # There is one host core per chiplet, and the bingo mini-compiler requires every
-# host kernel to sit on it (cluster 0, core 2) -- even when the buffer it checks
+# host kernel to sit on it (cluster 0's host core) -- even when the buffer it checks
 # lives in another cluster's L1.
 HOST_CLUSTER_ID = 0
 

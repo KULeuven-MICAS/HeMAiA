@@ -23,8 +23,12 @@ the ablation: the paper's cluster has no decompressor.
 
 import os
 import re
+import sys
 
 import numpy as np
+
+# workloads/common: fabric.py
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "common"))
 
 from bingo_data_staging import DataStaging  # noqa: E402
 from bingo_dfg import BingoDFG  # noqa: E402
@@ -47,9 +51,8 @@ from bingo_kernel_args import (  # noqa: E402
     HostBingoKernelChipBarrierArgs, HostBingoKernelSyncReportArgs,
     HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
-    SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSyncMarkArgs, SnaxBingoKernelSyncProbeArgs,
-    SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
-    SnaxBingoKernelXdmaMemsetArgs)
+    SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
+    SnaxBingoKernelXdmaMemsetArgs, XDMA_EWJCT_FMT_FP16, XDMA_EWJCT_OP_ADD, xdma_ewjct_csr0)
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_platform import core_roles, writer_junction_index  # noqa: E402
 from libs import Ctx, MemLevel, Pipeline  # noqa: E402
@@ -57,73 +60,27 @@ from libs.blocks import LoadStream, WeightRings  # noqa: E402
 from libs.crest import TRAILER_MAGIC, CrestRings  # noqa: E402
 from libs.verify import checks as vchecks  # noqa: E402
 
-L1_CAPACITY = 990000
-MESH = (16, 4, 16)
-MASK40 = "0xFFFFFFFFFFULL"
-EW_F16_ADD = (0 << 4) | 0          # elementwise junction CSR(0): fmt FP16, op ADD
+# the shared mesh, address and fold helpers, re-exported for the workloads that import them from here
+from fabric import (L1_CAPACITY, MASK40, MESH, FabricBase, crest_codec, dist,  # noqa: E402,F401
+                    fold_cycle, remote)
+
+EW_F16_ADD = xdma_ewjct_csr0(XDMA_EWJCT_OP_ADD, XDMA_EWJCT_FMT_FP16)
 PAIR = 32                          # an INT4 GEMV's column unit
 
 
-def remote(chip, local_expr):
-    """`local_expr` (a local address, the same on every chip) on chip `chip`."""
-    return f"(chiplet_addr_transform_full(0x{chip:02x}, ((uint64_t)({local_expr}) & {MASK40})))"
+class ClusterNodes:
+    """The node factory the mini_compiler blocks take (GemmQueue.dispatch, fa_sweep): chip k cluster c
+    of a ChipletBuild, creating its nodes with the build's names."""
+
+    def __init__(self, fb, k, c):
+        self.fb, self.chiplet, self.cluster, self.dfg = fb, k, c, fb.dfg
+        self.gemm, self.dm = fb.roles["gemm"], fb.roles["dm"]
+
+    def node(self, name, core, kernel, args, after=()):
+        return self.fb.node(self.chiplet, self.cluster, core, name, kernel, args, after)
 
 
-def dist(a, b):
-    return abs((a >> 4) - (b >> 4)) + abs((a & 15) - (b & 15))
-
-
-def fold_cycle(chips, root):
-    """A Hamiltonian cycle over `chips` through `root` (root first), each step to a chip at
-    Manhattan distance 1, or 2 where the grid leaves no choice: the fewest distance-2 steps,
-    found by backtracking (16 chips: instant). Falls back to a path if no cycle exists."""
-    nb = {k: sorted((m for m in chips if m != k and dist(k, m) <= 2),
-                    key=lambda m: (dist(k, m), m)) for k in chips}
-
-    def search(path, seen, longs, budget, cycle):
-        k = path[-1]
-        if len(path) == len(chips):
-            if not cycle:
-                return path
-            d = dist(k, root)
-            if d == 1 or (d == 2 and longs < budget):
-                return path
-            return None
-        free = [m for m in nb[k] if m not in seen]
-        free.sort(key=lambda m: (dist(k, m), sum(1 for q in nb[m] if q not in seen), m))
-        for m in free:
-            ln = longs + (dist(k, m) == 2)
-            if ln > budget:
-                continue
-            seen.add(m)
-            got = search(path + [m], seen, ln, budget, cycle)
-            if got:
-                return got
-            seen.discard(m)
-        return None
-
-    for cycle in (True, False):
-        for budget in range(0, 5):
-            got = search([root], {root}, 0, budget, cycle)
-            if got:
-                return got
-    raise ValueError(f"no fold order over {[hex(c) for c in chips]}")
-
-
-def crest_codec(dsv2_dir):
-    """snax_cluster's CREST reference codec (hw/chisel/doc/crest_decompressor/crest_codec.py)."""
-    import importlib.util
-    root = os.path.abspath(dsv2_dir)
-    while root != os.path.dirname(root) and not os.path.isdir(os.path.join(root, "hw", "chisel")):
-        root = os.path.dirname(root)
-    path = os.path.join(root, "hw", "chisel", "doc", "crest_decompressor", "crest_codec.py")
-    spec = importlib.util.spec_from_file_location("crest_codec", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-class ChipletBuild:
+class ChipletBuild(FabricBase):
     TAG = "l2"                          # the prefix of every staged symbol and printed line
 
     def __init__(self, args, p, plat, hw):
@@ -197,7 +154,7 @@ class ChipletBuild:
         # each chiplet's id maps hold its own entries only (bingo_g2l16_build, bingo_hw_scheduler_sparse)
         dfg.compact_id_maps = bool(p.get("compact_id_maps", False))
         # each cluster's L1 holds its own tasks' global ids instead of a table of every task's
-        # (bingo_hw_scheduler_init_gid_lists): its L1 cost no longer grows with the whole graph
+        # (bingo_hw_scheduler_init_gid_lists): its L1 cost does not grow with the whole graph
         dfg.gid_lists = bool(p.get("gid_lists", False))
         dfg.static_args_image = bool(p.get("static_args_image", True))
         # the generator's faster host init (bingo_dfg_emit: L1 addresses at compile time, the kernel list
@@ -218,23 +175,6 @@ class ChipletBuild:
         self.checks = []                       # (name, got handle, golden array, bytes)
 
     # ---- topology helpers -----------------------------------------------------------------
-    def chip(self, g):
-        return self.chips[g // self.NC]
-
-    def c(self, g):
-        return g % self.NC
-
-    def gs(self, k):
-        i = self.chips.index(k)
-        return list(range(i * self.NC, (i + 1) * self.NC))
-
-    def cx(self, g):
-        return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw,
-                   chiplet=self.chip(g)).at(self.c(g))
-
-    def cx_chip(self, k):
-        return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw, chiplet=k)
-
     def fold_order(self):
         """The chips in the order the reduce adds their partials (FP16 addition does not
         associate, so the golden adds in it): the root's pulls and adds start from the root's
@@ -289,24 +229,9 @@ class ChipletBuild:
         return out
 
     # ---- nodes ----------------------------------------------------------------------------
-    def node(self, k, c, core, name, kernel, kargs, after=()):
-        return self.cx_chip(k).node(f"{name}_k{k:02x}", core, kernel, kargs, after, cluster=c)
-
-    def edge(self, a, b):
-        self.dfg.bingo_add_edge(a, b)
-
-    def anchor(self, tag, after=()):
-        nd = self.node(self.ROOT, 0, self.roles["dm"], f"A{self.n_anchor}_{tag}",
-                       "__snax_bingo_kernel_sync_mark",
-                       SnaxBingoKernelSyncMarkArgs(stamp_buf=self.stamps, slot=self.n_anchor,
-                                                   mark_addr=self.mark), after)
-        self.n_anchor += 1
-        return nd
-
-    def probe(self, k, tag, after=()):
-        """A DM-core task on chip k's cluster 0 that does nothing but order."""
-        return self.node(k, 0, self.roles["dm"], f"P_{tag}", "__snax_bingo_kernel_sync_probe",
-                         SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0), after)
+    def at(self, k, c):
+        """Chip k's cluster c as the node factory a mini_compiler block takes."""
+        return ClusterNodes(self, k, c)
 
     def barrier(self, after):
         """One chip barrier over every compute chip: a task on each chip's cluster 0 DM core,
@@ -367,15 +292,6 @@ class ChipletBuild:
         print(f"[{self.TAG}] barrier fence: {len(self.barrier_rounds)} barrier(s) per chip, "
               f"{added} edges before pruning")
         return added
-
-    def sv(self, k, c, off):
-        """A view of chip k cluster c's symmetric buffer at `off`."""
-        return self.sym[(k, c)].view(off)
-
-    def sx(self, c, off):
-        """The C expression of the root's own symmetric buffer at `off`: the same local
-        address on every chip."""
-        return f"((uint64_t)({self.sym[(self.ROOT, c)].get_c_var_name()}) + {off})"
 
     # ---- buffers --------------------------------------------------------------------------
     def make_sym(self, nbytes, xb, dst_lead=0):
@@ -600,15 +516,9 @@ class ChipletBuild:
         if self.p.get("anchor_reduce", False):
             before = [self.anchor("reduce", list(dict.fromkeys(loc.values())))]
         if self.reduce_impl == "chain":
-            chain = [remote(k, self.sx(0, self.OFF_LOC)) for k in others] + \
-                    [remote(R, self.dst_expr())]
-            ga = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=remote(R, self.sx(0, self.OFF_LOC)), chain=chain, size=xb,
-                junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                hops=[(k, 0) for k in others] + [(R, 0)])
-            # the chain names its buffers by address expressions, which the static L1 planner
-            # does not see: name dst here, so its live range covers the gather
-            ga.holds = [self.dst_buf]
+            ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                remote, R, 0, others, src=self.sx(0, self.OFF_LOC), dst=self.dst_expr(), size=xb,
+                junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.dst_buf])
             gth = self.node(R, 0, xdma, "y_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                             before or list(dict.fromkeys(loc[k] for k in self.chips)))
             self.reduce_end = [gth]

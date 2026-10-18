@@ -48,25 +48,26 @@ THE MECHANISMS (params): bcast_l1 | pull (x), chain | root (the partials), edge 
 cross-chip dependency: a BINGO edge, or the chip barrier before and after each chunk's reduce, a
 full fence). The ladder base -> bcast -> bcast_reduce -> all adds one each.
 
-PARAMETERS (params.hjson): the platform (num_chiplets, num_clusters, model), tokens, chunk, keys, bc,
+PARAMETERS (params.hjson): the platform (num_chiplets, num_clusters), tokens, chunk, keys, bc,
 w_chunk_bytes and w_buffers (the ring chunk and the L1 slabs), weight_ring, weight_crest (false),
 bcast, reduce, sync, barrier_mode, barrier_fence, gemm_async, static_l1, l1_capacity, d2d_ddr, and
 n_calib (calibration tokens), kv_cache and weights (paths under the repository), root_slice (the
-root's pull slice), compact_id_maps, gid_lists. The orders and buffers (each explained where it is read):
+root's pull slice), compact_id_maps, gid_lists, relay_per_gather (each dependency-tag relay of
+an xDMA task serves that one task; default true). The orders and buffers (each explained where it is read):
 x_puts_first, prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
 wo_split_rows. The checks: checks (y | stages), y_windows (3 | 4). For bisecting a failure: stop
 (full | q8 | sweep | post | x), x_root, x_put_cluster, x_ring.
 """
 
-import argparse
 import os
 import sys
 
-import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import repo_root, run_driver  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
@@ -78,7 +79,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulF16Args,
     SnaxBingoKernelXdmaChainGatherArgs, simd_beats, simd_fp16_lanes)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from bingo_platform import load_cluster_cfg, parse_platform_cfg  # noqa: E402
 from libs.blocks import FaSweepCfg, GemmQueue, WeightRings, fa_sweep, fa_sweep_alloc  # noqa: E402
 from libs.comm.nest import convert_args, d_to_a_args  # noqa: E402
 
@@ -447,7 +447,7 @@ class FaBuild(cm.ChipletBuild):
             transpose_A=0, transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=0, d_shift=k_shift)
         if not self.gemm_async:
             return self.node(k, c, self.roles["gemm"], name, "__snax_bingo_kernel_gemm_full", args, list(deps))
-        return GemmQueue.of(self.dfg, True).dispatch(_Cl(self, k, c), name, args, list(deps), phase)
+        return GemmQueue.of(self.dfg, True).dispatch(self.at(k, c), name, args, list(deps), phase)
 
     def simd_mul(self, g, name, a, b, out, nelems, deps):
         k, c = self.chip(g), self.c(g)
@@ -669,12 +669,9 @@ class FaBuild(cm.ChipletBuild):
             size, doff, tag = (self.YB, 0, "") if half is None else (self.YB // 2, half * self.YB // 2, f"_h{half}")
             dst = f"((uint64_t)({dstb.get_c_var_name()}) + {doff})"
             if self.reduce_impl == "chain":
-                chain = [cm.remote(k, self.sx(c, src_off)) for k in others] + [cm.remote(R, dst)]
-                ga = SnaxBingoKernelXdmaChainGatherArgs(
-                    local_src=cm.remote(R, self.sx(c, src_off)), chain=chain, size=size,
-                    junction=str(self.jct["Elementwise"]), jct_csr0=EW_F16_ADD,
-                    hops=[(k, c) for k in others] + [(R, c)])
-                ga.holds = [dstb]
+                ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                    cm.remote, R, c, others, src=self.sx(c, src_off), dst=dst, size=size,
+                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[dstb])
                 serial = [] if self.chain_concurrent or self._last_chain is None else [self._last_chain]
                 out[c] = self.node(R, c, xdma, f"y_chain_c{c}_i{i}{tag}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                    before[c] + list(war.get(c, [])) + serial)
@@ -770,7 +767,7 @@ class FaBuild(cm.ChipletBuild):
                     parts_ready[(k, c, i)] = list(q8[0][1])
                     post_res[g] = dict(xt_rd=parts_ready[(k, c, i)])
                     continue
-                sw = fa_sweep(_Cl(self, k, c), self.sweep_cfg, self.bufs(g, i)["swp"], TileSource(self, g, i), q8,
+                sw = fa_sweep(self.at(k, c), self.sweep_cfg, self.bufs(g, i)["swp"], TileSource(self, g, i), q8,
                               self.roles, name=f"s{i}_",
                               early=2 if len(self.ls[g].slabs) >= 4 else 1)
                 swp_res[g] = sw
@@ -925,33 +922,10 @@ class FaBuild(cm.ChipletBuild):
         super().finish(app_name, x_prefixes)
 
 
-class _Cl:
-    """The node factory GemmQueue and fa_sweep take: chip k cluster c of the build, with the driver's names."""
-
-    def __init__(self, fb, k, c):
-        self.fb, self.chiplet, self.cluster, self.dfg = fb, k, c, fb.dfg
-        self.gemm, self.dm = fb.roles["gemm"], fb.roles["dm"]
-
-    def node(self, name, core, kernel, args, after=()):
-        return self.fb.node(self.chiplet, self.cluster, core, name, kernel, args, after)
+def _app_name(S):
+    return (f"DeepSeek-V2-Lite layer 1 MLA attention prefill, {S.T} tokens, {len(S.chips)} chips x {S.NC} "
+            f"clusters, bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
 
 
 def run():
-    ap = argparse.ArgumentParser(description="fa prefill workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    plat = parse_platform_cfg(args.platformcfg)
-    hw = load_cluster_cfg(args.hwcfg)
-    S = FaBuild(args, p, plat, hw)
-    S.build()
-    S.finish(f"DeepSeek-V2-Lite layer 1 MLA attention prefill, {S.T} tokens, {len(S.chips)} chips x {S.NC} "
-             f"clusters, bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
+    run_driver("fa prefill workload generator", FaBuild, _app_name)

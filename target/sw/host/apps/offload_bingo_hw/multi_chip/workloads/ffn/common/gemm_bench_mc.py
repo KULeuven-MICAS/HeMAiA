@@ -18,7 +18,10 @@ The rest of the platform is set up as for the prefill (it is PBuild with other b
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+sys.path.insert(0, HERE)
+from driver import run_driver  # noqa: E402
 import ffn_prefill_mc as M  # noqa: E402
 from ffn_prefill_mc import (SnaxBingoKernelGemmFullArgs, SnaxBingoKernelIdma1dCopyArgs,  # noqa: E402
                             SnaxBingoKernelSimdAddF16Args, BingoMemSymbol)
@@ -128,20 +131,5 @@ class GBench(M.PBuild):
 
 
 def run():
-    import argparse
-    import hjson
-    from bingo_platform import load_cluster_cfg, parse_platform_cfg
-    ap = argparse.ArgumentParser(description="GEMM shapes in isolation")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True)
-    args = ap.parse_args()
-    with open(args.cfg) as f:
-        p = dict(hjson.load(f))
-    S = GBench(args, p, parse_platform_cfg(args.platformcfg), load_cluster_cfg(args.hwcfg))
-    S.build()
-    S.finish("FFN GEMM shapes in isolation")
+    run_driver("GEMM shapes in isolation", GBench, lambda S: "FFN GEMM shapes in isolation",
+               dsv2_dir={"required": True})

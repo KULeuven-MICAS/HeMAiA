@@ -6,7 +6,7 @@
 #
 # Per-precision GEMM cycle sweep: i8i8_i8. All logic is shared in
 # util/sim/gemm/gemm_psweep_lib.py; this just selects the precision. The size grid
-# lives in gemm_psweep_lib.CONFIGS (shared across precisions for comparable LUTs).
+# is built by gemm_psweep_lib.build_configs() (shared across precisions for comparable LUTs).
 import os
 import sys
 

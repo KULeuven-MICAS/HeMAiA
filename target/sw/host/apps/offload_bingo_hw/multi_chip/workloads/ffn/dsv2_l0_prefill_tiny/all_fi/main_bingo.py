@@ -5,7 +5,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """DeepSeek-V2-Lite's dense FFN (layer 0) as a 128-token prefill on sixteen chiplets, variant
-all_t64: params.hjson says which mechanisms it uses; the driver is ../../common/ffn_prefill_mc.py."""
+all_fi: params.hjson says which mechanisms it uses; the driver is ../../common/ffn_prefill_mc.py."""
 
 import os
 import sys

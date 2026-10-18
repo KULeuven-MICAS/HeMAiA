@@ -4,34 +4,27 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# SIMD PRIMITIVES -- one armed chain per kernel, the five building blocks the fused
-# whole-op kernels are composed from. Each runs on the cluster's SIMD core.
+# SIMD quantiser on its own: one fp16_to_int8 node per config, on the cluster's SIMD core.
 #
-# The fused workloads (softmax / rmsnorm / silu / swiglu / rope) each measure a whole
+# The fused workloads (softmax / rmsnorm / silu / swiglu / rope) each cover a whole
 # pipeline, so none of them prices a single operator: a softmax cycle count folds a
 # reduce, a map, the scalar work between them and a second map into one number. This
-# workload arms ONE stage at a time, so the cost model has a per-operator curve and the
-# difference between a fused kernel and the sum of its stages is visible as what the
-# fusion actually bought.
+# workload arms ONE stage, so the cost model has a per-operator curve and the difference
+# between a fused kernel and the sum of its stages is visible as what the fusion bought.
 #
-# Per config, in this dispatch order (gather_simd_luts.py's OP_SPEC depends on it):
+# Per config (gather_simd_luts.py's OP_SPEC depends on this dispatch order):
 #
 #   1 fp16_to_int8        out = sat127(rne(q))            the quantiser alone
 #
-# Between them these cover every stage of the chain except EW0, the PRE-map elementwise,
-# which by construction cannot be armed on its own: its whole purpose is to combine
-# against a broadcast operand BEFORE a map, so a bare EW0 is just EW1 with a longer
-# path. simd_softmax is what exercises it.
+# The chain's EW0, the PRE-map elementwise, cannot be armed on its own: its whole purpose
+# is to combine against a broadcast operand BEFORE a map, so a bare EW0 is just EW1 with a
+# longer path. simd_softmax is what exercises it.
 #
-# EXACTNESS. Every golden here is computed to be bit-reproducible rather than merely
-# close, because the check kernel offers a tolerance for fp16 but only byte-exact for
-# int8:
-#   * the map uses LINEAR a=2, which is an exponent increment -- exact in fp16;
-#   * the reduce uses MAX, which is order-independent (ADD is not: the accumulator folds
-#     in hardware order and fp16 addition does not associate);
-#   * the quantiser gets inv_scale = 1.0 and integer-valued inputs, so the RNE round has
-#     nothing to round and the check can be byte-exact. Two out-of-range values per row
-#     make the saturation path part of the test rather than an untested branch.
+# EXACTNESS. The golden is computed to be bit-reproducible rather than merely close,
+# because the check kernel offers a tolerance for fp16 but only byte-exact for int8: the
+# quantiser gets inv_scale = 1.0 and integer-valued inputs, so the RNE round has nothing
+# to round and the check can be byte-exact. Two out-of-range values per row make the
+# saturation path part of the test rather than an untested branch.
 
 import os
 import sys
@@ -88,7 +81,7 @@ CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
 def _ref(rows, cols, i):
-    """Inputs and the five goldens for config *i*. See the EXACTNESS note above."""
+    """Input and the int8 golden for config *i*. See the EXACTNESS note above."""
     rng = np.random.RandomState(70100 + i)
     n = rows * cols
 
@@ -142,12 +135,11 @@ class G:
 
 
 def build_config(g, i, meta, buf, prev):
-    """One config: load the inputs, run the five primitives, store and check each.
+    """One config: load the input, run the quantiser, store and check it.
 
-    The five are chained in dispatch order and every config is chained behind the
-    previous config's last check, so one L1/L3 buffer set serves the whole sweep: each
-    buffer is dead before it is reused. Twelve private buffer sets would be twelve
-    never-freed bingo_l3_alloc calls.
+    Every config is chained behind the previous config's last check, so one L1/L3 buffer
+    set serves the whole sweep: each buffer is dead before it is reused. A private buffer
+    set per config would be a never-freed bingo_l3_alloc call each.
     """
     rows = CONFIGS[i]["rows"]
     cols = CONFIGS[i]["cols"]
@@ -172,7 +164,7 @@ def build_config(g, i, meta, buf, prev):
 
     ld_x = load("x", m["x"], buf["x"], nb, prev)
 
-    # 5 -- the quantiser alone, inv_scale = 1.0 (see the EXACTNESS note: byte-exact).
+    # The quantiser alone, inv_scale = 1.0 (see the EXACTNESS note: byte-exact).
     k5 = g.node(f"Quant_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_fp16_to_int8",
                 SnaxBingoKernelSimdFp16ToInt8Args(
                     buf["x"], buf["o8"], beats=beats, rows=rows,
@@ -221,9 +213,8 @@ def main():
 
     max_n = max(r * c for (r, c) in _LUT_GRID)
     max_rows = max(r for (r, _) in _LUT_GRID)
-    # Names are deliberately ordered so the elementwise operands land adjacent and in
-    # ascending address order: the L1 allocator hands out addresses in name order, and
-    # the elementwise reader bases at the lower operand and strides upward.
+    # The L1 allocator hands out addresses in name order. The quantiser uses only x and
+    # o8; the other buffers are allocated but unused.
     buf = {
         "x":   g.l1("prims_a_x", max_n * 2),
         "ea":  g.l1("prims_b_ea", max_n * 2),

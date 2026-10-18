@@ -8,17 +8,22 @@ dsv2/
   common/            what every dsv2 workload shares
     dsv2_datagen.py    the golden, cut to the mapping, and its staging (HBM, L3)
     dsv2_staged.py     the stage driver: params, data, weight rings, helpers, checks, emission
+    dsv2_mc.py         the multi-chiplet stage driver (six_chiplet, sixteen_chiplet)
+    mc_stages/         the multi-chiplet stages' code, one file per stage (six_chiplet, sixteen_chiplet)
     dsv2.mk            the build a stage's Makefile includes
   two_chiplet/       one compute chiplet (4 clusters) + the memory chiplet with its HBM
     full_layer/        the whole layer, every stage, with the layer's tuned settings
     stage1_rmsnorm/ ... stage8_experts/
-  sixteen_chiplet/   the multi-chiplet mapping -- planned, see its README
+  six_chiplet/       four compute chiplets (2 clusters each) + two memory chiplets, C-M-C rows
+    full_layer/ and stage1_rmsnorm/ ... stage8_experts/
+  sixteen_chiplet/   twelve compute + four memory chiplets: full_layer/ and one directory per stage
+                     (see its README)
   dsv2_summary.py    one number sheet per run: layer time, phases, engines, HBM bytes, checks
 ```
 
 ## two_chiplet: the full layer, and one workload per stage
 
-Platform: `hemaia_twochiplet_16MBL3_4cluster.hjson`, the only cfg whose memory chiplet has an HBM.
+Platform: `hemaia_twochiplet_16MBL3_4cluster.hjson`: one compute chiplet and a memory chiplet with its HBM.
 Weights are pushed by the memory chiplet into a ring per cluster in L3 and copied into L1 slabs by
 each cluster's DM core.
 
@@ -29,7 +34,8 @@ one at a time). It holds no code of its own; the layer's code is the stage chain
 Each stage directory holds **that stage's code only** (`main_bingo.py`: `build(S)` and
 `checks(S)`), and builds on the stage before it — the stage-N workload builds stages 1..N. The
 build is the order one monolithic builder would use (every stage's compute, then every stage's
-checks), so the graph, and every core's in-order task stream, is the one the measured runs used.
+checks), so the graph and every core's in-order task stream are the same whichever stage directory
+builds them.
 
 | Stage | Adds | Checks | 1 token, stages 1–N | 4-token pass |
 |---|---|---|---|---|
@@ -74,4 +80,4 @@ run BEFORE part of an earlier one hooks into it: stage 3 puts W_DKV ahead of sta
 
 ## sixteen_chiplet
 
-Planned: see [sixteen_chiplet/README.md](sixteen_chiplet/README.md).
+Twelve compute and four memory chiplets, every stage byte-exact: see [sixteen_chiplet/README.md](sixteen_chiplet/README.md).

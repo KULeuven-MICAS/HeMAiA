@@ -8,9 +8,8 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # gemm_double_buffer stages the full A, B and golden D on the MEMCHIP
-# (mempool.bin) instead of baking them into the host WIDE_SPM `.data`. With the
-# 88 KiB device binary included, the baked operands left the bingo L3 heap far
-# too small for this workload's 33-node double-buffered DFG (L3 malloc failed).
+# (mempool.bin) instead of baking them into the host WIDE_SPM `.data`, which keeps the
+# bingo L3 heap free for this workload's double-buffered DFG.
 # A tiles are offsets into A; golden D tiles are offsets into D.
 
 import argparse

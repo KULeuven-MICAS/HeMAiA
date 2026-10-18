@@ -2,12 +2,12 @@
 """Operands and goldens for one MoE feed-forward layer.
 
 Everything is generated ROW-MAJOR and converted to the array's blocked layouts with
-util/sim/xdma/layout_convert.py, rather than being generated blocked. The old version
-generated B directly as ``(K, N, tileSize, meshCol)``, which is not B-layout -- B is
-``[n][k][c][s]``, a different permutation with the same flat length. Nothing caught it
-because the data was random and the same flat buffer went to the golden model, so both
-sides were wrong identically. The moment a real weight matrix is involved that stops
-being true, which is exactly what an FFN is.
+util/sim/xdma/layout_convert.py, rather than being generated blocked. B-layout is
+``[n][k][c][s]``, not ``(K, N, tileSize, meshCol)`` -- a different permutation with the
+same flat length -- and generating row-major and converting avoids writing that
+permutation by hand. A wrong hand-written permutation would go unnoticed on random data,
+because the same flat buffer goes to the golden model and both sides would be wrong
+identically; a real weight matrix, which is what an FFN has, would expose it.
 
 The golden chain mirrors the device stage for stage, including the two narrowings that
 lose information (int32 -> fp16 after each GEMM, fp16 -> int8 before the down
@@ -28,11 +28,11 @@ from sim_golden_models import int32_to_fp16_golden  # noqa: E402
 def int8_scale_for(peak):
     """The largest power of two that keeps `peak` inside the int8 range.
 
-    Derived from the data rather than fixed. The baked 16.0 the *_f16_i8 kernels use is
-    sized for activations around [-8, 8]; a SwiGLU is the PRODUCT of two GEMM outputs, so
-    here it reaches the thousands and 16.0 saturated 83% of the tensor -- a chain whose
-    every value is +-127 agrees with its golden no matter what the SwiGLU or the reshape
-    did. A power of two keeps the scaling exact in fp16, so it adds no error of its own.
+    Derived from the data rather than fixed. A fixed 16.0 is sized for activations around
+    [-8, 8]; a SwiGLU is the PRODUCT of two GEMM outputs, so here it reaches the thousands
+    and a fixed 16.0 would saturate most of the tensor -- a chain whose every value is
+    +-127 agrees with its golden no matter what the SwiGLU or the reshape did. A power of
+    two keeps the scaling exact in fp16, so it adds no error of its own.
 
     This workload drives the standalone simd_fp16_to_int8 kernel, whose inv_scale is an
     ordinary argument, so it is free to choose.
@@ -57,8 +57,8 @@ def _to_fp16(x_i32):
 def _swiglu(gate_f16, up_f16):
     """out = silu(gate) * up. FP32 internal, FP16 in and out -- the SIMD's own contract.
 
-    The sigmoid is written branch-wise rather than as 1/(1+exp(-x)): a GEMM over 64 int8
-    terms reaches the low thousands, and exp(+2000) overflows fp32 long before silu does
+    The sigmoid is written branch-wise rather than as 1/(1+exp(-x)): a GEMM over d_model int8
+    terms reaches the thousands, and exp(+2000) overflows fp32 long before silu does
     anything interesting. The two branches are algebraically the same function and agree
     to the last bit where both are finite.
     """
@@ -167,8 +167,7 @@ def generate_moe_data(p):
 def stage(st, data, p):
     """Hand every array to DataStaging and return the handles the DFG names.
 
-    DataStaging decides between the host image and the memory chiplet from the platform,
-    which the hand-rolled `.wide_spm` emitter this replaced could not do.
+    DataStaging decides between the host image and the memory chiplet from the platform.
     """
     E = p["num_experts"]
     h = {

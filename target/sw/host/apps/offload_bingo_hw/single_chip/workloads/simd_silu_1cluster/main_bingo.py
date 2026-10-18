@@ -11,7 +11,7 @@
 #   Load x[rows,cols] -> Silu __snax_bingo_kernel_simd_silu_f16_f16 -> Store + Check(fp16 tol)
 #
 # Args are HW-free: { input_addr, output_addr, rows, cols }. The kernel derives everything else
-# (the StreamMap SILU func, the 64-B beat count = cols/32) internally.
+# (the StreamMap SILU func, the beat count = cols / SIMD_FP16_LANES) internally.
 
 import os
 import sys
@@ -51,7 +51,7 @@ DMA_CORE = _ROLES["dm"]
 HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
 
-# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
+# (rows, cols); each row is a length-cols tile (cols a multiple of SIMD_FP16_LANES). A rows x cols grid for the
 # fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
 # row so the cols slope de-confounds from the rows==1 fast-path drop.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
@@ -103,8 +103,8 @@ def build_mempool(st):
 
 # One shared L1/L3 buffer set is reused across all 12 serialized configs (each
 # config's Check depends on the previous config's Check, so the buffers are dead
-# before reuse). Giving every config its OWN L3 out buffer emitted 12 separate
-# never-freed bingo_l3_alloc calls and OOM'd the small 128 KiB L3 heap.
+# before reuse). L3 allocations are never freed, so a separate L3 out buffer per
+# config would exhaust the small L3 heap.
 def build_config(g, i, meta, l1_x, l1_out, l3_out, prev):
     rows  = CONFIGS[i]["rows"]
     cols  = CONFIGS[i]["cols"]         # per-row length

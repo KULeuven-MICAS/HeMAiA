@@ -3,7 +3,7 @@
 
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
-# And then the mini-compiler will emit the WORKLOAD.h file
+# And then the mini-compiler emits the offload_bingo_hw.h file
 
 # Conduct D=A*B in a single cluster with separate load and compute
 # issue the load commands for A and B in parallel using the host DMA and device DMA respectively, 

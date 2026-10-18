@@ -12,7 +12,7 @@ cluster's 704 columns, the down projection by output columns after an all-gather
 routed slot streams the expert its record names; cluster 0 adds them in the golden's order.
 A pass streams the union's slots once for all tokens, and its combine is a running sum that
 travels slot to slot (a fan-in of every slot into cluster 0 needs more dependency tags than
-DepTagWidth 5 has).
+the manager has: dep_tag_width 4 gives 16 a cell).
 """
 
 import os
@@ -48,8 +48,7 @@ def _one_token(S):
                        dst=S.h_rec_l3), "rec_l3", x=rec0.out("rec"))
     # params fence_route: cluster 0's later weight loads (its shared-expert chunks) wait
     # for the route, so its in-order DM core runs the route -- which every routed push
-    # waits for -- before copying chunks the ring holds anyway (measured: the route
-    # 30-50 us behind cluster 0's shared gate|up loads)
+    # waits for -- before copying chunks the ring holds anyway
     if p.get("fence_route", False):
         pipe.raw(lambda: ls[0].fence(rec0.out("rec").port.ends[-1]), "fence_route")
     SH = int(p.get("shared_cluster", 0))
@@ -101,8 +100,8 @@ def _one_token(S):
     e16, g16, a8 = {}, {}, {}
     # params factor_first: with factor_ring, take every slot's factor chunks before any
     # routed weight chunk, so the pushes right after the route bring them all; taken in
-    # the slot loop they sat between the weight chunks, each a run of its own the DM core
-    # waited for (15-35 us) with the next expert's chunks queued behind it
+    # the slot loop each would sit between the weight chunks as a run of its own the DM
+    # core waits for, with the next expert's chunks queued behind it
     pre = {}
     if p.get("factor_first", False):
         for s in range(dg.TOP_K):
@@ -219,8 +218,8 @@ def _pass(S):
     # 0 and TRAVELS slot to slot, in union order, to the cluster that ran each slot: there
     # R += w_t,s e_s,t for every token (a zero weight adds nothing). One add after the
     # other is the golden's own order, so it is byte-exact; and it is a CHAIN, so every
-    # hand-over waits for the one before -- fanning 22 slots' results into cluster 0
-    # instead needed 33 concurrent dependency tags in one cell (32 at DepTagWidth 5).
+    # hand-over waits for the one before -- fanning every slot's result into cluster 0
+    # instead would need more live dependency tags in one cell than dep_tag_width allows.
     TD = PortSpec(RM, F16, (1, T * D), mem_level=L1, cluster=0)
     h_st = pipe.add(Pull(rows=1, cols=D, layout=RM, dtype=F16,
                          src=tuple(t % NCL for t in range(T)), dst=0), "h_st",

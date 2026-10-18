@@ -75,7 +75,6 @@ params anchor_reduce: a third anchor once every chip's loc is ready, before the 
 splits the window -- and makes the root's pulls wait for the last chip, so it is off by default.
 """
 
-import argparse
 import os
 import sys
 
@@ -83,7 +82,9 @@ import hjson
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = HERE.split("/target/sw/host/")[0]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+from driver import parse_args, repo_root  # noqa: E402
+REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.insert(0, HERE)
 
@@ -94,9 +95,9 @@ from bingo_kernel_args import (  # noqa: E402
     HostBingoKernelChipBarrierArgs, HostBingoKernelSyncReportArgs,
     HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
-    SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSyncMarkArgs, SnaxBingoKernelSyncProbeArgs,
-    SnaxBingoKernelWaitFlagsArgs,
-    SnaxBingoKernelXdmaChainGatherArgs, SnaxBingoKernelXdmaMemsetArgs)
+    SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelWaitFlagsArgs,
+    SnaxBingoKernelXdmaChainGatherArgs, SnaxBingoKernelXdmaMemsetArgs,
+    XDMA_EWJCT_FMT_FP16, XDMA_EWJCT_OP_ADD, xdma_ewjct_csr0)
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_platform import (core_roles, load_cluster_cfg, parse_platform_cfg,  # noqa: E402
                             writer_junction_index)
@@ -106,80 +107,19 @@ from libs.blocks import Linear, LoadStream, ScaleCols, Stash, SwigluARow, Weight
 from libs.crest import CrestRings  # noqa: E402
 from libs.verify import checks as vchecks  # noqa: E402
 
+from fabric import L1_CAPACITY, MESH, FabricBase, crest_codec, dist, fold_cycle, remote  # noqa: E402
+
 import ffn_data  # noqa: E402
 
-L1_CAPACITY = 990000
-MESH = (16, 4, 16)
 L1, L3, HBM = MemLevel.L1, MemLevel.L3, MemLevel.HBM
 F16, I8 = DType.F16, DType.I8
 RM, A_ROW = Layout.ROW_MAJOR, Layout.A_ROW
-MASK40 = "0xFFFFFFFFFFULL"
-EW_F16_ADD = (0 << 4) | 0          # elementwise junction CSR(0): fmt FP16, op ADD
+EW_F16_ADD = xdma_ewjct_csr0(XDMA_EWJCT_OP_ADD, XDMA_EWJCT_FMT_FP16)
 SYM = "AAAA_ffn_sym"               # sorts before every other handle: offset 0 of the arena
 PAIR = 32                          # an INT4 GEMV's column unit
 
 
-def remote(chip, local_expr):
-    """`local_expr` (a local address, the same on every chip) on chip `chip`."""
-    return f"(chiplet_addr_transform_full(0x{chip:02x}, ((uint64_t)({local_expr}) & {MASK40})))"
-
-
-def dist(a, b):
-    return abs((a >> 4) - (b >> 4)) + abs((a & 15) - (b & 15))
-
-
-def fold_cycle(chips, root):
-    """A Hamiltonian cycle over `chips` through `root` (root first), each step to a chip at
-    Manhattan distance 1, or 2 where the grid leaves no choice: the fewest distance-2 steps,
-    found by backtracking (16 chips: instant). Falls back to a path if no cycle exists."""
-    nb = {k: sorted((m for m in chips if m != k and dist(k, m) <= 2),
-                    key=lambda m: (dist(k, m), m)) for k in chips}
-
-    def search(path, seen, longs, budget, cycle):
-        k = path[-1]
-        if len(path) == len(chips):
-            if not cycle:
-                return path
-            d = dist(k, root)
-            if d == 1 or (d == 2 and longs < budget):
-                return path
-            return None
-        free = [m for m in nb[k] if m not in seen]
-        # fewest onward choices first (Warnsdorff), the near ones before the far ones
-        free.sort(key=lambda m: (dist(k, m), sum(1 for q in nb[m] if q not in seen), m))
-        for m in free:
-            ln = longs + (dist(k, m) == 2)
-            if ln > budget:
-                continue
-            seen.add(m)
-            got = search(path + [m], seen, ln, budget, cycle)
-            if got:
-                return got
-            seen.discard(m)
-        return None
-
-    for cycle in (True, False):
-        for budget in range(0, 5):
-            got = search([root], {root}, 0, budget, cycle)
-            if got:
-                return got
-    raise ValueError(f"no fold order over {[hex(c) for c in chips]}")
-
-
-def _crest_codec(dsv2_dir):
-    """snax_cluster's CREST reference codec (hw/chisel/doc/crest_decompressor/crest_codec.py)."""
-    import importlib.util
-    root = os.path.abspath(dsv2_dir)
-    while root != os.path.dirname(root) and not os.path.isdir(os.path.join(root, "hw", "chisel")):
-        root = os.path.dirname(root)
-    path = os.path.join(root, "hw", "chisel", "doc", "crest_decompressor", "crest_codec.py")
-    spec = importlib.util.spec_from_file_location("crest_codec", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-class FBuild:
+class FBuild(FabricBase):
     def __init__(self, args, p, plat, hw):
         self.args, self.p, self.plat, self.hw = args, p, plat, hw
         self.T = int(p.get("tokens", 1))
@@ -291,23 +231,6 @@ class FBuild:
                                   chip_id=self.ROOT, cluster_id=0)
 
     # ---- topology helpers -----------------------------------------------------------------
-    def chip(self, g):
-        return self.chips[g // self.NC]
-
-    def c(self, g):
-        return g % self.NC
-
-    def gs(self, k):
-        i = self.chips.index(k)
-        return list(range(i * self.NC, (i + 1) * self.NC))
-
-    def cx(self, g):
-        return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw,
-                   chiplet=self.chip(g)).at(self.c(g))
-
-    def cx_chip(self, k):
-        return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw, chiplet=k)
-
     def _split_columns(self):
         """(c0, n) per global cluster: the intermediate columns in whole pairs, the pairs left
         over after an even split going one per link in turn (a link carries the weights of
@@ -383,7 +306,7 @@ class FBuild:
                 n_slots=n_slots, slot_bytes=self.slot_bytes, batch=self.ring_batch)
             gs = self.gs(k)
             if self.crest:
-                rings.crest = CrestRings(_crest_codec(self.args.dsv2_dir),
+                rings.crest = CrestRings(crest_codec(self.args.dsv2_dir),
                                          dense={r: self.cimg[g] for r, g in enumerate(gs)},
                                          routed={}, slices={},
                                          slab_bytes=self.ls[gs[0]].slab_bytes,
@@ -399,25 +322,6 @@ class FBuild:
                     policy=int(wr.get("policy", 1)), engine=self.engine[k]))
 
     # ---- nodes ----------------------------------------------------------------------------
-    def node(self, k, c, core, name, kernel, kargs, after=()):
-        return self.cx_chip(k).node(f"{name}_k{k:02x}", core, kernel, kargs, after, cluster=c)
-
-    def edge(self, a, b):
-        self.dfg.bingo_add_edge(a, b)
-
-    def anchor(self, tag, after=()):
-        nd = self.node(self.ROOT, 0, self.roles["dm"], f"A{self.n_anchor}_{tag}",
-                       "__snax_bingo_kernel_sync_mark",
-                       SnaxBingoKernelSyncMarkArgs(stamp_buf=self.stamps, slot=self.n_anchor,
-                                                   mark_addr=self.mark), after)
-        self.n_anchor += 1
-        return nd
-
-    def probe(self, k, tag, after=()):
-        """A DM-core task on chip k's cluster 0 that does nothing but order."""
-        return self.node(k, 0, self.roles["dm"], f"P_{tag}", "__snax_bingo_kernel_sync_probe",
-                         SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0), after)
-
     def barrier(self, after):
         """One chip barrier over every compute chip: a task on each chip's cluster 0 DM core,
         after `after[k]`. Returns {chip: its barrier task}."""
@@ -429,15 +333,6 @@ class FBuild:
                              SnaxBingoKernelChipBarrierArgs(self.barrier_mode, tl, br,
                                                             seq=self.n_barrier), after[k])
                 for k in self.chips}
-
-    def sv(self, k, c, off):
-        """A view of chip k cluster c's symmetric buffer at `off`."""
-        return self.sym[(k, c)].view(off)
-
-    def sx(self, c, off):
-        """The C expression of the root's own symmetric buffer at `off`: the same local
-        address on every chip (see the module doc)."""
-        return f"((uint64_t)({self.sym[(self.ROOT, c)].get_c_var_name()}) + {off})"
 
     # ---- the FFN --------------------------------------------------------------------------
     def build(self):
@@ -574,15 +469,9 @@ class FBuild:
         if self.p.get("anchor_reduce", False):
             before = [self.anchor("reduce", list(dict.fromkeys(loc.values())))]
         if self.reduce_impl == "chain":
-            chain = [remote(k, self.sx(0, self.OFF_LOC)) for k in others] + \
-                    [remote(R, self.dst.get_c_var_name())]
-            ga = SnaxBingoKernelXdmaChainGatherArgs(
-                local_src=remote(R, self.sx(0, self.OFF_LOC)), chain=chain, size=xb,
-                junction=str(self.jct), jct_csr0=EW_F16_ADD,
-                hops=[(k, 0) for k in others] + [(R, 0)])
-            # the chain names its buffers by address expressions, which the static L1 planner
-            # does not see: name dst here, so its live range covers the gather
-            ga.holds = [self.dst]
+            ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
+                remote, R, 0, others, src=self.sx(0, self.OFF_LOC), dst=self.dst.get_c_var_name(),
+                size=xb, junction=self.jct, jct_csr0=EW_F16_ADD, holds=[self.dst])
             gth = self.node(R, 0, xdma, "y_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                             before or list(dict.fromkeys(loc[k] for k in self.chips)))
             self.reduce_end = [gth]
@@ -723,16 +612,7 @@ class FBuild:
 
 
 def run():
-    ap = argparse.ArgumentParser(description="ffn workload generator")
-    ap.add_argument("--output_dir", required=True)
-    ap.add_argument("--data_h", default=None)
-    ap.add_argument("--output_offload_file_name", default="offload_bingo_hw.h")
-    ap.add_argument("-c", "--cfg", required=True)
-    ap.add_argument("--hwcfg", required=True)
-    ap.add_argument("--platformcfg", required=True)
-    ap.add_argument("--dsv2_dir", required=True,
-                    help="snax_cluster's target/snitch_cluster/sw/apps/dsv2 (the numerics models)")
-    args = ap.parse_args()
+    args = parse_args("ffn workload generator")
     with open(args.cfg) as f:
         p = dict(hjson.load(f))
     plat = parse_platform_cfg(args.platformcfg)

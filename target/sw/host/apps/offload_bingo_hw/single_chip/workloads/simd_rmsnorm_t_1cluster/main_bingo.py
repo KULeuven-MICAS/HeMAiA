@@ -8,13 +8,13 @@
 #
 # Both kernels compute out[t,:] = x[t,:] / sqrt(mean_j x[t,j]^2) over the SAME [32, 128]
 # tile against the SAME golden. They differ only in which way the tile is stored while the
-# SIMD block reduces it, and that is worth ~3x:
+# SIMD block reduces it:
 #
 #   ROW-MAJOR  reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL)
 #              A beat is 32 consecutive FEATURES of one token, so lane k collects every
 #              32nd feature and a row's terms scatter over all 32 lanes. Collapsing them
 #              is a serialised log-depth fold that holds the reader's input port low for
-#              ~35 cc PER ROW, and the single scalar then has to be replicated into a
+#              every row, and the single scalar then has to be replicated into a
 #              whole [T, D] plane before a 2-operand elementwise can read it.
 #
 #   TRANSPOSED reduce(SUMSQ|LANEWISE) -> map(1/D, RSQRT) on ONE beat -> ew(MUL|STICKY_B)
@@ -23,10 +23,9 @@
 #              the accumulators when the stream ends. No fold, no splat, and the scale
 #              rides back in as a sticky operand rather than a replicated plane.
 #
-# Reference measurement on snax_split_cluster (target/snitch_cluster/sw/apps/
-# snax-simd-rmsnorm): 3,135 cc row-major vs 1,073 cc transposed on the SIMD core, plus
-# 244 + 385 cc of xDMA for the two block transposes. THIS workload is what says whether
-# HeMAiA reproduces that.
+# The reference app (target/snitch_cluster/sw/apps/snax-simd-rmsnorm) runs the same A/B on
+# snax_split_cluster, with the two block transposes on the xDMA. THIS workload is what says
+# whether HeMAiA reproduces it.
 #
 # ======================================================================================
 # WHAT EACH CHECK ISOLATES — the reason there are four and not one
@@ -133,7 +132,7 @@ def _rmsnorm_ref(rows, cols, seed=0x12345):
     The reduce accumulates in FP32 and narrows the scalar to FP16 before the rsqrt sees
     it, so the reference narrows too -- that step is in the datapath and is not an
     approximation the model gets to skip. What follows it is a hardware table, so the
-    reference is the TRUE 1/sqrt rather than a model of the core's old integer
+    reference is the TRUE 1/sqrt rather than a model of the core's integer
     sqrt+reciprocal.
     """
     rng = np.random.default_rng(seed)

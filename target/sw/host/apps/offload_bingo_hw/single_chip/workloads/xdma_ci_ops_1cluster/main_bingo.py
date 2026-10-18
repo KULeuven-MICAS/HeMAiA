@@ -14,6 +14,7 @@
 #   7. PAD           - zero-pad with borders
 #   8. GATHER        - select every Nth row
 #   9. A/B/D layout  - row-major <-> VersaCore blocked layouts
+#  10. ELEMENTWISE-ADD - int32 sum of N operands, and of two operands
 #
 # Each test: IDMA load -> xDMA transform -> Host store -> Host check.
 # Tests are serialized through each check for deterministic shared-buffer reuse.
@@ -149,7 +150,7 @@ def add_xdma_test(dfg, name, l1_dst, xdma_node, golden_sym, out_size,
     return check
 
 
-def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_name, kernel_args_cls,
+def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_args_cls,
                        kernel_arg_kwargs_no_addrs, dst_size, golden_sym, prev_chk):
     l1_src = BingoMemAlloc(f"l1_{name}_src", size=src_size, mem_level="L1",
                            chip_id=0, cluster_id=0)
@@ -165,7 +166,6 @@ def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_name, kernel_args_cl
     convert = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"Conv_{name}",
-        kernel_name=kernel_name,
         kernel_args=kernel_args_cls(l1_src, l1_dst, **kernel_arg_kwargs_no_addrs))
     store = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
@@ -188,14 +188,13 @@ def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_name, kernel_args_cl
     return check
 
 
-def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
+def add_l3_direct_layout_test(dfg, name, src_sym, kernel_args_cls,
                               kernel_arg_kwargs_no_addrs, dst_size, golden_sym,
                               prev_chk):
     l3_dst = BingoMemAlloc(f"l3_direct_{name}_dst", size=dst_size, mem_level="L3")
     convert = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"ConvL3_{name}",
-        kernel_name=kernel_name,
         kernel_args=kernel_args_cls(src_sym, l3_dst, **kernel_arg_kwargs_no_addrs))
     check = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
@@ -235,12 +234,12 @@ def layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes):
     rm2d, d2rm = (xdma_conv_args("xdma_row_major_to_d"),
                   xdma_conv_args("xdma_d_to_row_major"))
     return [
-        ("row_to_A", "src_A_rm", A_bytes, rm2a.KERNEL_NAME, rm2a, A_kw, A_bytes, "golden_A_layout"),
-        ("A_to_row", "src_A_layout", A_bytes, a2rm.KERNEL_NAME, a2rm, A_kw, A_bytes, "golden_A_rm"),
-        ("row_to_B", "src_B_rm", B_bytes, rm2b.KERNEL_NAME, rm2b, B_kw, B_bytes, "golden_B_layout"),
-        ("B_to_row", "src_B_layout", B_bytes, b2rm.KERNEL_NAME, b2rm, B_kw, B_bytes, "golden_B_rm"),
-        ("row_to_D", "src_D_rm", D_bytes, rm2d.KERNEL_NAME, rm2d, D_kw, D_bytes, "golden_D_layout"),
-        ("D_to_row", "src_D_layout", D_bytes, d2rm.KERNEL_NAME, d2rm, D_kw, D_bytes, "golden_D_rm"),
+        ("row_to_A", "src_A_rm", A_bytes, rm2a, A_kw, A_bytes, "golden_A_layout"),
+        ("A_to_row", "src_A_layout", A_bytes, a2rm, A_kw, A_bytes, "golden_A_rm"),
+        ("row_to_B", "src_B_rm", B_bytes, rm2b, B_kw, B_bytes, "golden_B_layout"),
+        ("B_to_row", "src_B_layout", B_bytes, b2rm, B_kw, B_bytes, "golden_B_rm"),
+        ("row_to_D", "src_D_rm", D_bytes, rm2d, D_kw, D_bytes, "golden_D_layout"),
+        ("D_to_row", "src_D_layout", D_bytes, d2rm, D_kw, D_bytes, "golden_D_rm"),
     ]
 
 
@@ -441,7 +440,7 @@ def main():
     prev_chk = add_xdma_test(dfg, "gather", l1_gather_dst, xdma_gather, BingoMemSymbol("golden_gather"),
                              g_out_size, HOST_CORE)
 
-    # ── 10. ELEMENTWISE-ADD (int32 writer extension) ─────────────
+    # ── 10. ELEMENTWISE-ADD (int32 reader extension) ─────────────
     # General: dst = sum of N operand buffers (operands contiguous in L1).
     # Binary:  dst = operand0 + operand1 (separate L1 buffers; the kernel
     #          derives the operand stride from the two addresses).
@@ -514,15 +513,15 @@ def main():
     N_T = int(param["N_T"])
     convs = layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes)
 
-    for name, src, src_size, kernel_name, kernel_args_cls, kwargs, dst_size, golden in convs:
+    for name, src, src_size, kernel_args_cls, kwargs, dst_size, golden in convs:
         prev_chk = add_l1_layout_test(
-            dfg, name, BingoMemSymbol(src), src_size, kernel_name, kernel_args_cls,
+            dfg, name, BingoMemSymbol(src), src_size, kernel_args_cls,
             kwargs, dst_size, BingoMemSymbol(golden), prev_chk)
 
-    for name, src, _src_size, kernel_name, kernel_args_cls, kwargs, dst_size, golden in convs:
+    for name, src, _src_size, kernel_args_cls, kwargs, dst_size, golden in convs:
         if name in ("row_to_A", "row_to_B", "row_to_D"):
             prev_chk = add_l3_direct_layout_test(
-                dfg, name, BingoMemSymbol(src), kernel_name, kernel_args_cls,
+                dfg, name, BingoMemSymbol(src), kernel_args_cls,
                 kwargs, dst_size, BingoMemSymbol(golden), prev_chk)
 
     # ── Compile DFG ──────────────────────────────────────────────

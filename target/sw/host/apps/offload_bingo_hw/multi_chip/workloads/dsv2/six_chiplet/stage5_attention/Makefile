@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# DeepSeek-V2-Lite layer 1 on the six-chiplet platform (hemaia_sixchiplet_16MBL3_2cluster: four
+# DeepSeek-V2-Lite layer 1 on the six-chiplet platform (hemaia_sixchiplet_16MBL3_2cluster_l3b64: four
 # compute chiplets with two clusters each, two memory chiplets, C-M-C rows), stage5_attention.
 # The stage's code is main_bingo.py; the build is ../../common/dsv2.mk.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
