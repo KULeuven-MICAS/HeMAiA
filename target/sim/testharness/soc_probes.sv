@@ -376,8 +376,8 @@ endmodule
 bind bingo_hw_manager_top snax_bingo_progress_probe #(
     .NC(NUM_CORES_PER_CLUSTER), .NCL(NUM_CLUSTERS_PER_CHIPLET), .CW(ChipIdWidth),
     .task_desc_t (bingo_hw_manager_task_desc_t),
-    .ready_desc_t(bingo_hw_manager_ready_task_desc_full_t),
-    .done_info_t (bingo_hw_manager_done_info_full_t)
+    .ready_desc_t(bingo_hw_manager_ready_task_desc_t),
+    .done_info_t (bingo_hw_manager_done_info_t)
 ) u_snax_bingo_progress_probe (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
