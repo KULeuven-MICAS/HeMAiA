@@ -1,6 +1,7 @@
-// DeepSeek-V2-Lite's dense FFN (layer 0: 2048 -> 10944 -> 2048, SwiGLU) as a 128-token
-// prefill, 4 iterations of 32 rows on the (16, 4, 16) GEMM shape, INT4 weights, on
-// hemaia_16c4m_8MBL3_2cluster.
+// DeepSeek-V2-Lite's dense FFN (layer 0: 2048 -> 10944 -> 2048, SwiGLU) as a 256-token
+// prefill, 8 iterations of 32 rows on the (16, 4, 16) GEMM shape, INT4 weights, on
+// hemaia_16c4m_8MBL3_2cluster. Each chip's task-id maps hold only its own tasks (compact_id_maps), so the
+// 256-token image fits the 8 MiB L3.
 // Variant bcast: X multicast into every chip's L3 by the D2D router; the partials loaded and folded by the root (iDMA load-all + local fold); bulk synchronous, the vanilla chip barrier fencing every core of a chip.
 // What each field does is in ../../common/ffn_prefill_mc.py.
 {
@@ -8,7 +9,7 @@
   num_clusters: 2
   model: dsv2-lite-l0
   seed: 1
-  tokens: 128
+  tokens: 256
   rows: 32
   wbits: 4
   blocks: 3
@@ -29,6 +30,7 @@
   barrier_mode: bcast
   barrier_fence: true
   static_l1: true
+  compact_id_maps: true
   l1_capacity: 990000
   d2d_ddr: true
 }

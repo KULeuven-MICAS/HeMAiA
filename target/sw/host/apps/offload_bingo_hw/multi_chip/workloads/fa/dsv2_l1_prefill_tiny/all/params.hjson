@@ -1,20 +1,29 @@
-// DeepSeek-V2-Lite layer 1's MLA attention over the first 1,024 keys of the latent cache, 256-token proof of concept, 4 chunks of 64 tokens, head parallel (chip = head,
-// cluster = half of a chunk's tokens: two 16-row query tiles), K/V tiles of 256 keys, INT8, on
-// hemaia_16c4m_8MBL3_2cluster.
-// Variant all: x and the cache multicast; every chunk's partials folded in transit (xDMA ChainGather); cross-chip dependencies in the BINGO hardware scheduler (per edge), so a chunk's reduce and the next chunk's x run under the next sweep.
-// L3: the ring holds 6 slots and y overlays the x buffers (l3_overlay); with 16 slots and its own y the
-// image overflows the 8 MiB L3.
+// DeepSeek-V2-Lite layer 1's MLA attention over the first 1,024 keys of the latent cache (proof of
+// concept): 256 tokens as two chunks of 128, head parallel (chip = head, cluster = half of a chunk's tokens: four 16-row query
+// tiles), K/V tiles of 256 keys, INT8, on hemaia_16c4m_8MBL3_2cluster.
+// Variant all: x multicast, the partials folded in transit (xDMA ChainGather), cross-chip dependencies in
+// the BINGO hardware scheduler (per edge).
+// Orders and buffers: every x multicast first, then the memory chips' pushes (x_puts_first,
+// prefetch_after_x); y over the x buffers (l3_overlay); a 6-slot ring; three W slabs, K tiles in one
+// and V tiles in the other two (kv_slabs split); the partial y through a half-size symmetric buffer,
+// one W_O block and its ChainGather at a time (y_halves: four query tiles a cluster fit L1 only so); one
+// ChainGather at a time.
+// Host images: one per chiplet (per_chip_image), each holding the shared code and data and that chiplet's
+// own task tables only; each cluster's L1 holds its own tasks' global ids (gid_lists), not a 2-byte entry
+// for every task of the graph. The PoC twin of ../../dsv2_l1_prefill/all.
+// Checks: the Q8 and the normalised O of query tiles 0 and 3 on the chip in the middle of the fold order,
+// then the head and the tail of each half of y (checks stages, y_windows 4).
 // What each field does is in ../../common/fa_prefill_mc.py.
 {
   num_chiplets: 16
   num_clusters: 2
   model: dsv2-lite-l1
   tokens: 256
-  chunk: 64
+  chunk: 128
   keys: 1024
   bc: 256
   w_chunk_bytes: 147456
-  w_buffers: 4
+  w_buffers: 3
   weight_ring:
   {
     slots: 6
@@ -27,7 +36,17 @@
   sync: edge
   gemm_async: true
   l3_overlay: true
+  x_puts_first: true
+  y_halves: true
+  kv_slabs: split
+  y_windows: 4
+  prefetch_after_x: true
+  checks: stages
+  chain_concurrent: false
+  compact_id_maps: true
   static_l1: true
   l1_capacity: 990000
   d2d_ddr: true
+  per_chip_image: true
+  gid_lists: true
 }

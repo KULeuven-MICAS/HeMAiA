@@ -21,8 +21,9 @@ fa/
   dsv2_l1/               one decode token, 8 variants: base bcast reduce sync bcast_reduce bcast_sync
                          reduce_sync all (the three mechanisms in every combination)
   dsv2_l1_prefill/       256-token prefill, the ladder base -> bcast -> bcast_reduce -> all, each rung
-                         adding one mechanism
-  dsv2_l1_prefill_tiny/  reduced-cache copy (1,024 keys): all (4 chunks of 64)
+                         adding one mechanism (base..bcast_reduce 4 chunks of 64, all 2 chunks of 128)
+  dsv2_l1_prefill_tiny/  reduced-cache copies (1,024 keys): all (the twin of dsv2_l1_prefill/all), v19 (all
+                         without per-chiplet images and gid lists), v21 (v19 + per-chiplet images)
 ```
 
 Numbered variants (`v<N>`) are local iterations and are not tracked; the named variants are. Every variant
@@ -59,6 +60,18 @@ DeepSeek-V2-Lite at its real size: a **256-token prefill** (the MoE's length) ov
 | `all` | bcast_l1 | chain | edge |
 
 The other four combinations (`reduce_sync`, `bcast_sync`, `reduce`, `sync`) are not built.
+
+`all` takes the same mapping with 2 chunks of 128 tokens (four query tiles a cluster): it halves the weight and
+cache stream, which binds 64-token chunks at the real size. Its partial y goes through a half-size symmetric
+buffer, one W_O block and its ChainGather at a time (`y_halves`): only so do four query tiles fit the 990,000 B
+L1. `y_halves` needs the in-transit reduce and per-edge sync, so the other rungs keep 64-token chunks.
+
+**Task tables.** At 256 tokens the graph has 113k (all) to 150k (4 x 64) descriptors, and one host image holding
+every chiplet's tables does not fit the 8 MiB L3 (11.5 MiB and ~29 MiB). Every full-size variant therefore
+builds one host image per chiplet (`per_chip_image`: target/sw/host/apps/per_chip_image.py, with the host.ld
+every host image uses), each holding the shared code and data and that chiplet's own tables; the build checks
+that every shared symbol sits at one address in all of them. Each cluster's L1 holds its own tasks' global ids
+(`gid_lists`), not a 2-byte entry for every task of the graph.
 
 ### Why this mapping
 

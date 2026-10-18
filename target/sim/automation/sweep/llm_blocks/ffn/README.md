@@ -153,7 +153,7 @@ Figure: `results/ffn_ablation.pdf` (`plot_l2.py`, all three workloads).
   - `dsv2_l0/<variant>/params.hjson`: one directory per variant.
   - `common/ffn_prefill_mc.py`, `common/chiplet_mc.py`, `common/gemm_bench_mc.py`: the prefill driver, the
     multi-chiplet base it shares with MoE and FA, and the GEMM bench driver.
-  - `dsv2_l0_prefill/<variant>/`: the 128-token prefill ladder (`base`, `bcast`, `bcast_reduce`, `all`).
+  - `dsv2_l0_prefill/<variant>/`: the 256-token prefill ladder (`base`, `bcast`, `bcast_reduce`, `all`).
   - `dsv2_l0_prefill_tiny/<variant>/`: reduced-size prefill (`all`, `all_fi`, `gemm_bench_paired`).
 
 **Prefill** (the workloads above; their README is in the workload directory):

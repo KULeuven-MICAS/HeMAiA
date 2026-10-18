@@ -1,21 +1,29 @@
-// DeepSeek-V2-Lite's layer-1 MLA attention (16 heads, absorbed) as a 256-token prefill over the 8,192-token latent cache, 4 chunks of 64 tokens, head parallel (chip = head,
-// cluster = half of a chunk's tokens: two 16-row query tiles), K/V tiles of 256 keys, INT8, on
-// hemaia_16c4m_8MBL3_2cluster.
-// Variant all: x and the cache multicast; every chunk's partials folded in transit (xDMA ChainGather); cross-chip dependencies in the BINGO hardware scheduler (per edge), so a chunk's reduce and the next chunk's x run under the next sweep.
+// DeepSeek-V2-Lite's layer-1 MLA attention (16 heads, absorbed) as a 256-token prefill over the 8,192-token latent
+// cache, two chunks of 128 tokens, head parallel (chip = head, cluster = half of a chunk's tokens: four 16-row
+// query tiles), K/V tiles of 256 keys, INT8, on hemaia_16c4m_8MBL3_2cluster.
+// Variant all: x multicast, the partials folded in transit (xDMA ChainGather), cross-chip dependencies in the
+// BINGO hardware scheduler (per edge).
+// Orders and buffers: every x multicast first, then the memory chips' pushes (x_puts_first, prefetch_after_x);
+// y over the x buffers (l3_overlay); an 8-slot ring; three W slabs, K tiles in one and V tiles in the other two
+// (kv_slabs split); the partial y through a half-size symmetric buffer, one W_O block and its ChainGather at a
+// time (y_halves: four query tiles a cluster fit L1 only so); one ChainGather at a time.
+// Task tables: one host image per chiplet (per_chip_image), each holding the shared code and data and that
+// chiplet's own tables only, so a chiplet's L3 does not hold the other chiplets'; each cluster's L1 holds its own
+// tasks' global ids (gid_lists), not a 2-byte entry for every task of the graph.
 // What each field does is in ../../common/fa_prefill_mc.py.
 {
   num_chiplets: 16
   num_clusters: 2
   model: dsv2-lite-l1
   tokens: 256
-  chunk: 64
+  chunk: 128
   keys: 8192
   bc: 256
   w_chunk_bytes: 147456
-  w_buffers: 4
+  w_buffers: 3
   weight_ring:
   {
-    slots: 16
+    slots: 8
     batch: 4
     policy: 1
   }
@@ -24,7 +32,17 @@
   reduce: chain
   sync: edge
   gemm_async: true
+  l3_overlay: true
+  x_puts_first: true
+  y_halves: true
+  y_windows: 4
+  kv_slabs: split
+  prefetch_after_x: true
+  chain_concurrent: false
+  compact_id_maps: true
   static_l1: true
   l1_capacity: 990000
   d2d_ddr: true
+  gid_lists: true
+  per_chip_image: true
 }

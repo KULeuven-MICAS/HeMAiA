@@ -11,7 +11,7 @@ directory below is one point of that ablation; a variant's switches are its `par
 ffn/
   common/                shared code
     ffn_mc.py              driver of the T = 1 (decode) workloads
-    ffn_prefill_mc.py      driver of the 128-token prefill workloads (its docstring explains the mapping;
+    ffn_prefill_mc.py      driver of the 256-token prefill workloads (its docstring explains the mapping;
                            every parameter is explained where it is read)
     gemm_bench_mc.py       GEMM shapes alone on one cluster (the driver of gemm_bench_paired)
     chiplet_mc.py          the multi-chiplet base both drivers use: platform, weight rings, anchors,
@@ -22,8 +22,8 @@ ffn/
      line and `run()` body of every driver in ffn, moe and fa)
   dsv2_l0/               T = 1 decode, 8 variants: base bcast reduce sync bcast_reduce bcast_sync
                          reduce_sync all (the three mechanisms in every combination)
-  dsv2_l0_prefill/       128-token prefill, the ladder base -> bcast -> bcast_reduce -> all, each rung
-                         adding one mechanism; all is the single-pass mapping
+  dsv2_l0_prefill/       256-token prefill, the ladder base -> bcast -> bcast_reduce -> all, each rung
+                         adding one mechanism; all is the single-pass mapping, two passes of 128 rows
   dsv2_l0_prefill_tiny/  reduced-size copies: all and all_fi (3,264 intermediate columns), and the GEMM
                          bench (3,072)
 ```
@@ -35,15 +35,21 @@ Every variant directory holds exactly three files: `Makefile` (names its path an
 
 | variant | bcast | reduce | sync | mapping |
 |---|---|---|---|---|
-| `base` | pull | root (iDMA load-all, local fold) | barrier (vanilla chip barrier, full fence) | 4 iterations of 32 rows |
-| `bcast` | bcast_l1 | root | barrier | 4 iterations of 32 rows |
-| `bcast_reduce` | bcast_l1 | chain | barrier | 4 iterations of 32 rows |
-| `all` | bcast_l1 | chain | edge | single pass |
+| `base` | pull | root (iDMA load-all, local fold) | barrier (vanilla chip barrier, full fence) | 8 iterations of 32 rows |
+| `bcast` | bcast_l1 | root | barrier | 8 iterations of 32 rows |
+| `bcast_reduce` | bcast_l1 | chain | barrier | 8 iterations of 32 rows |
+| `all` | bcast_l1 | chain | edge | single pass, two passes of 128 rows |
 
-`all` uses `mapping: single_pass`: each weight chunk used for all 128 rows as it streams in, the down
-projection split by output columns over a chip's two clusters, the output reduced slice by slice under the
-next slices' GEMMs. Its `params.hjson` lists every option it uses, and `common/ffn_prefill_mc.py` explains
-each one where it reads it.
+Every rung streams the weights from HBM once: the iterations after the first, and `all`'s second pass, copy
+each chunk from the L3 ring slot it landed in (the ring holds all of a cluster's chunks; the generator checks
+it). Each chip's task-id maps hold only its own tasks (`compact_id_maps`), so the 256-token images fit the
+8 MiB L3.
+
+`all` uses `mapping: single_pass` with `rows: 128`: two passes, each a single pass over its 128 rows (each
+weight chunk used for all of them as it streams in), the down projection split by output columns over a
+chip's two clusters, the output reduced slice by slice under the next slices' GEMMs. One pass of 256 rows
+does not fit the 990,000 B L1. Y is stored over the X buffers in L3 (`l3_overlay`). Its `params.hjson` lists
+every option it uses, and `common/ffn_prefill_mc.py` explains each one where it reads it.
 
 ## The reduced-size variants (`dsv2_l0_prefill_tiny/`)
 

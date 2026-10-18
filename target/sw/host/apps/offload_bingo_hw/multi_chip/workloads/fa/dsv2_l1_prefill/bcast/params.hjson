@@ -2,6 +2,9 @@
 // cluster = half of a chunk's tokens: two 16-row query tiles), K/V tiles of 256 keys, INT8, on
 // hemaia_16c4m_8MBL3_2cluster.
 // Variant bcast: x multicast by the D2D router and the cache multicast by the memory chip into its row; every chunk's partials loaded and folded by the root (iDMA load-all + SIMD fold); the vanilla chip barrier before and after each chunk's reduce.
+// Task tables: one host image per chiplet (per_chip_image), each holding the shared code and data and that
+// chiplet's own tables only; each chiplet's id maps hold its own tasks (compact_id_maps) and each cluster's L1
+// its own tasks' global ids (gid_lists).
 // What each field does is in ../../common/fa_prefill_mc.py.
 {
   num_chiplets: 16
@@ -29,4 +32,7 @@
   static_l1: true
   l1_capacity: 990000
   d2d_ddr: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
 }
