@@ -5,16 +5,14 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
-"""
-Validate offload_hw_kernels/gemm_shapes.h against the active hwcfg.
+"""Generate (or, with --check, validate) gemm_shapes.h from the active cluster cfg.
 
-Reads the hwcfg (snax_versacore_to_cluster.hjson), recomputes the expected
-per-shape parameter table and shape-invariant widths, parses the hand-written
-gemm_shapes.h, and diffs. Exits 0 on match, 1 on mismatch (with a clear
-message pointing to the offending field).
-
-This script does NOT generate code. The header is hand-maintained; this just
-catches drift between C and the hwcfg at build time.
+The header is runtime/snax/versacore/gemm_shapes.h. This reads the active cluster
+hwcfg (cfg/<cluster>.hjson) and derives the per-shape parameter table and the
+shape-invariant widths.
+Default / --emit: write gemm_shapes.h from them (only when the content changes).
+--check: parse an existing gemm_shapes.h and diff it against them. Exits 0 on
+match, 1 on mismatch (with a clear message pointing to the offending field).
 """
 from __future__ import annotations
 
@@ -29,8 +27,7 @@ import hjson
 
 
 # ----------------------------------------------------------------------
-# Expected values (from hwcfg) — mirrors compute_shape_params() and
-# _channel_enable_bits() in gen_bingo_gemm_kernels.py.
+# Expected values, derived from the hwcfg.
 # ----------------------------------------------------------------------
 def _channel_enable_bits(bits: int, csr_num: int) -> list[int]:
     out = [0] * csr_num
@@ -80,8 +77,7 @@ def expected_from_hwcfg(hwcfg: dict) -> tuple[dict, list[dict]]:
         "BINGO_NUM_ARRAY_SHAPES": len(spatial),
         "BINGO_CD_SPATIAL_NUM":    len(rw),
         "BINGO_CD_SPATIAL_BOUND0": int(rw[0]),
-        # Was in the header but NOT derived here, so a cfg that changed it would have
-        # passed validation against a stale value.
+        # Derived from the cfg (granularity_a, default 1).
         "BINGO_GRANULARITY_A":    int(acc.get("granularity_a", 1)),
     }
 
@@ -210,19 +206,13 @@ def diff(expected_g: dict, expected_s: list[dict],
 
 
 # ----------------------------------------------------------------------
-# Entry point.
-# ----------------------------------------------------------------------
-
-# ----------------------------------------------------------------------
 # Emit the header from the cfg.
 # ----------------------------------------------------------------------
 def emit_header(hwcfg_path: pathlib.Path, g: dict, shapes: list[dict]) -> str:
     """Render gemm_shapes.h. Every value here comes from expected_from_hwcfg().
 
-    The prose is carried over from the hand-written header this replaces, because the
-    formulas are the part a reader needs and they do not change with the cfg. The NUMBERS
-    in it are interpolated, so the commentary cannot drift from the table the way
-    "[4, 8], 32 channels" did when the port was narrowed to 16.
+    The formulas in the prose do not depend on the cfg; the numbers in it are
+    interpolated, so the commentary cannot drift from the table.
     """
     def mask_list(v):
         return "{ " + ", ".join(f"0x{x:x}u" for x in v) + " }"
@@ -321,6 +311,9 @@ def emit_header(hwcfg_path: pathlib.Path, g: dict, shapes: list[dict]) -> str:
     return "\n".join(L)
 
 
+# ----------------------------------------------------------------------
+# Entry point.
+# ----------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--hwcfg", type=pathlib.Path, required=True,

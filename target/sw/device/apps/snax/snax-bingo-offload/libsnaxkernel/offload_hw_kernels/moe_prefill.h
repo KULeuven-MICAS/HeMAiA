@@ -34,6 +34,8 @@
 #pragma once
 
 #include "../macros.h"
+#include "simd.h"        // simd_pass_map, simd_run_shapes, BINGO_SIMD_REQUIRE_LOCAL
+#include "moe_route.h"   // bingo_f16_to_f32bits
 
 #define BINGO_MOE_PF_ENTRY_BYTES 32u
 #define BINGO_MOE_PF_W_OFFSET 8u
@@ -232,9 +234,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_topk_rows(void *arg) {
         moe_pf_topk_range(p_base, p_pitch, k, nw, out_base, t0, t1);
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
-    sp->return_value = out_base;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, out_base);
 }
 
 // The route table -> the row lists of this chip's expert slots. Slot s (expert ids byte s)
@@ -338,9 +338,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_dispatch(void *arg) {
     if (state) {
         for (uint32_t s = 0; s < ns; s++) state[s] = got[s];
         if (t_end != tokens) {                          // not the last range: nothing to check yet
-            sp->return_value = a->list_addr;
-            sp->num_return_values = 0;
-            return BINGO_RET_SUCC;
+            BINGO_RETURN_SUCC(sp, a->list_addr);
         }
     }
     uint32_t bad = 0u;
@@ -367,11 +365,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_dispatch(void *arg) {
 // into dst + i * dst_pitch, for i < n: one 1-D transfer a row, then one wait.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_gather_rows(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_gather_rows_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! idma_gather_rows should be called from a DM "
-                    "core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_gather_rows", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __snax_bingo_kernel_idma_gather_rows_args_t *a =
         (const __snax_bingo_kernel_idma_gather_rows_args_t *)arg;
@@ -389,9 +383,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_gather_rows(void *arg) {
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 // ============================================================== SIMD passes
@@ -399,13 +391,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_gather_rows(void *arg) {
 // The end of a sequence of queued tasks: wait for every submitted task, then the sticky
 // bad-config bit (a task the AGU refused was dropped, not run).
 static inline uint32_t moe_pf_drain(const char *kname) {
-    if (snax_simd_wait_all_bounded()) {
+    const uint32_t drain = snax_simd_drain();
+    if (drain == SNAX_SIMD_DRAIN_TIMEOUT) {
         printf_safe("[Cluster %d Core %d]: %s SIMD drain timeout (status %08x)\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx(), kname,
                     snax_read_simd_cfg_reg(SIMD_STATUS));
         return BINGO_RET_FAIL;
     }
-    if (snax_simd_bad_config()) {
+    if (drain == SNAX_SIMD_DRAIN_REFUSED) {
         printf_safe("[Cluster %d Core %d]: %s SIMD refused a degenerate task\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx(), kname);
         return BINGO_RET_FAIL;
@@ -421,19 +414,8 @@ static inline void moe_pf_ew2_program(void *src_a, void *src_b, uint32_t beats,
                                       uint32_t beat_stride, void *dst, uint32_t out_bound0,
                                       uint32_t out_stride0, uint32_t out_bound1,
                                       uint32_t out_stride1, uint32_t op) {
-    uint32_t operand_stride;
-    void *base = snax_simd_ew2_base(src_a, src_b, &operand_stride);
     snax_simd_shape_t in, out;
-    snax_simd_shape_clear(&in);
-    in.base = base;
-    in.lane_stride = SIMD_LANE_BYTES;
-    in.lane_mask = 0xFFFFFFFFu;
-    in.byte_mask = 0xFFFFFFFFu;
-    in.dim = 2;
-    in.bound[0] = 2u;
-    in.stride[0] = operand_stride;
-    in.bound[1] = beats;
-    in.stride[1] = beat_stride;
+    snax_simd_shape_ew2(&in, src_a, src_b, 2, beats, beat_stride, 0u, 0u);
     snax_simd_shape_2d(&out, dst, out_bound0, out_stride0, out_bound1, out_stride1);
     snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 2u, op);
     snax_simd_program_fast(&in, &out);
@@ -447,16 +429,24 @@ static inline void moe_pf_ew2_repoint(uint32_t a, uint32_t b, uint32_t dst) {
     snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, dst);
 }
 
-// One such pass, run to completion.
-static inline uint32_t moe_pf_ew2(void *src_a, void *src_b, uint32_t beats,
-                                  uint32_t beat_stride, void *dst, uint32_t out_bound0,
-                                  uint32_t out_stride0, uint32_t out_bound1,
-                                  uint32_t out_stride1, uint32_t op) {
-    moe_pf_ew2_program(src_a, src_b, beats, beat_stride, dst, out_bound0, out_stride0,
-                       out_bound1, out_stride1, op);
-    snax_simd_fire();
-    return moe_pf_drain("moe_pf_ew2");
-}
+
+// `tiles` row tiles of `tile_beats` beats each times the one-row-tile scale tile s, tile m
+// from x + m * x_stride into dst + m * dst_stride (dst may be x). One pass a tile, all of one
+// geometry: programmed once, then each tile moves the pass and is submitted to the SIMD's
+// task queue without waiting. The caller drains.
+#define MOE_PF_SCALE_TILES(x, s, tiles, tile_beats, x_stride, dst, dst_stride)               \
+    for (uint32_t m = 0; m < (tiles); m++) {                                                 \
+        const uint32_t xm = (x) + m * (x_stride), dm = (dst) + m * (dst_stride);             \
+        if (m == 0u) {                                                                       \
+            moe_pf_ew2_program((void *)xm, (void *)(s), (tile_beats), SIMD_BEAT_BYTES,       \
+                               (void *)dm, (tile_beats), SIMD_BEAT_BYTES, 1u, 0u,            \
+                               SIMD_EW_MUL);                                                 \
+        } else {                                                                             \
+            moe_pf_ew2_repoint(xm, (s), dm);                                                 \
+        }                                                                                    \
+        snax_simd_fire();                                                                    \
+    }
+
 #endif
 
 // x (D layout, `tiles` row tiles of `tile_beats` beats, x_tile_stride bytes apart) times the
@@ -508,9 +498,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mul_tiles(void *arg) {
     const uint32_t rc = moe_pf_drain("simd_mul_tiles");
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = a->dst_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, a->dst_addr);
 #endif
 }
 
@@ -540,16 +528,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_deq_swiglu(void *arg) {
     uint32_t rc = BINGO_RET_SUCC;
     // 1) g (.) s, row tile by row tile, in place: programmed once, each tile's pass moved
     // and queued, all drained before the silu reads g
-    for (uint32_t m = 0; m < a->tiles; m++) {
-        const uint32_t gm = a->g_addr + m * tile;
-        if (m == 0u) {
-            moe_pf_ew2_program((void *)gm, (void *)a->s_addr, 2u * hb, SIMD_BEAT_BYTES,
-                               (void *)gm, 2u * hb, SIMD_BEAT_BYTES, 1u, 0u, SIMD_EW_MUL);
-        } else {
-            moe_pf_ew2_repoint(gm, a->s_addr, gm);
-        }
-        snax_simd_fire();
-    }
+    MOE_PF_SCALE_TILES(a->g_addr, a->s_addr, a->tiles, 2u * hb, tile, a->g_addr, tile);
     rc = moe_pf_drain("simd_deq_swiglu");
     // 2) silu over the whole of g (the up halves' silu is never read)
     if (rc == BINGO_RET_SUCC)
@@ -582,9 +561,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_deq_swiglu(void *arg) {
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = a->out_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, a->out_addr);
 #endif
 }
 
@@ -620,9 +597,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_rows(void *arg) {
     const volatile uint16_t *w = (const volatile uint16_t *)a->w_addr;
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     if (a->rows == 0u) {
-        sp->return_value = a->dst_addr;
-        sp->num_return_values = 0;
-        return BINGO_RET_SUCC;
+        BINGO_RETURN_SUCC(sp, a->dst_addr);
     }
     snax_simd_shape_t in, out;
     snax_simd_shape_2d(&in, (void *)a->src_addr, nb2, BINGO_MOE_PF_D_BLOCK, 1u, 0u);
@@ -646,9 +621,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_rows(void *arg) {
     const uint32_t rc = moe_pf_drain("simd_quant_rows");
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = a->dst_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, a->dst_addr);
 #endif
 }
 
@@ -677,24 +650,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_scatter_add_rows(void *arg) {
     const volatile uint16_t *ids = (const volatile uint16_t *)a->ids_addr;
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     if (a->n == 0u) {
-        sp->return_value = a->y_addr;
-        sp->num_return_values = 0;
-        return BINGO_RET_SUCC;
+        BINGO_RETURN_SUCC(sp, a->y_addr);
     }
     if (a->s_addr) {
         // the dequantisation of the n rows' row tiles, in place, before they are added
         BINGO_SIMD_REQUIRE_LOCAL(a->s_addr, "simd_scatter_add_rows", "scale");
         const uint32_t tiles = (a->n + 7u) / 8u;
-        for (uint32_t m = 0; m < tiles; m++) {
-            const uint32_t x = a->d_addr + m * a->d_tile_stride;
-            if (m == 0u) {
-                moe_pf_ew2_program((void *)x, (void *)a->s_addr, 8u * a->nt, SIMD_BEAT_BYTES,
-                                   (void *)x, 8u * a->nt, SIMD_BEAT_BYTES, 1u, 0u, SIMD_EW_MUL);
-            } else {
-                moe_pf_ew2_repoint(x, a->s_addr, x);
-            }
-            snax_simd_fire();
-        }
+        MOE_PF_SCALE_TILES(a->d_addr, a->s_addr, tiles, 8u * a->nt, a->d_tile_stride, a->d_addr,
+                           a->d_tile_stride);
         if (moe_pf_drain("simd_scatter_add_rows") != BINGO_RET_SUCC) return BINGO_RET_FAIL;
     }
     for (uint32_t i = 0; i < a->n; i++) {
@@ -712,8 +675,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_scatter_add_rows(void *arg) {
     const uint32_t rc = moe_pf_drain("simd_scatter_add_rows");
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = a->y_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, a->y_addr);
 #endif
 }

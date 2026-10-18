@@ -141,10 +141,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     /// Core-level SIMD Kernels  (offload_hw_kernels/simd.h)          ///
     /// All of these run on the SIMD core, hart 1.                     ///
     // The FP16 stream operators the LLM layers decompose into.
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_reduce),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_map),
-    // Merged map+reduce: both operators in ONE task (softmax exp + Sexp).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_map_reduce),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_elementwise),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fp16_to_int8),
     // RoPE, as ONE task: both products on the pre-map elementwise, their sum on the
@@ -157,9 +154,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // the pre-map EW0, and the reciprocal done as rsqrt(Sexp*Sexp) on the datapath --
     // the core's integer divide survives only at rows == 1 (cheaper there) and past
     // cols == 255 (where the FP16 square would overflow).
-    // Precision picked by name: fp16 out, or int8 out (fused Fp16ToInt8, baked 127.0).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_f16_i8),
     // The same distribution over x^T: one token per lane, so BOTH per-row scalars come
     // out of the accumulators with no fold and ride back as sticky seeds -- and the
     // reciprocal becomes rsqrt(s*s), so nothing leaves the datapath.
@@ -170,12 +165,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rmsnorm),
     // The same normalisation over x^T: one token per lane, so the reduce is LANEWISE and
     // the scale is sticky -- no cross-lane fold, no broadcast plane, ~3x cheaper.
-    // Whole FP16 silu / swiglu in one kernel (StreamMap / StreamMap+Elementwise;
-    // baked 16.0 int8 scale).
+    // Whole FP16 silu / swiglu in one kernel (StreamMap / StreamMap+Elementwise).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_silu_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_silu_f16_i8),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_i8),
     // The reconvergence of a conditional fork: out = SUM w[e] * y[e] over the
     // experts the gating kernel selected. The weights are FP32 bits straight into
     // a CSR, so no float arithmetic runs on this FPU-less hart.

@@ -141,17 +141,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_row(void *arg) {
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    if (snax_simd_wait_all_bounded() || snax_simd_bad_config()) {
-        printf_safe("[Cluster %d Core %d]: Error! simd_rmsnorm_row did not drain cleanly "
-                    "(status %08x)\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    snax_read_simd_cfg_reg(SIMD_STATUS));
-        return BINGO_RET_FAIL;
-    }
+    if (snax_simd_drain()) BINGO_SIMD_DRAIN_FAILED("simd_rmsnorm_row");
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    sp->return_value = y;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, y);
 #endif
 }
 
@@ -241,9 +233,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_a_row(void *arg) {
     uint32_t rc = simd_run_shapes(&in, &sh_out);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = out_a;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, out_a);
 #endif
 }
 
@@ -296,9 +286,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_a_rows(void *arg) {
     uint32_t rc = simd_run_shapes(&in, &out);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-    sp->return_value = q;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, q);
 #endif
 }
 
@@ -361,19 +349,41 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    const uint32_t bad = snax_simd_wait_all_bounded() || snax_simd_bad_config();
+    const uint32_t bad = snax_simd_drain();
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    if (bad) {
-        printf_safe("[Cluster %d Core %d]: Error! simd_mla_normalise did not drain cleanly "
-                    "(status %08x)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    snax_read_simd_cfg_reg(SIMD_STATUS));
-        return BINGO_RET_FAIL;
-    }
-    sp->return_value = y;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    if (bad) BINGO_SIMD_DRAIN_FAILED("simd_mla_normalise");
+    BINGO_RETURN_SUCC(sp, y);
 #endif
+}
+
+// The last three tasks of the router softmax, shared by simd_softmax_row and
+// simd_softmax_row_ext. x's latch (xl) holds -m and s is splatted at `s`; `el` is e's latch.
+//
+//   3  EW0 ADD|STICKY_B [-m][x] -> Map EXP [-> Reduce ADD|TAP] -> e (with_sum: and s after it)
+//   4  [s][s] at stride 0: EW0 MUL|STICKY_B -> Map RSQRT       -> 1/s         (e's latch)
+//   5  EW1 MUL|STICKY_B [1/s][e]                               -> p
+//
+// `in` and `out` are the caller's shape scratch; the tasks are queued, not drained.
+static inline __attribute__((always_inline)) void _bingo_softmax_row_tail(
+    snax_simd_shape_t *in, snax_simd_shape_t *out, uint32_t xl, uint32_t e, uint32_t el,
+    uint32_t s, uint32_t p, uint32_t beats, bool with_sum) {
+    snax_simd_shape_flat(in, (void *)xl, 1u + beats);
+    snax_simd_shape_flat(out, (void *)e, with_sum ? beats + 1u : beats);
+    simd_arm_sub_exp(beats, with_sum ? SIMD_RED_ADD | SIMD_RED_TAP : 0u);
+    snax_simd_program_fast(in, out);
+    snax_simd_fire();
+    snax_simd_shape_broadcast(in, (void *)s, 2u);
+    snax_simd_shape_flat(out, (void *)el, 1u);
+    simd_arm_recip_sq();
+    snax_simd_program_fast(in, out);
+    snax_simd_fire();
+    snax_simd_shape_flat(in, (void *)el, 1u + beats);
+    snax_simd_shape_flat(out, (void *)p, beats);
+    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
+                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_program_fast(in, out);
+    snax_simd_fire();
 }
 
 // ==========================================================================
@@ -410,51 +420,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row_ext(void *arg) {
         return BINGO_RET_FAIL;
     }
     snax_simd_shape_t in, out;
-    // e = exp(x - m)
-    snax_simd_shape_flat(&in, (void *)xl, 1u + beats);
-    snax_simd_shape_flat(&out, (void *)e, beats);
-    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
-                                                     (1u << SIMD_EXT_STREAMMAP));
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_ADD | SIMD_EW_STICKY_B);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_EXP);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
-    // 1/s = rsqrt(s * s) into e's latch
-    snax_simd_shape_broadcast(&in, (void *)s, 2u);
-    snax_simd_shape_flat(&out, (void *)el, 1u);
-    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
-                                                     (1u << SIMD_EXT_STREAMMAP));
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_RSQRT);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
-    // p = e / s
-    snax_simd_shape_flat(&in, (void *)el, 1u + beats);
-    snax_simd_shape_flat(&out, (void *)p, beats);
-    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
-                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
+    _bingo_softmax_row_tail(&in, &out, xl, e, el, s, p, beats, false);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    const uint32_t bad = snax_simd_wait_all_bounded() || snax_simd_bad_config();
+    const uint32_t bad = snax_simd_drain();
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    if (bad) {
-        printf_safe("[Cluster %d Core %d]: Error! simd_softmax_row_ext did not drain cleanly "
-                    "(status %08x)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    snax_read_simd_cfg_reg(SIMD_STATUS));
-        return BINGO_RET_FAIL;
-    }
-    sp->return_value = p;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    if (bad) BINGO_SIMD_DRAIN_FAILED("simd_softmax_row_ext");
+    BINGO_RETURN_SUCC(sp, p);
 #endif
 }
 
@@ -514,54 +487,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row(void *arg) {
                    SIMD_FUNC_LINEAR);
     snax_simd_program_fast(&in, &out);
     snax_simd_fire();
-    // 3 e = exp(x - m) and its sum, one sweep
-    snax_simd_shape_flat(&in, (void *)xl, 1u + beats);
-    snax_simd_shape_flat(&out, (void *)e, beats + 1u);
-    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
-                                                     (1u << SIMD_EXT_STREAMMAP) |
-                                                     (1u << SIMD_EXT_STREAMREDUCE));
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_ADD | SIMD_EW_STICKY_B);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_EXP);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMREDUCE_CSR, 0, beats);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMREDUCE_CSR, 1, SIMD_RED_ADD | SIMD_RED_TAP);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
-    // 4 1/s = rsqrt(s * s) into e's latch
-    snax_simd_shape_broadcast(&in, (void *)s, 2u);
-    snax_simd_shape_flat(&out, (void *)el, 1u);
-    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
-                                                     (1u << SIMD_EXT_STREAMMAP));
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
-    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_RSQRT);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
-    // 5 p = e / s
-    snax_simd_shape_flat(&in, (void *)el, 1u + beats);
-    snax_simd_shape_flat(&out, (void *)p, beats);
-    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
-                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_program_fast(&in, &out);
-    snax_simd_fire();
+    // 3-5 e = exp(x - m) and its sum, 1/s, p = e / s
+    _bingo_softmax_row_tail(&in, &out, xl, e, el, s, p, beats, true);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    const uint32_t bad = snax_simd_wait_all_bounded() || snax_simd_bad_config();
+    const uint32_t bad = snax_simd_drain();
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    if (bad) {
-        printf_safe("[Cluster %d Core %d]: Error! simd_softmax_row did not drain cleanly "
-                    "(status %08x)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    snax_read_simd_cfg_reg(SIMD_STATUS));
-        return BINGO_RET_FAIL;
-    }
-    sp->return_value = p;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    if (bad) BINGO_SIMD_DRAIN_FAILED("simd_softmax_row");
+    BINGO_RETURN_SUCC(sp, p);
 #endif
 }
 
@@ -612,7 +546,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_swiglu_a_row(void *arg) {
         const uint32_t gr = g + r * a->g_pitch, upr = gr + 2u * n;
         const uint32_t outr = out_a + r * a->a_pitch;
         if (r > 0u) {
-            bad = snax_simd_wait_all_bounded() || snax_simd_bad_config();
+            bad = snax_simd_drain();
             snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
             if (bad) break;
         }
@@ -653,17 +587,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_swiglu_a_row(void *arg) {
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    bad = bad || snax_simd_wait_all_bounded() || snax_simd_bad_config();
+    bad = bad || snax_simd_drain();
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    if (bad) {
-        printf_safe("[Cluster %d Core %d]: Error! simd_swiglu_a_row did not drain cleanly "
-                    "(status %08x)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    snax_read_simd_cfg_reg(SIMD_STATUS));
-        return BINGO_RET_FAIL;
-    }
-    sp->return_value = out_a;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    if (bad) BINGO_SIMD_DRAIN_FAILED("simd_swiglu_a_row");
+    BINGO_RETURN_SUCC(sp, out_a);
 #endif
 }

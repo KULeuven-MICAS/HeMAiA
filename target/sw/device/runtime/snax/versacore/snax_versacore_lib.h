@@ -358,6 +358,16 @@ void start_versacore_and_streamer() {
     start_versacore();
 }
 
+// START both, then clear the streamer's START at once. An engine that re-triggers its
+// descriptor walk under a held START desynchronises from the array, which then waits for
+// operands that never arrive and sits BUSY for ever; any delay between the START and the
+// clear is long enough for that to happen.
+static inline __attribute__((always_inline)) void start_versacore_and_streamer_pulse(void) {
+    start_versacore_and_streamer();
+    csrw_ss(STREAMER_START_CSR, 0);
+    csrw_ss(STREAMER_START_CSR, 0);
+}
+
 // Set GEMM configuration CSR
 void set_versacore_csr(uint32_t take_in_new_c,
                        uint32_t a_b_input_times_one_output,

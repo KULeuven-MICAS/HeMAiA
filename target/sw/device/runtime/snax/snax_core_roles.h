@@ -77,6 +77,16 @@ static inline int snax_is_xdma_core(void) {
 #define snax_is_xdma_core() SNAX_THIS_CLUSTER_HAS_NO_XDMA_CORE
 #endif
 
+// The iDMA hart is the one snRuntime calls the DM core (see the note at the top), so its
+// predicate is snRuntime's own.
+#if SNAX_HAS_IDMA_CORE
+static inline int snax_is_idma_core(void) {
+    return snrt_is_dm_core();
+}
+#else
+#define snax_is_idma_core() SNAX_THIS_CLUSTER_HAS_NO_IDMA_CORE
+#endif
+
 // ------------------------------------------------------------------ role assertion
 //
 // A BINGO node carries its core placement from the mini-compiler. If the graph puts a
@@ -84,15 +94,20 @@ static inline int snax_is_xdma_core(void) {
 // accelerator and report success. This turns that into a loud failure at the first
 // dispatch.
 //
+// BINGO_FAIL_WRONG_CORE is the refusal itself, for a kernel that branches on the role
+// rather than returning early.
+//
 // Usage, as the first statement of a role-bound kernel body:
-//     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_stream_reduce", "SIMD");
+//     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_stream_map", "SIMD");
+#define BINGO_FAIL_WRONG_CORE(_kname, _rolename)                                   \
+    do {                                                                           \
+        printf_safe("[Cluster %d Core %d]: Error! " _kname                         \
+                    " must run on the " _rolename                                  \
+                    " core; the DFG placed it here. Kernel not executed.\r\n",     \
+                    snrt_cluster_idx(), snrt_cluster_core_idx());                  \
+        return BINGO_RET_FAIL;                                                     \
+    } while (0)
 #define BINGO_REQUIRE_CORE(_pred, _kname, _rolename)                               \
     do {                                                                           \
-        if (!(_pred)) {                                                            \
-            printf_safe("[Cluster %d Core %d]: Error! " _kname                     \
-                        " must run on the " _rolename                              \
-                        " core; the DFG placed it here. Kernel not executed.\r\n", \
-                        snrt_cluster_idx(), snrt_cluster_core_idx());              \
-            return BINGO_RET_FAIL;                                                 \
-        }                                                                          \
+        if (!(_pred)) BINGO_FAIL_WRONG_CORE(_kname, _rolename);                    \
     } while (0)

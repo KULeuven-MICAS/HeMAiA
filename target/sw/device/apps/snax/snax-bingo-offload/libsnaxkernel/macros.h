@@ -193,6 +193,16 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 // actual offset comes from offsetof(args_t, scratchpad_ptr).
 #define BINGO_GET_SP(arg, args_t) BINGO_GET_SCRATCHPAD((arg), args_t)
 
+// Publish a kernel's result in its scratchpad and finish with BINGO_RET_SUCC: `_value` is
+// the return value, `_n` the count of return values behind it (0 when it is one word).
+#define BINGO_RETURN_SUCC_N(_sp, _value, _n) \
+    do { \
+        (_sp)->return_value = (_value); \
+        (_sp)->num_return_values = (_n); \
+        return BINGO_RET_SUCC; \
+    } while (0)
+#define BINGO_RETURN_SUCC(_sp, _value) BINGO_RETURN_SUCC_N(_sp, _value, 0)
+
 // Issue an xDMA library call and propagate a failure to the bingo scheduler.
 // The snax xDMA helpers (xdma_memcpy_1d_full_addr / _nd_full_addr) return 0 on
 // success or a negative code. This wrapper turns any non-zero into a kernel-
@@ -215,8 +225,18 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
         }                                                                    \
     } while (0)
 
-// Refuse a kernel whose xDMA extension the current RTL cfg did not generate.
-// The reader/writer extensions (StreamMap/StreamReduce/StreamElementwise/
+// Refuse a kernel whose engine extension the current RTL cfg did not generate; `what`
+// names it ("the SIMD StreamMap operator").
+#define BINGO_EXT_UNSUPPORTED(kname, what)                                   \
+    do {                                                                     \
+        printf_safe("[Cluster %d Core %d]: Error! " kname " needs " what     \
+                    ", which this RTL cfg does not generate. "               \
+                    "Kernel not executed.\r\n",                              \
+                    snrt_cluster_idx(), snrt_cluster_core_idx());            \
+        return BINGO_RET_FAIL;                                               \
+    } while (0)
+
+// The xDMA flavour of it: the reader/writer extensions (StreamMap/StreamReduce/StreamElementwise/
 // Fp16ToInt8/...) are OPTIONAL hardware: snax_xdma_addr.h only defines a
 // READER_EXT_*/WRITER_EXT_* index for the ones the cfg actually built. A kernel
 // that needs an absent extension must still COMPILE — the library is shared by
@@ -224,11 +244,5 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 // precondition for it. So the restriction lives at CALL time: the kernel body is
 // dead-code-eliminated (its BINGO_HAS_* flag is a literal 0) and the node fails
 // loudly in the runtime instead of breaking the build of every other kernel.
-#define BINGO_XDMA_EXT_UNSUPPORTED(kname, exts)                              \
-    do {                                                                     \
-        printf_safe("[Cluster %d Core %d]: Error! " kname " needs the xDMA " \
-                    exts " extension, which this RTL cfg does not "          \
-                    "generate. Kernel not executed.\r\n",                    \
-                    snrt_cluster_idx(), snrt_cluster_core_idx());            \
-        return BINGO_RET_FAIL;                                               \
-    } while (0)
+#define BINGO_XDMA_EXT_UNSUPPORTED(kname, exts) \
+    BINGO_EXT_UNSUPPORTED(kname, "the xDMA " exts " extension")

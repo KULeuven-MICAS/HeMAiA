@@ -111,11 +111,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemv(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemv_args_t);
     BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemv", "GEMM");
 #if !BINGO_HAS_GEMV
-    printf_safe("[Cluster %d Core %d]: Error! gemv needs VersaCore's (1, 4, 32) shape with a "
-                "two-group B reader, channel masks and the D-port shift, which this RTL cfg "
-                "does not generate. Kernel not executed.\r\n",
-                snrt_cluster_idx(), snrt_cluster_core_idx());
-    return BINGO_RET_FAIL;
+    BINGO_EXT_UNSUPPORTED("gemv", "VersaCore's (1, 4, 32) shape with a two-group B reader, "
+                                  "channel masks and the D-port shift");
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __snax_bingo_kernel_gemv_args_t *a = (const __snax_bingo_kernel_gemv_args_t *)arg;
@@ -285,8 +282,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemv(void *arg) {
     }
     csrw_ss(VERSACORE_START_CSR, 0);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMV_RUN_END);
-    sp->return_value = D_addr;
-    sp->num_return_values = nbp * groups;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC_N(sp, D_addr, nbp * groups);
 #endif
 }

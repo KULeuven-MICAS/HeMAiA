@@ -13,17 +13,16 @@ LIBSNAXKERNEL_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 LIBSNAXKERNEL_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 # ------------------------------------------------------------------------
-# GEMM shape-table validation
+# GEMM shape table
 # ------------------------------------------------------------------------
-# offload_hw_kernels/gemm.h and offload_sw_kernels/gemm.h are hand-maintained
-# plain C and both index bingo_gemm_shape_params[] from
-# runtime/snax/versacore/gemm_shapes.h. validate_shapes.py (lives next to
-# the header) cross-checks it against the active hwcfg and fails the build
-# on any drift. No code is generated.
+# offload_hw_kernels/gemm.h and offload_sw_kernels/gemm.h index
+# bingo_gemm_shape_params[] from runtime/snax/versacore/gemm_shapes.h, which
+# the rule below generates from the active cluster cfg (validate_shapes.py
+# lives next to the header).
 #
-#
-# Both are lazy (`=`): $(SNITCH_ROOT) is defined by the outer apps/common.mk, which
-# is included AFTER this file.
+# GEMM_RTL_CFG / GEMM_CLUSTER / GEMM_HWCFG are lazy (`=`): GEMM_HWCFG needs
+# $(SNITCH_ROOT), which the outer apps/common.mk defines AFTER this file is
+# included.
 GEMM_RTL_CFG   = $(abspath $(LIBSNAXKERNEL_DIR)/../../../../../../rtl/cfg/lru.hjson)
 GEMM_CLUSTER   = $(shell python3 -c "import hjson,sys; print(hjson.load(open(sys.argv[1]))['clusters'][0])" $(GEMM_RTL_CFG) 2>/dev/null)
 GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/$(GEMM_CLUSTER).hjson
@@ -37,11 +36,9 @@ VALIDATE_STAMP  := $(LIBSNAXKERNEL_DIR).validate.stamp
 # this Makefile is included, so the first prereq pass would see it empty.
 .SECONDEXPANSION:
 
-# gemm_shapes.h is GENERATED from the ACTIVE cluster cfg, not hand-maintained. The table
-# is a pure function of the hjson -- array shape, element widths, the serialised C/D width
-# and the C/D port's spatial nest -- so deriving it is the only way it cannot go stale.
-# It used to be written by hand and cross-checked, which turned every cfg change into a
-# failed build plus a manual re-derivation; the same derivation now just writes the answer.
+# gemm_shapes.h is generated from the active cluster cfg. The table is a pure function of
+# the hjson -- array shape, element widths, the serialised C/D width and the C/D port's
+# spatial nest -- so deriving it keeps it in step with the cfg.
 # --emit rewrites only when the content changes, so an unchanged cfg does not retouch the
 # header and force every dependent TU to recompile.
 $(GEMM_SHAPES): $$(GEMM_HWCFG) $(VALIDATE_SCRIPT)
@@ -51,8 +48,8 @@ $(VALIDATE_STAMP): $(GEMM_SHAPES)
 	@touch $(VALIDATE_STAMP)
 
 # The outer common.mk wires DATA_H as a prereq of every object file in this
-# device app. Exposing the validation stamp ensures every build first runs
-# the hwcfg vs. gemm_shapes.h cross-check before any kernel TU compiles.
+# device app. Exposing the stamp makes every kernel TU wait for gemm_shapes.h to be
+# (re)generated from the hwcfg.
 DATA_H = $(VALIDATE_STAMP)
 
 .PHONY: clean-data clean

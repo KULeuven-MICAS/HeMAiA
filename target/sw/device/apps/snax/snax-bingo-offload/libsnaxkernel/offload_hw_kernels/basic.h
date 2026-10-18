@@ -19,9 +19,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel: %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
 
 // Sync probe: the smallest possible task. No work, no printf -- its whole purpose is to
@@ -41,9 +39,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_sync_probe(void *arg){
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_END);
 
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
 
 // Sync mark: the sync probe's stamp, then one 32-bit store of BINGO_SYNC_MARK_MAGIC | slot to
@@ -67,9 +63,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_sync_mark(void *arg){
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_END);
 
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
 
 // Chip barrier: one cross-chip barrier as a BINGO task, run by ONE core of every chip in
@@ -117,21 +111,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_chip_barrier(void *arg){
                     get_current_chip_id(), (int)mode, (int)seq, (int)reached);
     }
 
-    sp->return_value = reached;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
-}
-
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
-    // This is a special kernel to indicate the bingo hw manager loop has started
-    // In the future we can add some content here
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_entry_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
-    printf_safe("[Cluster %d Core %d]: Start: \r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, reached);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){

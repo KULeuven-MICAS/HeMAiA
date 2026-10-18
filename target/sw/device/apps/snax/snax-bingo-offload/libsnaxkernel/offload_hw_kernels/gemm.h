@@ -22,6 +22,7 @@
 #pragma once
 
 #include "../macros.h"
+#include "snax_core_roles.h"  // snax_is_gemm_core(), BINGO_REQUIRE_CORE
 #include <snax_versacore_lib.h>
 #include <gemm_shapes.h>
 
@@ -128,6 +129,36 @@ static inline uint32_t bingo_blocks_changed(volatile int32_t *d, const int32_t *
         if (d[i * blk_words + blk_words - 1] != before[i]) n = i + 1;
     return n;
 }
+
+// Set the low `bits` bits of the channel-enable mask `dst` (`n_words` words). The words are
+// in reverse order: the high word relates to the low channel index.
+static inline __attribute__((always_inline)) void bingo_channel_mask(uint32_t *dst,
+                                                                     uint32_t n_words,
+                                                                     uint32_t bits)
+{
+    for (uint32_t i = 0; i < bits; i++)
+    {
+        uint32_t idx = i / 32;
+        if (idx < n_words)
+        {
+            dst[n_words - 1 - idx] |= (uint32_t)(1u << (i % 32));
+        }
+    }
+}
+
+// A queued start is this cluster's start_seq-th VersaCore dispatch: the array has retired
+// fewer than that, or the numbering the waits rely on is wrong.
+#define BINGO_GEMM_REQUIRE_UNRETIRED(start_seq, kname)                                         \
+    do {                                                                                       \
+        if ((int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - (start_seq)) >= 0)                    \
+        {                                                                                      \
+            printf_safe("[Cluster %d Core %d]: Error! " kname " seq=%d but the array has "     \
+                        "already retired %d dispatches\r\n", snrt_cluster_idx(),               \
+                        snrt_cluster_core_idx(), (int)(start_seq),                             \
+                        (int)csrr_ss(VERSACORE_FINISHED_TASK));                                \
+            return BINGO_RET_FAIL;                                                             \
+        }                                                                                      \
+    } while (0)
 
 // -------------------------------------------------------------
 // Every GEMM here computes D = A*B + C. The accumPrevC flag selects WHERE the
@@ -341,16 +372,7 @@ static uint32_t __bingo_gemm_run(
         {
             bits = 1;
         }
-        for (uint32_t i = 0; i < bits; i++)
-        {
-            uint32_t idx = i / 32;
-            if (idx < BINGO_A_CSR_NUM)
-            {
-                // high location of channel_en_A_dyn relates to low channel index
-                channel_en_A_dyn[BINGO_A_CSR_NUM - 1 - idx] |=
-                    (uint32_t)(1u << (i % 32));
-            }
-        }
+        bingo_channel_mask(channel_en_A_dyn, BINGO_A_CSR_NUM, bits);
         channel_en_A_ptr = channel_en_A_dyn;
     }
 
@@ -363,15 +385,7 @@ static uint32_t __bingo_gemm_run(
         {
             bits = 1;
         }
-        for (uint32_t i = 0; i < bits; i++)
-        {
-            uint32_t idx = i / 32;
-            if (idx < BINGO_B_CSR_NUM)
-            {
-                channel_en_B_dyn[BINGO_B_CSR_NUM - 1 - idx] |=
-                    (uint32_t)(1u << (i % 32));
-            }
-        }
+        bingo_channel_mask(channel_en_B_dyn, BINGO_B_CSR_NUM, bits);
         channel_en_B_ptr = channel_en_B_dyn;
     }
 
@@ -380,15 +394,7 @@ static uint32_t __bingo_gemm_run(
     {
         uint32_t bits = (BINGO_SERIAL_C_D_WIDTH + BINGO_BANK_WIDTH - 1) /
                         BINGO_BANK_WIDTH;
-        for (uint32_t i = 0; i < bits; i++)
-        {
-            uint32_t idx = i / 32;
-            if (idx < BINGO_D32_CSR_NUM)
-            {
-                channel_en_D32_dyn[BINGO_D32_CSR_NUM - 1 - idx] |=
-                    (uint32_t)(1u << (i % 32));
-            }
-        }
+        bingo_channel_mask(channel_en_D32_dyn, BINGO_D32_CSR_NUM, bits);
         channel_en_D32_ptr = channel_en_D32_dyn;
     }
 
@@ -688,15 +694,9 @@ static uint32_t __bingo_gemm_run(
         D32tlstride[3] = 0;
     }
     uint32_t set_addr_remap_index_D32 = 0;
-    // A queued start (start_seq != 0) is this cluster's start_seq-th VersaCore dispatch; the
-    // array has retired fewer than that, or the numbering the waits rely on is wrong.
-    if (start_seq != 0u &&
-        (int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - start_seq) >= 0)
+    if (start_seq != 0u)
     {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_start seq=%d but the array has already "
-                    "retired %d dispatches\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    (int)start_seq, (int)csrr_ss(VERSACORE_FINISHED_TASK));
-        return BINGO_RET_FAIL;
+        BINGO_GEMM_REQUIRE_UNRETIRED(start_seq, "gemm_start");
     }
     //////////////////////////////////////////////////////////////
     // Configuration the Steamer and Versacore
@@ -766,13 +766,9 @@ static uint32_t __bingo_gemm_run(
         // Both CSR managers queue the configuration (snax_cfg_queue_depth 2), so the start
         // writes retire while an earlier dispatch still runs; __snax_bingo_kernel_gemm_wait
         // waits for this one by its number.
-        start_versacore_and_streamer();
-        csrw_ss(STREAMER_START_CSR, 0);
-        csrw_ss(STREAMER_START_CSR, 0);
+        start_versacore_and_streamer_pulse();
         BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
-        sp->return_value = D_addr;
-        sp->num_return_values = M * N;
-        return BINGO_RET_SUCC;
+        BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
     }
     // Snapshot the last INT32 of every output block BEFORE anything starts, so the
     // timeout diagnostic below can say how far the writer actually got.
@@ -833,10 +829,41 @@ static uint32_t __bingo_gemm_run(
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
     VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
-    sp->return_value = D_addr;
-    sp->num_return_values = M * N;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
 }
+
+// A queued start numbers its dispatch from 1; 0 is the unset field.
+#define BINGO_GEMM_REQUIRE_SEQ(seq, kname)                                                     \
+    do {                                                                                       \
+        if ((seq) == 0u)                                                                       \
+        {                                                                                      \
+            printf_safe("[Cluster %d Core %d]: Error! " kname " seq 0: dispatches are "        \
+                        "numbered from 1\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());   \
+            return BINGO_RET_FAIL;                                                             \
+        }                                                                                      \
+    } while (0)
+
+// Shared prologue for the GEMM kernels. NOTE: contains early returns (SW guard + GEMM-core
+// check), so it must expand inside the kernel body. Declares `a` (args, of type `args_t`)
+// and `sp` (scratchpad) for the run macros.
+#define BINGO_GEMM_PROLOGUE(args_t, kname)                                               \
+    BINGO_SW_GUARD_CHECK(arg, args_t);                                                          \
+    BINGO_REQUIRE_CORE(snax_is_gemm_core(), kname, "GEMM");                                     \
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);                                     \
+    const args_t *a = (const args_t *)arg;                                                      \
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, args_t);                                  \
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END)
+
+// The __bingo_gemm_run call for gemm_full's argument fields. `a` is the kernel's args struct
+// (gemm_start's is gemm_full's plus seq and shape_addr), `sp` its scratchpad.
+#define BINGO_GEMM_FULL_RUN(seq, shape_l1)                                                     \
+    __bingo_gemm_run(                                                                          \
+        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,                    \
+        a->M, a->K, a->N, a->array_shape_idx,                                                   \
+        a->transpose_A, a->transpose_B, a->accumPrevC,                                          \
+        a->quantization_enable, a->shift_i, a->multiplier_i,                                    \
+        a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,                                   \
+        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, (seq), (shape_l1), sp)
 
 // -------------------------------------------------------------
 // gemm_full: low-level entry point exposing every precision/quant flag.
@@ -844,24 +871,8 @@ static uint32_t __bingo_gemm_run(
 // -------------------------------------------------------------
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_full_args_t);
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_full_args_t *a =
-        (const __snax_bingo_kernel_gemm_full_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_full_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    return __bingo_gemm_run(
-        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
-        a->M, a->K, a->N, a->array_shape_idx,
-        a->transpose_A, a->transpose_B, a->accumPrevC,
-        a->quantization_enable, a->shift_i, a->multiplier_i,
-        a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
-        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, 0u, 0, sp);
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_full_args_t, "gemm_full");
+    return BINGO_GEMM_FULL_RUN(0u, 0);
 }
 
 // -------------------------------------------------------------
@@ -876,28 +887,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_start(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_start_args_t);
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM start should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_start", "GEMM");
     const __snax_bingo_kernel_gemm_start_args_t *a =
         (const __snax_bingo_kernel_gemm_start_args_t *)arg;
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_start_args_t);
-    if (a->seq == 0u)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_start seq 0: dispatches are numbered from 1\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
-    return __bingo_gemm_run(
-        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
-        a->M, a->K, a->N, a->array_shape_idx,
-        a->transpose_A, a->transpose_B, a->accumPrevC,
-        a->quantization_enable, a->shift_i, a->multiplier_i,
-        a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
-        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, a->seq,
-        (const bingo_gemm_shape_l1_t *)(uintptr_t)a->shape_addr, sp);
+    BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_start");
+    return BINGO_GEMM_FULL_RUN(a->seq, (const bingo_gemm_shape_l1_t *)(uintptr_t)a->shape_addr);
 }
 
 // Copies shape shape_idx of bingo_gemm_shape_params, and the C reader's all-off mask, into the
@@ -932,11 +927,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_wait(void *arg)
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_wait_args_t);
     const __snax_bingo_kernel_gemm_wait_args_t *a =
         (const __snax_bingo_kernel_gemm_wait_args_t *)arg;
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM wait should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_wait", "GEMM");
     const uint32_t seq = a->seq;
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
     uint32_t spin = 0;
@@ -964,23 +955,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_wait(void *arg)
 // the shared GEMM_FULL_RUN trace markers.
 // -------------------------------------------------------------
 
-// Shared prologue for the "plain" (non-requant) wrappers. NOTE: contains early
-// returns (SW guard + core-0 check), so it must expand inside the kernel body.
-// Declares `a` (args) and `sp` (scratchpad) for the run macro below.
-#define BINGO_GEMM_PLAIN_PROLOGUE()                                                            \
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_args_t);                                 \
-    if (snrt_cluster_core_idx() != 0)                                                           \
-    {                                                                                          \
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM should be called from core 0!\r\n", \
-                    snrt_cluster_idx(), snrt_cluster_core_idx());                               \
-        return BINGO_RET_FAIL;                                                                  \
-    }                                                                                          \
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);                                     \
-    const __snax_bingo_kernel_gemm_args_t *a =                                                  \
-        (const __snax_bingo_kernel_gemm_args_t *)arg;                                           \
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_args_t);         \
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END)
-
 // __bingo_gemm_run call for a plain wrapper with the given precision flags
 // (no requantization: quant=0, shift/mult/zp=0).
 #define BINGO_GEMM_PLAIN_RUN(int4_a, int4_b, int32tofp16)                                      \
@@ -992,35 +966,35 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_wait(void *arg)
 // int8 x int8 -> int32 (baseline).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i32(void *arg)
 {
-    BINGO_GEMM_PLAIN_PROLOGUE();
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_args_t, "gemm_i8i8_i32");
     return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 0, /*int32tofp16*/ 0);
 }
 
 // int8 x int4 -> int32 (weight operand B packed to 4-bit).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i4_i32(void *arg)
 {
-    BINGO_GEMM_PLAIN_PROLOGUE();
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_args_t, "gemm_i8i4_i32");
     return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 1, /*int32tofp16*/ 0);
 }
 
 // int4 x int4 -> int32 (both operands packed to 4-bit).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i4i4_i32(void *arg)
 {
-    BINGO_GEMM_PLAIN_PROLOGUE();
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_args_t, "gemm_i4i4_i32");
     return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 1, /*int4_b*/ 1, /*int32tofp16*/ 0);
 }
 
 // int8 x int4 -> fp16 (weight B int4; int32 accumulator converted to fp16).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i4_f16(void *arg)
 {
-    BINGO_GEMM_PLAIN_PROLOGUE();
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_args_t, "gemm_i8i4_f16");
     return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 1, /*int32tofp16*/ 1);
 }
 
 // int8 x int8 -> fp16 (no input packing; int32 accumulator converted to fp16).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_f16(void *arg)
 {
-    BINGO_GEMM_PLAIN_PROLOGUE();
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_args_t, "gemm_i8i8_f16");
     return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 0, /*int32tofp16*/ 1);
 }
 
@@ -1028,18 +1002,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_f16(void *arg)
 // requant params (shift/multiplier/zero-points) in its dedicated args struct.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i8(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_quant_args_t);
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM should be called from core 0!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_quant_args_t *a =
-        (const __snax_bingo_kernel_gemm_quant_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_quant_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_quant_args_t, "gemm_i8i8_i8");
     return __bingo_gemm_run(
         a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
         a->M, a->K, a->N, a->array_shape_idx,
@@ -1053,11 +1016,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_minimal_args_t);
     // This kernel will only start the versacore and streamer with pre-configured CSRs
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_minimal", "GEMM");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
     uint32_t B_addr = ((uint32_t *)arg)[1];
@@ -1077,7 +1036,5 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
     wait_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
     VERSACORE_DEBUG_PRINT("Bingo GEMM Minimal Kernel Compute Done!\r\n");
-    sp->return_value = D_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, D_addr);
 }

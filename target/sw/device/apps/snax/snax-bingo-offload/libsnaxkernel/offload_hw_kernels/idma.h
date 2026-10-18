@@ -11,6 +11,7 @@
 #pragma once
 
 #include "../macros.h"
+#include "snax_core_roles.h"  // snax_is_idma_core(), BINGO_REQUIRE_CORE
 
 // How many concurrent iDMA descriptors one logical 1-D copy is issued as.
 //
@@ -26,56 +27,67 @@
 #define BINGO_IDMA_SPLIT 1
 #endif
 
+// The 1-D copy of __snax_bingo_kernel_idma_1d_copy and __snax_bingo_kernel_idma_broadcast,
+// after the SW guard and the role check (their args are one layout). Copy 1d data from src
+// to dst using the iDMA, or with `bcast` to the same address on every chip (a store to chip
+// 0xFF).
+//   Arg0: uint32_t src_addr_hi
+//   Arg1: uint32_t src_addr_lo
+//   Arg2: uint32_t dst_addr_hi
+//   Arg3: uint32_t dst_addr_lo
+//   Arg4: uint32_t size in Byte
+static inline __attribute__((always_inline)) uint32_t _bingo_idma_1d(void *arg, bool bcast)
+{
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+    uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+    uint64_t dst_dma = bcast ? chiplet_addr_transform_loc(0xF, 0xF, dst_addr) : dst_addr;
+    uint32_t data_size = ((uint32_t *)arg)[4];
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    // ISSUE THE COPY AS BINGO_IDMA_SPLIT CONCURRENT TRANSFERS, NOT ONE (a broadcast is one).
+    //
+    // A single large L3->L1 load runs at a fixed rate well under what the port can
+    // carry, and that rate barely moves whether the array is idle or fully busy. It is
+    // therefore not losing to TCDM contention; it is one transfer limited by round-trip
+    // latency rather than by bandwidth.
+    //
+    // Several transfers in flight cover that latency for each other. Bytes moved, burst
+    // shape and destination layout are all unchanged -- only the number of outstanding
+    // descriptors differs -- so this is free if the limit is elsewhere and roughly
+    // linear if it is depth.
+    {
+        const uint32_t n = bcast ? 1u : (uint32_t)BINGO_IDMA_SPLIT;
+        // Split on a 64 B beat so no chunk straddles one; fall back to a single
+        // transfer when the size does not divide cleanly.
+        const uint32_t chunk = (data_size / n) & ~63u;
+        if (n > 1u && chunk != 0u) {
+            for (uint32_t i = 0; i < n - 1u; i++)
+                snrt_dma_start_1d_wideptr(dst_dma + i * chunk,
+                                          src_addr + i * chunk, chunk);
+            const uint32_t done = (n - 1u) * chunk;
+            snrt_dma_start_1d_wideptr(dst_dma + done, src_addr + done,
+                                      data_size - done);
+        } else {
+            snrt_dma_start_1d_wideptr(dst_dma, src_addr, data_size);
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+    IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+    IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_dma);
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
-    if (snrt_is_dm_core()){
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
-        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
-        uint32_t data_size = ((uint32_t *)arg)[4];
-        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-        // ISSUE THE COPY AS BINGO_IDMA_SPLIT CONCURRENT TRANSFERS, NOT ONE.
-        //
-        // A single large L3->L1 load runs at a fixed rate well under what the port can
-        // carry, and that rate barely moves whether the array is idle or fully busy. It is
-        // therefore not losing to TCDM contention; it is one transfer limited by round-trip
-        // latency rather than by bandwidth.
-        //
-        // Several transfers in flight cover that latency for each other. Bytes moved, burst
-        // shape and destination layout are all unchanged -- only the number of outstanding
-        // descriptors differs -- so this is free if the limit is elsewhere and roughly
-        // linear if it is depth.
-        {
-            const uint32_t n = (uint32_t)BINGO_IDMA_SPLIT;
-            // Split on a 64 B beat so no chunk straddles one; fall back to a single
-            // transfer when the size does not divide cleanly.
-            const uint32_t chunk = (data_size / n) & ~63u;
-            if (n > 1u && chunk != 0u) {
-                for (uint32_t i = 0; i < n - 1u; i++)
-                    snrt_dma_start_1d_wideptr(dst_addr + i * chunk,
-                                              src_addr + i * chunk, chunk);
-                const uint32_t done = (n - 1u) * chunk;
-                snrt_dma_start_1d_wideptr(dst_addr + done, src_addr + done,
-                                          data_size - done);
-            } else {
-                snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
-            }
-        }
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
-        snrt_dma_wait_all();
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
-        sp->return_value = (uint32_t)dst_addr;
-        sp->num_return_values = 0;
-        return BINGO_RET_SUCC;
-    } else{
-        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_1d_copy", "iDMA");
+    return _bingo_idma_1d(arg, false);
 }
 
 // A broadcast collective's producer (libs/blocks/collective.py, impl "bcast"): its part into
@@ -87,11 +99,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA bcast put should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_bcast_put", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     __snax_bingo_kernel_idma_bcast_put_args_t *a = (__snax_bingo_kernel_idma_bcast_put_args_t *)arg;
     const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
@@ -111,9 +119,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 // Wait for one iDMA transfer by its id. dmstat 0 is the id of the last transfer the ND midend
@@ -121,6 +127,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
 // retired once the completed id has reached it. Unlike snrt_dma_wait_all, which polls the busy bit
 // (backend or ND midend busy), this cannot return while a just-issued transfer is still waiting in
 // the frontend's request FIFO or between the midend and the backend.
+//
+// This is not snrt_dma_wait. That one spins while `completed - tid <= 0`, so it returns only once
+// the completed id has passed `tid` (>). Here the wait ends once the completed id has reached
+// `tid` (>=); the two are not interchangeable.
 static inline void bingo_dma_wait_id(snrt_dma_txid_t tid) {
     uint32_t done;
     do {
@@ -138,11 +148,7 @@ static inline void bingo_dma_wait_id(snrt_dma_txid_t tid) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_fetch_flagged_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA flagged fetch should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_fetch_flagged", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     __snax_bingo_kernel_idma_fetch_flagged_args_t *a = (__snax_bingo_kernel_idma_fetch_flagged_args_t *)arg;
     const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
@@ -186,9 +192,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 // A put behind a landed flag: `size` bytes from src to dst, then the 4-byte `value` to flag, both
@@ -202,11 +206,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_put_flagged(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_put_flagged_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA flagged put should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_put_flagged", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     __snax_bingo_kernel_idma_put_flagged_args_t *a = (__snax_bingo_kernel_idma_put_flagged_args_t *)arg;
     const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
@@ -234,9 +234,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_put_flagged(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 // The receiving end of __snax_bingo_kernel_idma_put_flagged: spin until each of the n_flags
@@ -268,45 +266,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_wait_flags(void *arg)
         }
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_broadcast_args_t);
-
-    // Copy 1d data from src to dst using idma
-    // Arg0: uint32_t src_addr_hi
-    // Arg1: uint32_t src_addr_lo
-    // Arg2: uint32_t dst_addr_hi
-    // Arg3: uint32_t dst_addr_lo
-    // Arg4: uint32_t size in Byte
-    if (snrt_is_dm_core()){
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
-        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
-        uint64_t dst_addr_broadcast = chiplet_addr_transform_loc(0xF, 0xF, dst_addr);
-        uint32_t data_size = ((uint32_t *)arg)[4];
-        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_broadcast_args_t);
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-        snrt_dma_start_1d_wideptr(dst_addr_broadcast, src_addr, data_size);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
-        snrt_dma_wait_all();
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
-        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
-        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr_broadcast);
-        sp->return_value = (uint32_t)dst_addr;
-        sp->num_return_values = 0;
-        return BINGO_RET_SUCC;
-    } else{
-        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_broadcast", "iDMA");
+    return _bingo_idma_1d(arg, true);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
@@ -328,37 +295,31 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
     //   [3]  dst_addr_lo
     //   [4]  num_elems    (total element count, must be even)
     //   [5]  elem_bytes   (1=int8, 2=int16/fp16, 4=int32)
-    if (snrt_is_dm_core()){
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-        uint32_t *a = (uint32_t *)arg;
-        uint64_t src_addr = make_u64(a[0], a[1]);
-        uint64_t dst_addr = make_u64(a[2], a[3]);
-        uint32_t num_elems = a[4];
-        uint32_t elem_bytes = a[5];
-        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_pairwise_swap_args_t);
-        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_pairwise_swap", "iDMA");
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t *a = (uint32_t *)arg;
+    uint64_t src_addr = make_u64(a[0], a[1]);
+    uint64_t dst_addr = make_u64(a[2], a[3]);
+    uint32_t num_elems = a[4];
+    uint32_t elem_bytes = a[5];
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_pairwise_swap_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-        uint32_t pairs = num_elems / 2u;         // N/2 pairs
-        uint32_t pair_bytes = 2u * elem_bytes;   // stride from one pair to the next
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-        // dst[2k]   = src[2k+1]   (odd elements -> even slots)
-        snrt_dma_start_2d_wideptr(dst_addr, src_addr + elem_bytes,
-                                  elem_bytes, pair_bytes, pair_bytes, pairs);
-        // dst[2k+1] = src[2k]     (even elements -> odd slots)
-        snrt_dma_start_2d_wideptr(dst_addr + elem_bytes, src_addr,
-                                  elem_bytes, pair_bytes, pair_bytes, pairs);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
-        snrt_dma_wait_all();
-        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-        IDMA_DEBUG_PRINT("IDMA pairwise swap done (%u pairs, %u-byte elems)\r\n", pairs, elem_bytes);
-        sp->return_value = (uint32_t)dst_addr;
-        sp->num_return_values = 0;
-        return BINGO_RET_SUCC;
-    } else{
-        printf_safe("[Cluster %d Core %d]: Error! IDMA pairwise swap should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    uint32_t pairs = num_elems / 2u;         // N/2 pairs
+    uint32_t pair_bytes = 2u * elem_bytes;   // stride from one pair to the next
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    // dst[2k]   = src[2k+1]   (odd elements -> even slots)
+    snrt_dma_start_2d_wideptr(dst_addr, src_addr + elem_bytes,
+                              elem_bytes, pair_bytes, pair_bytes, pairs);
+    // dst[2k+1] = src[2k]     (even elements -> odd slots)
+    snrt_dma_start_2d_wideptr(dst_addr + elem_bytes, src_addr,
+                              elem_bytes, pair_bytes, pair_bytes, pairs);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    IDMA_DEBUG_PRINT("IDMA pairwise swap done (%u pairs, %u-byte elems)\r\n", pairs, elem_bytes);
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
 }
 
 
@@ -372,11 +333,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_2d_copy_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA 2D copy should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_2d_copy", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __snax_bingo_kernel_idma_2d_copy_args_t *a =
         (const __snax_bingo_kernel_idma_2d_copy_args_t *)arg;
@@ -400,9 +357,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 // weight_ring.trailer's 64-bit magic (libs/crest.py TRAILER_MAGIC)
@@ -423,11 +378,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_ring_load_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA ring_load should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_ring_load", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __snax_bingo_kernel_idma_ring_load_args_t *a =
         (const __snax_bingo_kernel_idma_ring_load_args_t *)arg;
@@ -461,9 +412,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     // release_addr 0: this load is one of several readers of the slot (a chunk both clusters of a
     // chip read); the reader that comes last, whose task follows the others, writes the release.
     if (release) *release = a->seq;
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
 #define BINGO_MOE_REC_SLOT_WORDS 32u   // 128 B per slot
@@ -472,11 +421,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_copy_slot(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_copy_slot_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! IDMA copy_slot should be called from a DM core!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_copy_slot", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __snax_bingo_kernel_idma_copy_slot_args_t *a =
         (const __snax_bingo_kernel_idma_copy_slot_args_t *)arg;
@@ -501,7 +446,5 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_copy_slot(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    sp->return_value = (uint32_t)dst;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }

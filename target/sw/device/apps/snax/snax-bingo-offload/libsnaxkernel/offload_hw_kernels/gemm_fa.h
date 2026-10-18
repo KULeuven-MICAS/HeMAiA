@@ -48,6 +48,7 @@
 
 #include "../macros.h"
 #include "snax_core_roles.h"  // snax_is_gemm_core(), BINGO_REQUIRE_CORE
+#include "gemm.h"             // BINGO_GEMM_PROLOGUE, BINGO_GEMM_REQUIRE_SEQ
 #include <snax_versacore_lib.h>
 #include <gemm_shapes.h>
 
@@ -217,17 +218,10 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         return BINGO_RET_FAIL;
     }
 
-    // A queued start is this cluster's start_seq-th VersaCore dispatch: the array has retired
-    // fewer than that, or the numbering the waits rely on is wrong. The counters of a queued
-    // dispatch cannot be accounted (they reset on every configuration write).
+    // The counters of a queued dispatch cannot be accounted (they reset on every
+    // configuration write).
     if (start_seq != 0u) {
-        if ((int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - start_seq) >= 0) {
-            printf_safe("[Cluster %d Core %d]: Error! gemm_fa start seq=%d but the array has "
-                        "already retired %d dispatches\r\n", snrt_cluster_idx(),
-                        snrt_cluster_core_idx(), (int)start_seq,
-                        (int)csrr_ss(VERSACORE_FINISHED_TASK));
-            return BINGO_RET_FAIL;
-        }
+        BINGO_GEMM_REQUIRE_UNRETIRED(start_seq, "gemm_fa start");
         if (perf_addr) {
             printf_safe("[Cluster %d Core %d]: Error! gemm_fa start takes no perf_addr\r\n",
                         snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -408,20 +402,16 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
                               BINGO_TRACE_GEMM_FA_PV_CFG_END);
 
     if (start_seq != 0u) {
-        // START, then the streamer's START cleared at once (see below), and return: the
+        // START, then the streamer's START cleared at once, and return: the
         // dispatch is queued behind whatever the array still runs. The scaler's enable was
         // latched into this dispatch's snapshot at START, so it is disarmed here as in the
         // blocking path. The result is there when __snax_bingo_kernel_gemm_wait has seen
         // retired >= start_seq, never when this task ends.
-        start_versacore_and_streamer();
-        csrw_ss(STREAMER_START_CSR, 0);
-        csrw_ss(STREAMER_START_CSR, 0);
+        start_versacore_and_streamer_pulse();
 #if BINGO_GEMM_FA_HAS_COLSCALE
         if (colscale) csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 0u);
 #endif
-        sp->return_value = D_addr;
-        sp->num_return_values = M * N;
-        return BINGO_RET_SUCC;
+        BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
     }
 
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_START,
@@ -431,14 +421,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // cost a fabric round trip to read. Sampling the free-running array counter first and
     // waiting for it to advance by one gives the same contract without the state.
     const uint32_t retired_before = csrr_ss(VERSACORE_FINISHED_TASK);
-    start_versacore_and_streamer();
-
-    // CLEAR THE STREAMER'S START IMMEDIATELY, before anything else. An engine that
-    // re-triggers its descriptor walk under a held START desynchronises from the array,
-    // which then waits for operands that never arrive and sits BUSY for ever. Any delay
-    // here -- even a short poll loop -- is long enough for that to happen.
-    csrw_ss(STREAMER_START_CSR, 0);
-    csrw_ss(STREAMER_START_CSR, 0);
+    start_versacore_and_streamer_pulse();
 #if BINGO_GEMM_FA_HAS_COLSCALE
     // DISARM THE SCALER. The enable this dispatch needs was latched at START; left set, it
     // would scale the C of whatever configures this streamer next -- every other GEMM
@@ -524,9 +507,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_END,
                               BINGO_TRACE_GEMM_FA_PV_RUN_END);
 
-    sp->return_value = D_addr;
-    sp->num_return_values = M * N;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
 }
 
 // S^T = K.Q^T -- the score tile, emitted as FP16 for the SIMD block to consume.
@@ -559,26 +540,23 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_perf_report(void *arg) {
                 snrt_cluster_idx(), (int)busy, (int)passes, (int)sa, (int)sb, (int)sd,
                 (int)nd, (int)a->ideal_cc);
     pf[0] = 0; pf[1] = 0; pf[2] = 0; pf[3] = 0; pf[4] = 0;
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
 
+// QK's B is Q^T, dense and n-major: neither PV flag nor a B pitch describes it.
+#define BINGO_GEMM_FA_QK_NO_FLAGS(a, kname)                                                    \
+    do {                                                                                       \
+        if ((a)->flags || (a)->b_pitch) {                                                      \
+            printf_safe("[Cluster %d Core %d]: Error! " kname " takes no flags or b_pitch "    \
+                        "(got %d, %d)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),       \
+                        (a)->flags, (a)->b_pitch);                                             \
+            return BINGO_RET_FAIL;                                                             \
+        }                                                                                      \
+    } while (0)
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_args_t);
-    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_fa_qk", "GEMM");
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_fa_args_t *a =
-        (const __snax_bingo_kernel_gemm_fa_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    // QK's B is Q^T, dense and n-major: neither PV flag nor a B pitch describes it.
-    if (a->flags || a->b_pitch) {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_qk takes no flags or b_pitch "
-                    "(got %d, %d)\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx(), a->flags, a->b_pitch);
-        return BINGO_RET_FAIL;
-    }
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_args_t, "gemm_fa_qk");
+    BINGO_GEMM_FA_QK_NO_FLAGS(a, "gemm_fa_qk");
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 1u,
                                a->perf_addr, 0u, 0u, a->d_shift, 0u, 0u, sp);
@@ -590,13 +568,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
 // d_shift and a D of its own).
 // M*meshRow = d, N*meshCol = Br, K*tileSize = Bc.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_args_t);
-    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_fa_pv", "GEMM");
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_fa_args_t *a =
-        (const __snax_bingo_kernel_gemm_fa_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_args_t, "gemm_fa_pv");
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 0u,
                                a->perf_addr, a->flags, a->corr_addr, a->d_shift,
@@ -605,24 +577,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
 
 // S^T = K.Q^T, queued: configure and start dispatch `seq` and return (see QUEUED DISPATCH).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk_start(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_start_args_t);
-    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_fa_qk_start", "GEMM");
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_fa_start_args_t *a =
-        (const __snax_bingo_kernel_gemm_fa_start_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_start_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    if (a->seq == 0u) {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_qk_start seq 0: dispatches are "
-                    "numbered from 1\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
-    if (a->flags || a->b_pitch) {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_qk_start takes no flags or b_pitch "
-                    "(got %d, %d)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), a->flags,
-                    a->b_pitch);
-        return BINGO_RET_FAIL;
-    }
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_start_args_t, "gemm_fa_qk_start");
+    BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_fa_qk_start");
+    BINGO_GEMM_FA_QK_NO_FLAGS(a, "gemm_fa_qk_start");
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 1u,
                                0u, 0u, 0u, a->d_shift, 0u, a->seq, sp);
@@ -632,18 +589,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk_start(void *arg) {
 // (C_COLSCALE) are read from L1 here, so their producer must be done before this task starts,
 // as for the blocking kernel; the result is there after the matching gemm_wait.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv_start(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_start_args_t);
-    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_fa_pv_start", "GEMM");
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_fa_start_args_t *a =
-        (const __snax_bingo_kernel_gemm_fa_start_args_t *)arg;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_start_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    if (a->seq == 0u) {
-        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_pv_start seq 0: dispatches are "
-                    "numbered from 1\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_start_args_t, "gemm_fa_pv_start");
+    BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_fa_pv_start");
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 0u,
                                0u, a->flags, a->corr_addr, a->d_shift,

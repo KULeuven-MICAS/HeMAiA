@@ -639,6 +639,18 @@ static inline bool snax_simd_bad_config(void) {
     return (snax_read_simd_cfg_reg(SIMD_STATUS) & 0x2) != 0;
 }
 
+// The end of a sequence of queued tasks: the bounded drain, then the sticky bad-config bit
+// (a task the AGU refused was dropped, not run). SNAX_SIMD_DRAIN_OK, _TIMEOUT or _REFUSED,
+// so the caller picks the message.
+#define SNAX_SIMD_DRAIN_OK 0u
+#define SNAX_SIMD_DRAIN_TIMEOUT 1u
+#define SNAX_SIMD_DRAIN_REFUSED 2u
+static inline __attribute__((always_inline)) uint32_t snax_simd_drain(void) {
+    if (snax_simd_wait_all_bounded()) return SNAX_SIMD_DRAIN_TIMEOUT;
+    if (snax_simd_bad_config()) return SNAX_SIMD_DRAIN_REFUSED;
+    return SNAX_SIMD_DRAIN_OK;
+}
+
 // ============================================================== two-operand helper
 
 // The reader AGU strides FORWARD only (the temporal-stride CSR is zero-extended to the
@@ -666,4 +678,28 @@ static inline void *snax_simd_ew2_base(void *src_a, void *src_b,
     }
     *operand_stride = a_lo - b_lo;
     return src_b;
+}
+
+// The reader shape of a two-operand pass: {operand (2), beat} for dim 2, and with dim 3 a
+// third loop of `rows` rows `row_stride` bytes apart, over the pair (src_a, src_b) based at
+// the lower operand (snax_simd_ew2_base). `beats` beats `beat_stride` bytes apart in both.
+static inline void snax_simd_shape_ew2(snax_simd_shape_t *s, void *src_a, void *src_b,
+                                       uint32_t dim, uint32_t beats, uint32_t beat_stride,
+                                       uint32_t rows, uint32_t row_stride) {
+    uint32_t operand_stride;
+    void *base = snax_simd_ew2_base(src_a, src_b, &operand_stride);
+    snax_simd_shape_clear(s);
+    s->base = base;
+    s->lane_stride = SIMD_LANE_BYTES;
+    s->lane_mask = 0xFFFFFFFFu;
+    s->byte_mask = 0xFFFFFFFFu;
+    s->dim = dim;
+    s->bound[0] = 2u;
+    s->stride[0] = operand_stride;
+    s->bound[1] = beats;
+    s->stride[1] = beat_stride;
+    if (dim >= 3) {
+        s->bound[2] = rows;
+        s->stride[2] = row_stride;
+    }
 }

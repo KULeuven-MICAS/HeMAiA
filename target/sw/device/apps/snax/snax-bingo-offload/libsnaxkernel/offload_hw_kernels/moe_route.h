@@ -37,6 +37,7 @@
 #pragma once
 
 #include "../macros.h"
+#include "snax_core_roles.h"  // snax_is_idma_core(), BINGO_REQUIRE_CORE
 
 #define BINGO_MOE_ROUTE_MAX_N 64u
 #define BINGO_MOE_ROUTE_MAX_K 8u
@@ -71,12 +72,7 @@ static inline int32_t bingo_mono16(uint16_t h) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_moe_route_args_t);
-    if (!snrt_is_dm_core()) {
-        printf_safe("[Cluster %d Core %d]: Error! moe_route runs on the DM core (it copies "
-                    "table entries with the iDMA)\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "moe_route", "iDMA");
     const __snax_bingo_kernel_moe_route_args_t *a =
         (const __snax_bingo_kernel_moe_route_args_t *)arg;
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_moe_route_args_t);
@@ -205,9 +201,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
                     snrt_cluster_idx(), snrt_cluster_core_idx(), (int)refused);
         return BINGO_RET_FAIL;
     }
-    sp->return_value = a->record_addr;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, a->record_addr);
 }
 
 // FP32 bits -> FP16 bits, round to nearest even, for a finite value: a logit widened from
@@ -294,7 +288,5 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_router_pack(void *arg)
         }
         for (uint32_t i = 0; i < BINGO_MOE_CAND; i++) ids[i] = tk[8u + i];
     }
-    sp->return_value = 0;
-    sp->num_return_values = 0;
-    return BINGO_RET_SUCC;
+    BINGO_RETURN_SUCC(sp, 0);
 }
