@@ -26,7 +26,7 @@ Defaults to the VCS engine with no waveform (fast batch runs); pass
 ``--engine vsim --waveform 1`` to reproduce a failing task under Questasim.
 
     python3 run_local_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
-                            [--waveform 0|1] [--no-d2d] [--no-macro] [--with-pll]
+                            [--waveform 0|1] [--no-d2d] [--no-macro] [--with-pll] [--sw-only]
 """
 
 from __future__ import annotations

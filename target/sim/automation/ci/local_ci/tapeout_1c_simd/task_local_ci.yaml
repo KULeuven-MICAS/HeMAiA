@@ -2,8 +2,8 @@
 # 4 chiplets, 1x snax_versacore_to_simd_cluster per chiplet.
 #
 # The SIMD cluster contains the base GEMM core and all other 1C functionality,
-# so this suite runs every task from tapeout_1c first. Five SIMD-specific xDMA
-# per-op workloads are appended after the 36 base tasks.
+# so this suite runs every task from tapeout_1c first. The five SIMD operator
+# workloads (simd_*_1cluster) are appended after them.
 
 runs:
   # ---- host_only / single_chip ----
