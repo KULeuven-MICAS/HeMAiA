@@ -183,10 +183,19 @@ class GemmQueue:
             return edges
 
         moved = set(movable)
+        # One graph, updated in place: undoing a move changes only its group's chain. The dependency and
+        # order edges stay, and a task's one program edge stays the last of its successors, so every
+        # find_cycle walks the graph in the order a rebuilt copy would and undoes the same moves.
+        g = nx.DiGraph(dfg)
+        g.add_edges_from(dfg.order_edges)
+        fixed = set(g.edges)
+        group_of = {t: key for key, ts in groups.items() for t in ts}
+        chain = {}
+        for key, ts in groups.items():
+            seq = sequence(ts, moved)
+            chain[key] = list(zip(seq, seq[1:]))
+            g.add_edges_from(chain[key])
         while True:
-            g = nx.DiGraph(dfg)
-            g.add_edges_from(dfg.order_edges)
-            g.add_edges_from(program_edges(moved))
             try:
                 cyc = nx.find_cycle(g)
             except nx.NetworkXNoCycle:
@@ -196,6 +205,11 @@ class GemmQueue:
                 raise ValueError(f"the program order closes a cycle: "
                                  f"{[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
             moved.discard(back[0])
+            key = group_of[back[0]]
+            g.remove_edges_from([e for e in chain[key] if e not in fixed])
+            seq = sequence(groups[key], moved)
+            chain[key] = list(zip(seq, seq[1:]))
+            g.add_edges_from(chain[key])
         added = 0
         for a, b in program_edges(moved):
             if not dfg.has_edge(a, b):
