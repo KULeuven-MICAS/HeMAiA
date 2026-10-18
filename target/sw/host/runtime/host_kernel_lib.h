@@ -412,11 +412,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // add a fence here before check to get the latest data in the main mem
     asm volatile("fence" ::: "memory");
     uint32_t err = 0;
-    // A FAILING CHECK MUST NOT OUTLIVE THE SIMULATION. Every mismatch used to print, and
-    // a check over 8,192 elements that is wrong everywhere emits 8,192 UART lines -- the
-    // token-parallel layer's first run spent its whole time budget inside this loop and
-    // ended at element 169, so the verdict line never appeared and the other checks never
-    // ran. The count in the PASS/FAIL line below is still exact; only the per-element
+    // A FAILING CHECK MUST NOT OUTLIVE THE SIMULATION. Printing every mismatch would emit
+    // one UART line per element of a check that is wrong everywhere, which can spend the
+    // whole time budget inside this loop, so the verdict line never appears and the other
+    // checks never run. The count in the PASS/FAIL line below is exact; only the per-element
     // printing stops, and the first few elements are what localises a fault anyway.
     const uint32_t ERR_PRINT_MAX = BINGO_CHECK_ERR_PRINT_MAX;
     // WHERE the mismatches are, in 16 equal buckets over the buffer. Eight printed
@@ -686,21 +685,19 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
 // kind 1 the same record field at the next offset. A run waits until all its slots are
 // free, so the pushes stay `batch` chunks long in the steady state instead of one per
 // released slot; it ends at a new source stream, the ring's wrap or the ring's end, and a
-// routed run waits for the router's record. (Short chunks used to end a run: every 88 KiB
-// chunk of a K = 1408 expert weight went alone, a third of the routed pushes.)
+// routed run waits for the router's record.
 //
 // WHICH RING goes next. policy 0 takes the rings in turn. policy 1 takes the ring holding
 // the fewest pushed-but-unread chunks: a cluster that is waiting has an empty ring and goes
 // first, and clusters stalled behind a dependency, whose rings are full, stop taking the
-// link from the one on the critical path. (dsv2 R2, rings in turn: cluster 0, alone on the
-// MLA's tail, got one 4-chunk batch every ~68 us while the idle clusters' rings filled.)
+// link from the one on the critical path.
 //
 // WHEN the next run is chosen: while the current one streams. Launching the flag transfer
 // blocks the host until the data drains (the launch is a register read that cannot cross
 // the link against the push), so the next run is picked between the data launch and the
 // flag launch, and its data launch follows the flag launch at once. Picking it after the flag
-// launch left the link idle for the pick itself: ~2.9 us per run in R2, the fence (a full
-// D-cache flush on this CVA6) and the schedule reads it forces to miss.
+// launch would leave the link idle for the pick itself: the fence (a full D-cache flush on
+// this CVA6) and the schedule reads it forces to miss.
 
 typedef struct {
     int      ring;                          // -1: nothing can be pushed yet
@@ -719,8 +716,8 @@ typedef struct {
 // buckets: picking the next run; for the flag and for the data launch, the register writes up to
 // the read-back (WR) and the launching read of next_id (GO), which returns once the engine takes
 // the transfer and so includes waiting for it to finish the previous one; polling with nothing
-// to push (IDLE). Register launches only. A line takes the UART ~100 us of simulated time, during
-// which this prefetcher pushes nothing: only the first quarter's counts are undisturbed.
+// to push (IDLE). Register launches only. A line occupies the UART for a long stretch of simulated
+// time, during which this prefetcher pushes nothing: only the first quarter's counts are undisturbed.
 //
 // WEIGHT_PREFETCH_LEAN (a build flag, default 0): cheaper launches and picks.
 //   - A launch writes only the registers that change: the low words of the source and the length,
@@ -1071,7 +1068,7 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
 }
 
 // Batched host iDMA: issue up to four transfers, wait once. See the struct comment in
-// host_kernel_args.h for the measured reason this exists.
+// host_kernel_args.h for why this exists.
 static inline uint64_t __host_bingo_kernel_idma_multi(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     const __host_bingo_kernel_idma_multi_args_t *a =
@@ -2605,8 +2602,8 @@ static inline uint64_t __host_bingo_kernel_reduce_mean(void *arg){
 #if BINGO_HAVE_FP16_VEC
 static inline void __bingo_silu_mul_f16(const _Float16* g, const _Float16* u,
                                          _Float16* o, uint64_t n){
-    // Stays at f32m1. Unlike the single-input fp16 transcendentals (which run at f32m2
-    // for a clean ~1.8x), silu_mul carries TWO widened m2 inputs live across the exp
+    // Stays at f32m1. Unlike the single-input fp16 transcendentals (which run at f32m2),
+    // silu_mul carries TWO widened m2 inputs live across the exp
     // polynomial's own m2 temporaries. At LMUL=2 that exceeds the vector register file
     // and the allocator SPILLS -- and a vector spill makes the compiler emit `csrr vlenb`
     // to size the spill slot. Ara implements no vlenb CSR, so the spill traps (Illegal

@@ -53,8 +53,8 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_check_result_args {
     uint64_t output_data_addr;
     uint64_t data_size;        // in Bytes (byte-exact) OR fp-array size in Bytes (fp modes)
     uint64_t name_addr;        // const char* label for printf (0 = no label)
-    uint64_t check_type;       // 0 = byte-exact, 1 = fp32 absolute-tolerance, 2 = fp16 absolute-tolerance
-    uint64_t tolerance_bits;   // FP32 bit pattern of absolute tolerance (used when check_type != 0)
+    uint64_t check_type;       // BINGO_CHECK_TYPE_* (0..5)
+    uint64_t tolerance_bits;   // FP32 bits of the mode's tolerance: absolute, relative or LSBs (unused when byte-exact)
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_check_result_args_t;
 
@@ -121,13 +121,10 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_args {
 // Up to four iDMA transfers issued from ONE BINGO task.
 //
 // WHY. The system iDMA is a second 512-bit path into the quadrant (a PUSH over
-// quadrant_wide_in, disjoint from the clusters' PULL over quadrant_wide_out), and a single
-// 64 KiB transfer on it measures 56.4 B/cc -- three times a contended pull share. But every
-// BINGO task on the host costs ~433 cc of dispatch (MGR_WRITE_DONE -> MGR_GET_READY ->
-// MGR_PREP plus the kernel wrapper), so at ONE tile per task the effective rate collapses to
-// 41.1 B/cc and the push loses to four concurrent cluster xDMAs. Batching amortises it:
-//
-//     1 tile/task  41.1 B/cc      2 tiles  47.6 B/cc      4 tiles  51.6 B/cc
+// quadrant_wide_in, disjoint from the clusters' PULL over quadrant_wide_out). Every BINGO
+// task on the host carries a fixed dispatch cost (MGR_WRITE_DONE -> MGR_GET_READY ->
+// MGR_PREP plus the kernel wrapper), and batching up to four transfers in one task
+// amortises it.
 //
 // The transfers are ISSUED back to back and waited on ONCE, at the last id -- the engine
 // queues them in order, so the intermediate completions need no poll of their own.
@@ -156,10 +153,10 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_multi_args {
 //
 // BATCHING. The memchip iDMA queues ONE transfer behind the running one, and queuing it
 // takes a register read over the link, which cannot cross while a push streams the other
-// way: every transfer leaves a bubble of a link turnaround plus a round trip (~0.6-0.8 us,
-// measured). With `batch` > 1 the prefetcher waits until up to `batch` consecutive chunks
-// of a ring are free and contiguous (in the source and in the ring: every one but the last
-// fills its slot, no wrap) and pushes them as ONE transfer, then their flags as one more.
+// way: every transfer leaves a bubble of a link turnaround plus a round trip. With
+// `batch` > 1 the prefetcher waits until up to `batch` consecutive chunks of a ring are
+// free and contiguous (in the source and in the ring: every one but the last fills its
+// slot, no wrap) and pushes them as ONE transfer, then their flags as one more.
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_args {
     uint64_t sched_addr;
     uint64_t ring_addr;     // ring r slot s at ring_addr + (r * n_slots + s) * slot_bytes
@@ -204,7 +201,7 @@ typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
 // ==========================================================================
 // Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). The `precision` field is a BINGO_PREC_*
-// word that the dispatcher reads to pick the fp32/fp16/int8/int16 path. Four
+// word that the dispatcher reads to pick the fp32/fp16/int8/int16/int32 path. Five
 // shapes are shared across the ops (the field order matches the arg indices
 // the dispatchers read; scratchpad_ptr stays last per the convention):
 //   ara_binary : add/sub/mul/div/max/min, silu_mul        (a, b, out, n)
@@ -267,8 +264,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
 
 // Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars in cluster L1),
 // writes scale = max|x|/127 (fp32, the downstream dequant qsc) and inv_scale = 127/max|x| (fp32, the
-// xDMA fp16_to_int8 runtime CSR). ~free vs the host quantize_f16i8 it replaces (2+2 scalars, not the
-// 4096-element tensor).
+// runtime inv_scale of simd_fp16_to_int8). It reads two FP16 scalars and writes two FP32 scalars.
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_requant_scale_args {
     uint64_t xmax_addr;        // L1: lane 0 of the MAX(x) reduce beat  (fp16)
     uint64_t nmax_addr;        // L1: lane 0 of the MAX(-x) reduce beat (fp16)

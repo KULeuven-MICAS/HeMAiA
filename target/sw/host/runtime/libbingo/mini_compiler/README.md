@@ -8,13 +8,13 @@ cores, edges between them, buffers they read and write -- and `bingo_compile_dfg
 
 | | |
 |---|---|
-| [`graph/`](graph/) | The DFG data model: nodes, the graph itself. Knows nothing about passes. |
+| [`graph/`](graph/) | The DFG data model: nodes, the graph, and the compile driver that runs the `passes/` mixins in order. |
 | [`mem/`](mem/) | Where data lives: the memory handles a node's operands are, and `DataStaging`, which places a workload's arrays (host image, memory chiplet, HBM) and returns each one's handle. |
 | [`passes/`](passes/) | What runs OVER an assembled graph, in `bingo_compile_dfg` order, plus the analyses those passes use. |
 | [`platform/`](platform/) | The machine: which core carries which engine, how many clusters, what transfer sizes the datapath accepts. |
-| [`libs/`](libs/) | Reusable blocks -- FlashAttention, its fold, the MoE FFN -- and the linker that assembles several into one graph. |
+| [`libs/`](libs/) | Reusable blocks -- FlashAttention, its fold, the MoE expert routing -- and the linker that assembles several into one graph. |
 | [`libs/kernels/`](libs/kernels/) | The kernel ABI. One args class per device/host kernel, matching the C structs in `libbingo/include`, one file per engine. |
-| [`tests/`](tests/) | Runnable checks. No framework: `pixi run python3 tests/test_libs.py`. |
+| [`tests/`](tests/) | Runnable checks, one script each; see `tests/README.md` for how to run them. |
 
 Each directory has its own README describing what is in it and why.
 

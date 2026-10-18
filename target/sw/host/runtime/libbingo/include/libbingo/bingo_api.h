@@ -139,10 +139,7 @@ typedef struct task {
 //  [27:12]  task_id   (16 bits)
 //  [11:4]   cluster_id (8 bits)
 //  [3:0]    flag (4 bits) -> uses MBOX_DEVICE_* constants (fits in 4 bits)
-// A single 32-bit word is enough for most events. Extra payload (e.g., kernel cycles)
-// follows in subsequent words when the flag semantics require it (e.g., DONE => next
-// word = kernel cycles). This mirrors the pattern already used but formalizes the first
-// word structure.
+// Each C2H event is one 32-bit word; no flag carries extra words.
 
 #define BINGO_C2H_FLAG_MASK        0xFu
 #define BINGO_C2H_CLUSTER_MASK     0xFFu
@@ -185,9 +182,9 @@ static inline bingo_c2h_msg_fields_t bingo_c2h_msg_decode(uint32_t w) {
 //  [55:48] source chip id
 //  [47:16] sequence (optional tracing / wrap-around) OR reserved (can be zero)
 //  [15:0]  payload (task id or other type-specific data)
-// Rationale: keeps task id as full 32-bit field (scales to large DAGs) while providing
-// compact type + origin metadata; allows simple mask/shift ops (no branching) and
-// future extensibility via sequence for ordering / debugging.
+// The task id is the 16-bit payload [15:0]; bits [47:16] carry an optional sequence number.
+// Rationale: compact type + origin metadata; allows simple mask/shift ops (no branching)
+// and future extensibility via sequence for ordering / debugging.
 
 typedef enum {
   BINGO_MSG_TASK_COMPLETE = 0x01,  // Payload = completed task id
@@ -257,7 +254,7 @@ typedef struct {
 // block below fail the build at the next growth step instead of dropping edges at runtime.
 typedef struct hw_manager_task {
     uint8_t  task_type;            // TASK_TYPE_WIDTH = 2: 0=Normal, 1=Dummy, 2=Gating
-    uint32_t task_id;              // TASK_ID_WIDTH (12 today; a 16-bit carrier dies at 17)
+    uint32_t task_id;              // TASK_ID_WIDTH bits (cfg bingo_cfg.task_id_width, up to 32)
     uint16_t assigned_chiplet_id;  // BINGO_CHIP_ID_WIDTH: D2D routing id (x << 4) | y
     uint8_t  assigned_cluster_id;  // BINGO_IDX_WIDTH(N_CLUSTERS_PER_CHIPLET)
     uint8_t  assigned_core_id;     // BINGO_IDX_WIDTH(BINGO_NCORES_HW), host core included
@@ -306,9 +303,8 @@ BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    CON
 //   2. the mini-compiler      bingo_dfg_descriptor.py::bingo_task_desc_layout (LSB -> MSB),
 //   3. the shift chain        bingo_utils.h, which BINGO_TASK_DESC_LAYOUT_BITS totals.
 // The generated task list asserts (3) against (2) at compile time, so a field added to
-// (1) and (2) but not (3) makes every affected workload fail to build -- which is exactly
-// what happened to `cerf_carry`, and it went unnoticed because the assert only fires for
-// a workload someone actually compiles.
+// (1) and (2) but not (3) makes every affected workload fail to build. The assert only
+// fires for a workload that is compiled.
 //
 // This encoder/decoder pair is a FOURTH copy and nothing checks it. It currently omits
 // `cerf_carry`, which is harmless only because it is unreferenced outside this header and
@@ -318,7 +314,7 @@ BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    CON
 static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
     bingo_task_desc_t encoded = {{0}};
 
-    // DARTS Tier 1: Conditional Execution fields (bits 0-5)
+    // DARTS Tier 1: Conditional Execution fields (bits 0-6)
     ENCODE_BITFIELD(encoded, desc.cond_exec_invert, COND_EXEC_INVERT_WIDTH, COND_EXEC_INVERT_SHIFT);
     ENCODE_BITFIELD(encoded, desc.cond_exec_group_id, COND_EXEC_GROUP_ID_WIDTH, COND_EXEC_GROUP_ID_SHIFT);
     ENCODE_BITFIELD(encoded, desc.cond_exec_en, COND_EXEC_EN_WIDTH, COND_EXEC_EN_SHIFT);
@@ -362,8 +358,8 @@ static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manag
     // Dep set code (BINGO_NCORES_HW bits, one per core)
     ENCODE_BITFIELD(encoded, desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
 
-    // Dep set tag (DEP_TAG_WIDTH bits) -- MSB of dep_set_info, and the field that
-    // straddles the 64-bit word boundary at the current design point
+    // Dep set tag (DEP_TAG_WIDTH bits) -- MSB of dep_set_info; depending on the platform
+    // widths it can straddle the 64-bit word boundary
     ENCODE_BITFIELD(encoded, desc.dep_set_tag, DEP_SET_TAG_WIDTH, DEP_SET_TAG_SHIFT);
 
     return encoded;
@@ -400,21 +396,11 @@ static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(bin
 // (the fetch master's beat 0 lands in the descriptor's low bits). These two keep that
 // ordering in one place: index by task slot, never by word.
 //
-// FOR THE MINI-COMPILER (bingo_dfg.py :: bingo_emit_task_desc_list) -- coordination note,
-// no Python is edited from here: the emitted task list currently spells the very same rule
-// out itself, one literal assignment per word:
-//     list[IDX * BINGO_TASK_DESC_WORDS + 0] = 0x<low>ULL;   // node comment
-//     list[IDX * BINGO_TASK_DESC_WORDS + 1] = 0x<high>ULL;
-// which means the word order and the stride are defined twice, in two languages, and the
-// Python copy is the one nobody compiles. Emitting
-//     bingo_task_desc_store(list, IDX, (bingo_task_desc_t){{ 0x<low>ULL, 0x<high>ULL }});
-//     // node comment
-// instead (a C99 compound literal, and the host runtime builds -std=gnu99) keeps the word
-// order in THIS file only, and makes a descriptor-width change a header change rather than
-// an emitter change. bingo_task_desc_load() is the readback half, for a host-side check or
-// a dump of what was actually written. Until that lands these two are the reference
-// definition of the format; do not delete them to silence an unused warning (they are
-// `static inline` in a header, so there is none).
+// The mini-compiler (passes/bingo_dfg_emit.py :: bingo_emit_task_desc_list) does not call
+// these two: it packs the list as a static image of 64-bit words in the same order and DMAs
+// it into place, so the word order and the stride are defined twice, in two languages.
+// These two are the C reference for that order; bingo_task_desc_load() is the readback
+// half, for a host-side check or a dump of what was actually written.
 //
 // Allocation size for such a list is BINGO_TASK_DESC_LIST_BYTES(n) in bingo_utils.h -- the
 // emitter's `n * BINGO_TASK_DESC_WORDS * sizeof(uint64_t)` is the same number spelled the
@@ -540,9 +526,8 @@ uint64_t bingo_get_hbm_base(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
 #define BINGO_MB_ERR_PARAM    -1
 #define BINGO_MB_ERR_TIMEOUT  -2
 
-// Blocking write: waits until space available or timeout
-// timeout_cycles = 0 means wait forever
-// retry_hint allows caller to observe loop iterations (can pass NULL)
+// Write: stores the dword without checking FULL; timeout_cycles is ignored and *retry_hint
+// (if not NULL) is set to 0. Use bingo_try_write_h2h_mailbox to test FULL.
 int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
                             uint64_t timeout_cycles, uint32_t *retry_hint);
 

@@ -1,6 +1,6 @@
 # Core-Level BINGO Kernel Catalog
 
-This document lists the currently implemented core-level BINGO kernel entries for the hardware offload flow. It intentionally excludes cluster-level software-offload kernels such as `__snax_kernel_*`.
+This document lists the core-level BINGO kernel entries it describes for the hardware offload flow: the GEMM and DMA device kernels and a set of host kernels. It does not cover every kernel; the others (for example the `simd_*`, FlashAttention GEMM, MoE, sync and further iDMA kernels) are defined in the sources of truth below. It intentionally excludes cluster-level software-offload kernels such as `__snax_kernel_*`.
 
 Sources of truth:
 
@@ -30,20 +30,16 @@ Sources of truth:
 | `__snax_bingo_kernel_xdma_concat_2d` | Copies a 2D input chunk into a row or column offset inside a larger output tensor. |
 | `__snax_bingo_kernel_xdma_pad_2d` | Zero-fills a padded 2D output tensor and copies the source matrix into the padded region. |
 | `__snax_bingo_kernel_xdma_gather_2d` | Gathers rows from a source matrix using an arithmetic row index pattern defined by start and stride. |
-| `__snax_bingo_kernel_xdma_d_to_row_major` | Converts VersaCore D-layout tiles `[M_T, N_T, meshRow, meshCol]` to logical row-major layout. |
-| `__snax_bingo_kernel_xdma_row_major_to_a` | Converts logical row-major data to VersaCore A-layout tiles `[M_T, K_T, meshRow, tileSize]`. |
-| `__snax_bingo_kernel_xdma_row_major_to_b` | Converts logical row-major data to VersaCore B-layout tiles `[N_T, K_T, meshCol, tileSize]`. |
-| `__snax_bingo_kernel_xdma_a_to_row_major` | Converts VersaCore A-layout tiles back to logical row-major layout. |
-| `__snax_bingo_kernel_xdma_b_to_row_major` | Converts VersaCore B-layout tiles back to logical row-major layout. |
-| `__snax_bingo_kernel_xdma_row_major_to_d` | Converts logical row-major data to VersaCore D-layout tiles `[M_T, N_T, meshRow, meshCol]`. |
+| `__snax_bingo_kernel_xdma_layout_convert` | Converts one tensor between logical row-major layout and a VersaCore blocked layout (A, B or D tiles) in either direction. `src_layout` / `dst_layout` (`BINGO_LAYOUT_*`), the row-major `rows` / `cols`, the mesh dimensions (`meshRow`, `tileSize`, `meshCol`) and `elem_bytes` are arguments, so one kernel serves every array shape. A pair with no row-major side is not one pass and is refused. |
 
 ## Host Kernels
 
 The typed `__host_bingo_kernel_<op>_f32` / `_i32` kernels (plus `quantize_f32i8` /
 `dequantize_i32f32`) below are the single-precision entry points. The elementwise /
 reduce / softmax / rmsnorm / silu_mul ops also have a runtime-typed multi-precision
-**dispatcher** `__host_bingo_kernel_<op>` that picks fp32/fp16/int8/int16 from a
-`precision` word (`BINGO_PREC_*`, at arg index [4] for binary / [3] for unary; the
+**dispatcher** `__host_bingo_kernel_<op>` that picks fp32/fp16/int8/int16/int32 (as far as
+each op supports them, see the precision table below) from a `precision` word
+(`BINGO_PREC_*`, at arg index [4] for binary / [3] for unary; the
 shared `ara_*` structs keep `scratchpad_ptr` last) and delegates the fp32 case to the
 typed kernel.
 
@@ -66,8 +62,9 @@ missing-class error at author time rather than a `BINGO_RET_FAIL` in sim:
 normal multi-precision dispatcher (`__host_bingo_kernel_<op>` with `precision=I32`). I32
 reductions accumulate in int32 (the sum can overflow, same as a chained int32 add).
 
-The two fixed-type conversions are the precision-in-name classes
-`HostBingoKernelAraQuantizeF32I8Args` (FP32→INT8) and
+The fixed-type conversions are the precision-in-name classes
+`HostBingoKernelAraQuantizeF32I8Args` (FP32→INT8),
+`HostBingoKernelAraQuantizeF16I8Args` (FP16→INT8) and
 `HostBingoKernelAraDequantizeI32F32Args` (INT32→FP32); their `precision` field is a
 no-op passthrough.
 
@@ -76,7 +73,7 @@ no-op passthrough.
 | `__host_bingo_kernel_entry` | Marks host-side task-graph entry, records the start cycle counter in the task scratchpad, and returns success. |
 | `__host_bingo_kernel_exit` | Marks host-side task-graph exit and returns the BINGO success exit code. |
 | `__host_bingo_kernel_dummy` | Prints a dummy host task value and publishes a zero return value. |
-| `__host_bingo_kernel_check_result` | Compares output data against golden data. Supports byte-exact, FP32 tolerance, and FP16 tolerance modes. |
+| `__host_bingo_kernel_check_result` | Compares output data against golden data. Supports byte-exact, FP32 and FP16 absolute-tolerance, FP16 relative-tolerance, INT8 tolerance and INT32 relative-tolerance modes (`BINGO_CHECK_TYPE_*`). |
 | `__host_bingo_kernel_idma` | Runs a host-side system DMA copy through `sys_dma_memcpy` and waits for the chip DMA completion counter. |
 | `__host_bingo_kernel_xdma_1d_copy` | Runs a host-side 1D xDMA copy through the HeMAiA xDMA library and waits for remote xDMA completion. |
 | `__host_bingo_kernel_rmsnorm_f32` | Computes FP32 RMSNorm over `num_tokens` rows with Ara/RVV vectorization. |
@@ -103,5 +100,6 @@ no-op passthrough.
 | `__host_bingo_kernel_reduce_max_f32` | Reduces an FP32 array to one maximum value. |
 | `__host_bingo_kernel_reduce_mean_f32` | Reduces an FP32 array to one mean value. |
 | `__host_bingo_kernel_quantize_f32i8` | Quantizes FP32 input to INT8 with per-tensor symmetric scaling and writes the computed scale. |
+| `__host_bingo_kernel_quantize_f16i8` | Quantizes FP16 input to INT8 with the same per-tensor symmetric scaling as `quantize_f32i8` and writes the computed scale. |
 | `__host_bingo_kernel_dequantize_i32f32` | Dequantizes INT32 GEMM accumulator data to FP32 using a provided combined scale. |
 | `__host_bingo_kernel_cerf_gating` | Computes CERF gating masks for top-k, threshold, or static modes and writes optional per-expert activation flags for software guards. |

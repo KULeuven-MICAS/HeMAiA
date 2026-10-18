@@ -65,6 +65,9 @@ Core concepts:
 | Mailbox (H2C/C2H)| Device ↔ host variants (see `mailbox.h`, `hw_mailbox.c`) |
 | Message encode  | `bingo_msg_encode` / `bingo_msg_decode` (inter-chip 64-bit), `bingo_c2h_msg_encode` / `bingo_c2h_msg_decode` (C2H 32-bit) |
 | Heaps           | `bingo_get_l2_heap_manager`, `bingo_get_l3_heap_manager` |
+| Allocators      | `bingo_l1_alloc`, `bingo_l1_alloc_at`, `bingo_l2_alloc`, `bingo_l3_alloc` (+ `bingo_l1_free`, `bingo_l2_free`, `bingo_l3_free`), `bingo_mempool_init`, `bingo_mempool_alloc`, `bingo_mempool_free` |
+| HW scheduler    | `bingo_hw_scheduler_init`, `bingo_hw_scheduler_init_compact`, `bingo_hw_scheduler_init_gid_lists`, `bingo_hw_scheduler_init_pm`, `bingo_hw_scheduler`, `bingo_hw_scheduler_sparse` |
+| CERF            | `bingo_cerf_write_mask`, `bingo_cerf_update`, `bingo_cerf_clear_all` |
 
 Error codes (typical):
 ```
@@ -73,7 +76,7 @@ BINGO_MB_ERR_PARAM
 BINGO_MB_ERR_TIMEOUT
 ```
 
-Mailbox timeout API contract: `timeout_cycles == 0` → wait indefinitely; else abort after elapsed cycles.
+Mailbox timeout API contract (H2C write, H2H and C2H reads): `timeout_cycles == 0` → wait indefinitely; else abort after elapsed cycles. `bingo_write_h2h_mailbox` does not wait and ignores `timeout_cycles`.
 
 ---
 ## 5. Mailbox Semantics
@@ -82,7 +85,7 @@ Each mailbox has a status register with defined bit usage:
 * bit1 (`FULL`): 1 when slot contains valid data
 
 Write sequence (producer):
-1. Poll until `EMPTY==1 && FULL==0` (or timeout)
+1. H2C write: poll until `FULL==0` (or timeout). H2H write: no polling, the dword is stored directly (`bingo_try_write_h2h_mailbox` checks `FULL` first)
 2. Write data payload register
 3. Set FULL (HW or store ordering) — consumer observes FULL=1
 
@@ -91,7 +94,7 @@ Read sequence (consumer):
 2. Read payload
 3. Clear FULL / set EMPTY so producer can write next
 
-The implementation wraps these with cycle‑based timeout and optional relaxed spinning (`bingo_csleep`) to reduce contention.
+The polling loops (H2C write, H2H and C2H reads) use a cycle‑based timeout and relaxed spinning (`bingo_csleep`) to reduce contention.
 
 ---
 ## 6. Message Formats
@@ -136,7 +139,7 @@ Each task tracks:
 * `remote_remaining`: # of predecessors whose completion arrives via inter‑chip messages
 * Successor lists: local successor array + remote successor descriptors `(chip_id, task_id)`
 
-When a task finishes locally, the runtime decrements local successors directly; for remote successors it emits one inter‑chip message per remote chip grouping.
+When a task finishes locally, the runtime decrements local successors directly; for each remote successor it sends one inter‑chip `TASK_COMPLETE` message carrying the successor's task id.
 
 ---
 ## 9. Memory Management
@@ -155,7 +158,7 @@ Helper accessors expose arena managers. Alignments follow BingoAlloc requirement
 4. Initial ready tasks enqueued (those with zero preds)
 5. Scheduler loop:
    * Dequeue ready task
-   * Offload to target chip/cluster (writes kernel addr + args + interrupt)
+   * Offload to a local cluster (writes START, task id, kernel addr and args addr into its H2C mailbox)
    * Process inbound mailbox messages (mark remote completions)
    * Newly satisfied tasks enqueued
 6. Termination when all tasks completed (tracked count or explicit final task)

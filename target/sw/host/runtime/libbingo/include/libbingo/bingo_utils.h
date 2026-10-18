@@ -54,9 +54,9 @@
      (n) <= 32768 ? 15 : 16)
 
 /// The RTL's cf_math_pkg::idx_width(): bits needed to index n things, with a floor of 1.
-/// BUG FIX (4): the layout used to use plain clog2 (occamy.h's *_WIDTH defines), which is
-/// 0 for a single cluster. The RTL packed struct still has a real 1-bit field there, so a
-/// 0-width entry here misplaced every field above it on a 1-cluster chiplet.
+/// Plain clog2 (occamy.h's *_WIDTH defines) is 0 for a single cluster, but the RTL packed
+/// struct still has a real 1-bit field there, so a 0-width entry here would misplace every
+/// field above it on a 1-cluster chiplet.
 #define BINGO_IDX_WIDTH(n) (((n) > 1) ? BINGO_CLOG2(n) : 1)
 
 /// Bits available in the C carrier of struct member `field` of struct `type`.
@@ -119,8 +119,8 @@ typedef struct {
 } bingo_task_desc_t;
 
 /// Deposit `value` into bits [shift +: width] of a descriptor.
-/// The layout is 65+ bits, so a field DOES straddle the 64-bit word boundary (dep_set_tag
-/// at the current design point) and the write has to be split across two words.
+/// A layout wider than 64 bits can place a field across the 64-bit word boundary, so the
+/// write is split across two words.
 static inline void bingo_task_desc_set_field(bingo_task_desc_t *desc, uint64_t value,
                                              unsigned width, unsigned shift) {
     if (width == 0U) return;
@@ -150,10 +150,9 @@ static inline uint64_t bingo_task_desc_get_field(const bingo_task_desc_t *desc,
     return val & mask;
 }
 
-/// Place a field into the descriptor `desc` (an lvalue). This used to return a uint64_t
-/// that the caller OR-ed in; a 128-bit descriptor does not fit in a C scalar (and
-/// __uint128_t is not available to the 32-bit device builds that see this header), so it
-/// now writes through instead.
+/// Place a field into the descriptor `desc` (an lvalue) in place: a 128-bit descriptor does
+/// not fit in a C scalar, and __uint128_t is not available to the 32-bit device builds that
+/// see this header.
 #define ENCODE_BITFIELD(desc, value, width, shift)                             \
     bingo_task_desc_set_field(&(desc), (uint64_t)(value), (unsigned)(width),   \
                               (unsigned)(shift))
@@ -163,18 +162,16 @@ static inline uint64_t bingo_task_desc_get_field(const bingo_task_desc_t *desc,
     bingo_task_desc_get_field(&(desc), (unsigned)((high) - (low) + 1),         \
                               (unsigned)(low))
 
-/// Position of the next field: every field advances the cursor by its OWN width.
-/// BUG FIX (1): one call site used to pass the *following* field's width, which shifted
-/// everything from assigned_cluster_id upwards. The old "0 width counts as 1" coercion is
-/// gone as well - it papered over bug 4 and desynced the cursor from $bits() of the RTL
-/// packed struct; widths are >= 1 by construction now and asserted below.
+/// Position of the next field: every field advances the cursor by its OWN width. Widths
+/// are >= 1 by construction and asserted below, because a zero-width field would stop
+/// advancing the cursor and desync it from $bits() of the RTL packed struct.
 #define NEXT_SHIFT(current_shift, field_width) ((current_shift) + (field_width))
 
 /// Cores the HW manager sees per cluster: the cluster's own cores plus the host CVA6,
 /// which acts as an extra core in cluster 0 (occamy_quad_ctrl.sv.tpl:
 /// BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER = NrCoresPerCluster[0] + 1).
-/// BUG FIX (3): the dep codes are one bit per such core and the core id indexes them, so
-/// both must be sized from this, not from N_CORES_PER_CLUSTER, which excludes the host.
+/// The dep codes are one bit per such core and the core id indexes them, so both must be
+/// sized from this, not from N_CORES_PER_CLUSTER, which excludes the host.
 /// occamy.h emits this too; #ifndef so the generated value wins, checked just below.
 #ifndef BINGO_NCORES_HW
 #define BINGO_NCORES_HW (N_CORES_PER_CLUSTER + 1)
@@ -190,7 +187,7 @@ BINGO_STATIC_ASSERT(BINGO_NCORES_HW == N_CORES_PER_CLUSTER + 1,
 /// BINGO_TASK_DESC_WIDTH / BINGO_NCORES_HW / BINGO_DEP_TAG_WIDTH. The literal below is a
 /// DOCUMENTED FALLBACK, not an independent truth: it is the RTL parameter default and it
 /// only applies when this header is compiled standalone (unit tests, host tools) or against
-/// a platform header generated before the define existed.
+/// a platform header that does not define it.
 #ifndef BINGO_CHIP_ID_WIDTH
 #define BINGO_CHIP_ID_WIDTH 8
 #endif
@@ -210,8 +207,8 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 // MUST mirror the RTL packed struct bingo_hw_manager_task_desc_t (and the Python
 // bingo_pack_node) bit-for-bit. A packed struct's LAST-declared member is the LSB, so
 // LSB->MSB the order is cond_exec_invert, cond_exec_group_id, cond_exec_en, task_type,
-// task_id, assigned_{chiplet,cluster,core}_id, then dep_check_info {en, code, tag} and
-// dep_set_info {en, all_chiplet, chiplet_id, cluster_id, code, tag}.
+// task_id, assigned_{chiplet,cluster,core}_id, then dep_check_info {en, code, tag},
+// dep_set_info {en, all_chiplet, chiplet_id, cluster_id, code, tag} and cerf_carry.
 // DARTS Tier 1: Conditional Execution fields
 #define COND_EXEC_INVERT_WIDTH     1
 #define COND_EXEC_INVERT_SHIFT     0
@@ -247,9 +244,6 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 #define ASSIGNED_CHIPLET_ID_SHIFT  NEXT_SHIFT(TASK_ID_SHIFT, TASK_ID_WIDTH)
 
 #define ASSIGNED_CLUSTER_ID_WIDTH  BINGO_IDX_WIDTH(N_CLUSTERS_PER_CHIPLET)
-// BUG FIX (1) lives here: this advanced the cursor by ASSIGNED_CLUSTER_ID_WIDTH over the
-// ChipIdWidth-wide chiplet id, so every field from here up sat
-// (ChipIdWidth - cluster width) bits too low - 6 at 4 clusters, 8 at one.
 #define ASSIGNED_CLUSTER_ID_SHIFT  NEXT_SHIFT(ASSIGNED_CHIPLET_ID_SHIFT, ASSIGNED_CHIPLET_ID_WIDTH)
 
 #define ASSIGNED_CORE_ID_WIDTH     BINGO_IDX_WIDTH(BINGO_NCORES_HW)
@@ -258,12 +252,12 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 #define DEP_CHECK_ENABLED_WIDTH    1
 #define DEP_CHECK_ENABLED_SHIFT    NEXT_SHIFT(ASSIGNED_CORE_ID_SHIFT, ASSIGNED_CORE_ID_WIDTH)
 
-// One bit per core the HW manager tracks, host core included (bug 3).
+// One bit per core the HW manager tracks, host core included.
 #define DEP_CHECK_CODE_WIDTH       BINGO_NCORES_HW
 #define DEP_CHECK_CODE_SHIFT       NEXT_SHIFT(DEP_CHECK_ENABLED_SHIFT, DEP_CHECK_ENABLED_WIDTH)
 
 // Per-edge identity tag (EnableTaggedDeps). MUST match the hw_manager DepTagWidth,
-// so it comes from the generated occamy.h (cfg s1_quadrant.dep_tag_width) rather than
+// so it comes from the generated occamy.h (cfg s1_quadrant.bingo_cfg.dep_tag_width) rather than
 // being hardcoded here. One tag sits at the MSB of each dep_*_info struct (right after
 // the dep code).
 #define DEP_TAG_WIDTH              BINGO_DEP_TAG_WIDTH
@@ -296,11 +290,6 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 // for a gating region, so the receiving die learns the predicate. It is the MSB of the
 // descriptor -- first-declared member of the RTL packed struct
 // (bingo_hw_manager_top.sv:220, above dep_set_info), which is the top of the word.
-//
-// This field existed in the RTL and in the mini-compiler's packer but NOT here, so the
-// C layout stopped one bit short (71 against the packer's 72). Nothing caught it because
-// the generated BINGO_TASK_DESC_LAYOUT_BITS assert only fires for a workload that is
-// actually compiled, and the only conditional workload had never been built.
 #define CERF_CARRY_WIDTH           1
 #define CERF_CARRY_SHIFT           NEXT_SHIFT(DEP_SET_TAG_SHIFT, DEP_SET_TAG_WIDTH)
 
@@ -315,9 +304,9 @@ BINGO_STATIC_ASSERT(BINGO_TASK_DESC_WIDTH % 64 == 0,
 BINGO_STATIC_ASSERT(BINGO_TASK_DESC_LAYOUT_BITS <= BINGO_TASK_DESC_WIDTH,
                     "Task descriptor layout overflows BINGO_TASK_DESC_WIDTH: raise it here "
                     "and TaskDescBusWidth in bingo_hw_manager_top, or shrink a field");
-// The two widths this header mirrors from RTL declarations rather than from a cfg key.
-// They cannot be checked against a generated number until occamy.py emits one, so check
-// them against what the RTL they mirror can physically accept.
+// TASK_ID_WIDTH comes from the generated occamy.h (cfg s1_quadrant.bingo_cfg.task_id_width);
+// COND_EXEC_GROUP_ID_WIDTH mirrors an RTL literal. Both are range-checked against what the
+// RTL they mirror can physically accept.
 BINGO_STATIC_ASSERT(TASK_ID_WIDTH >= 1 && TASK_ID_WIDTH <= 32,
                     "TASK_ID_WIDTH must match bingo_hw_manager_top TaskIdWidth and stay "
                     "inside the 32-bit task-id path SW uses to talk to it");
