@@ -200,8 +200,8 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
         self._process_addr(self.golden_data_addr, "golden_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.output_data_addr, "output_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["data_size"] = str(self.data_size)
-        if self.name:
-            assignments["name_addr"] = f'(uint64_t)"{self.name}"'
+        # 0 means "no label": the host kernel prints no name for it
+        assignments["name_addr"] = f'(uint64_t)"{self.name}"' if self.name else "0"
         # Always emit — L3 alloc is not zeroed, so garbage in these fields could
         # flip check_type to 1/2 with random tolerance_bits.
         assignments["check_type"] = str(self.check_type)
