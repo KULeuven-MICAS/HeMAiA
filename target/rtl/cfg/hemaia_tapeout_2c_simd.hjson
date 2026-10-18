@@ -108,7 +108,7 @@
     },
     clusters:[
       "snax_versacore_to_256KB_simd_cluster",
-      "snax_versacore_to_256KB_simd_cluster",
+      "snax_versacore_dse_cluster",
       ],
 
     hemaia_xdma_cfg: {
