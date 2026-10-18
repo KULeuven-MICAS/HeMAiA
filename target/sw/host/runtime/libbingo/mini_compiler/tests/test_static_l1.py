@@ -26,6 +26,9 @@ from bingo_liveness import (collect_handle_users, check_handle_identity, reachab
                             can_share, build_interference, extend_users_for_engine_drain)
 from bingo_l1_packer import (pack, verify, pack_scratchpad_slots, verify_scratchpad_slots,
                              scratchpad_users, _align_up, check_emitted_arena_text)
+from bingo_kernel_args import set_simd_beat_bytes  # noqa: E402
+
+set_simd_beat_bytes(32)             # the paper cluster's SIMD: 16 FP16 lanes
 
 FAILED = []
 
@@ -203,9 +206,8 @@ check("gate and after do NOT share, because the gated reader is unordered agains
 
 # ---------------------------------------------------------------------------------------
 print("\n11. The emitted arena puts the arg bump ABOVE the scratchpad slot block")
-# This is the bug the RTL run would have hit and the unit tests could not see: buffers and
-# slots are checked by separate oracles, and neither knows that device ARG structs are bump-
-# allocated from the same arena. With the bump left at 0 they alias slot 0.
+# Buffers and slots are checked by separate oracles, and neither knows that device ARG
+# structs are bump-allocated from the same arena, so a bump left at 0 aliases slot 0.
 SP_A = "ALIGN_UP(sizeof(bingo_kernel_scratchpad_t), 64)"
 def hdr(off_expr, reserved=5, top_slot=4):
     body = [f"uint64_t __bingo_l1_arena_chip00_cl0 = bingo_l1_alloc(0x00, 0,",
@@ -237,8 +239,8 @@ check("an unpacked header is not flagged", unpacked == [], f"got {unpacked}")
 print("\n12. Every placed buffer keeps the runtime allocator's 256 B phase")
 # The bug this guards: bingoHeapMalloc rounds fragments to 256 and returns frag+128, so every
 # buffer it EVER produced shares one offset-mod-256. Packing at 128 is legal against the
-# stated alignment and still broke FA, because Q landed on the other phase. See the comment on
-# L1_ALIGNMENT.
+# stated alignment but puts a buffer on the other phase of the 256 B bank row. See the
+# comment on L1_ALIGNMENT.
 import bingo_l1_packer as _pk
 check("packer alignment is 256, not the promised 128", _pk.L1_ALIGNMENT == 256,
       f"got {_pk.L1_ALIGNMENT}")
@@ -256,7 +258,7 @@ check("no buffer lands off the 256 B phase", all(o % 256 == 0 for o in offs),
 
 # ---------------------------------------------------------------------------------------
 print("\n13. The engine-drain guard refuses the FA warm-up/K overlap")
-# The shape that packing got wrong on RTL: a GEMM node writes a small buffer, a DMA on another
+# The shape the guard exists for: a GEMM node writes a small buffer, a DMA on another
 # core then fills a big buffer at the same address, and the GEMM core's NEXT node is what
 # drains the first write. Graph ordering says the two buffers are disjoint in time; the
 # hardware says otherwise, so the guard counts a node's same-core successor as a user too.
@@ -345,8 +347,8 @@ except ValueError as _e:
 # ---------------------------------------------------------------------------------------
 print("\n16. Static placement is an ARGUMENT, off by default, and ignores the environment")
 # The interface matters as much as the algorithm here. A switch that changes generated code
-# used to be an environment variable, and a container that forwarded no environment turned a
-# "packed" build into an unpacked one that passed and looked like evidence. Off by default,
+# must not come from the environment: a container that forwards none would silently build the
+# other variant, which passes and looks like evidence. Off by default,
 # passed in explicitly, and deaf to the environment is the whole point.
 import os as _os3
 check("the default is disabled", StaticL1Options().enable is False)

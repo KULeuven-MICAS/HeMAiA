@@ -5,9 +5,10 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Kernels that drive no accelerator, and the iDMA.
 
-Dummy, sync probe, sync report -- placed wherever their consumer is, because they touch no
-engine -- plus the cluster iDMA transfers. They share a file because none of them is big
-enough to be worth its own, and because `_engine_of_kernel` treats them the same way."""
+Dummy, sync probe/mark, chip barrier, sync report -- placed wherever their consumer is,
+because they touch no engine -- plus the cluster iDMA transfers, the xDMA CREST expand, and
+the MoE route and router pack on the DM core. They share a file because none of them is big
+enough to be worth its own."""
 
 from typing import Union, Dict
 from bingo_mem_handle import BingoMemAlloc
@@ -30,7 +31,6 @@ class SnaxBingoKernelDummyArgs(BingoKernelArgs):
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         return {"dummy_input": str(self.dummy_input)}
 
-# BINGO IDMA 1D Copy
 class SnaxBingoKernelSyncProbeArgs(BingoKernelArgs):
     """Args for __snax_bingo_kernel_sync_probe (cross-chip sync latency, arm D).
 
@@ -219,7 +219,7 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     """One chunk of an L3 weight ring into an L1 slab (offload_hw_kernels/idma.h): wait
     until the slot's flag holds `seq`, copy `size` bytes from the slot, then write `seq`
     into the slot's release word. The memory chiplet's iDMA pushes the chunk and then its
-    flag (libs/blocks/linear.py WeightRing); flag and release are local L3 words. A release
+    flag (libs/blocks/linear.py WeightRings); flag and release are local L3 words. A release
     address of 0 writes no release word: a chunk several clusters read is released by the load
     that follows the others."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
@@ -489,6 +489,3 @@ class SnaxBingoKernelIdmaPairwiseSwapArgs(BingoKernelArgs):
         assignments["elem_bytes"] = str(self.elem_bytes)
         return assignments
 
-
-
-# BINGO GEMM FULL

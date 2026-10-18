@@ -1,16 +1,12 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """FlashAttention as DFG fragments: per-cluster shards, and the fold that joins them.
 
-Moved here from workloads/fa_decode_4cluster so a larger graph can call it. The code is
-the tuned pipeline unchanged -- node CREATION ORDER is dispatch order on this machine and
-several orderings here are load-bearing (the head builder runs inside the per-cluster pass,
-QK(i+1) is emitted before PV(i)), so this is a move, not a rewrite.
+Node CREATION ORDER is dispatch order on this machine and several orderings here are
+load-bearing (the head builder runs inside the per-cluster pass, QK(i+1) is emitted before
+PV(i)).
 
-CONFIGURATION IS MODULE-GLOBAL, deliberately and with a limit. `configure(param)` sets the
-~14 derived shapes the builders read. They are globals because that is how the tuned code
-was written and rewriting 700 lines to thread a config object would risk the schedule for
-no gain today. The consequence is real and worth stating: ONE attention shape per process.
-A graph needing two different shapes needs the de-globalisation first.
+Configuration is a frozen FaCfg passed to every builder; `configure(param)` builds and
+validates one, so several shapes can coexist in one process.
 """
 
 import json
@@ -46,13 +42,13 @@ from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
 from ..verify import checks
 from .gemm_async import GemmQueue
 
-# Core placement, from the generated map (snax_core_roles_defs.h).
 # The array these kernels were written for. configure() CHECKS the cluster cfg against
 # it rather than trusting it, since every buffer size and tile count derives from it.
 _MESH_DEFAULT = (16, 4, 16)
 
 # A GENUINE CONSTANT, not a parameter -- nothing chooses it. It is a bit pattern: fp16
-# -inf in both halves of a 32-bit word, for seeding the running max. Every actual
+# -65504 (0xFBFF, the most negative finite value) in both halves of a 32-bit word, for
+# seeding the running max. Every actual
 # parameter lives on FaCfg, and the comparison kinds live in checks.py under names.
 _NEG_INF16 = 0xFBFFFBFF
 
@@ -65,8 +61,7 @@ _NEG_INF16 = 0xFBFFFBFF
 _P_MODE = SnaxBingoKernelSimdFaSoftmaxArgs.EXACT
 # Where the second P buffer of a nested ping-pong pair starts inside the pair's region: its
 # 64 B blocks then sit in the first buffer's gaps, [P8_NEST, P8_NEST + 64) of every pitch.
-# Any value in [64, pitch - 64] works; 96 is the snax reference's, where it tied 64 on
-# decode and won on prefill.
+# Any value in [64, pitch - 64] works; 96 is the snax reference's value.
 P8_NEST = 96
 _PV_KMAJOR = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR
 _PV_RESCALE = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR | SnaxBingoKernelGemmFaPvArgs.C_COLSCALE
@@ -98,7 +93,7 @@ def _pull_owner(cfg, j):
 def _bcast_owner(cfg, j, skew=0):
     """Which cluster's xDMA issues the broadcast of KV tile j.
 
-    With BCAST_SPREAD the skew rotates tile ownership; without it the skew still selects a
+    With bcast_spread the skew rotates tile ownership; without it the skew still selects a
     FIXED engine, which is how K and V get one issuer each. That two-issuer split is the
     useful middle point: it halves the head serialisation without asking four clusters to
     issue at once, and it is also the bisect the adapter hang wants -- if TWO concurrent
@@ -146,7 +141,7 @@ class FaCfg:
     # and corr = exp(a * (m_old - m_new)), both on the SIMD's own map at no extra task. A
     # real layer passes a = 1 / (s_q * s_k * sqrt(d)): the two INT8 quantisation scales and
     # the usual 1/sqrt(d). 1.0 treats the integer score as the logit, which on INT8 data is
-    # a one-hot softmax -- the regime every earlier benchmark ran in without saying so.
+    # a one-hot softmax.
     score_scale: float = 1.0
     # THE SCORE'S RANGE, k: the D-port converter writes the score tile as RNE(S * 2^-k)
     # (Int32ToFp16Converter built with shift: 1; k in 0..14). A full-range INT8 score over
@@ -196,10 +191,9 @@ class FaCfg:
     bcast_spread: bool = False
     bcast_v_skew: int = 0          # only consulted when bcast_v is on
     bcast_skip_first: bool = False
-    bcast_warmup: bool = False     # MEASURED AND REFUTED: costs the issuer, saves nothing
+    bcast_warmup: bool = False     # one tiny multicast before tile 0 to warm the issuer's config path
     v_on_xdma: bool = False        # never with a broadcast; validate() refuses that pair
-    # Host pushes on the system iDMA, the second wide pipe. MEASURED: real bandwidth, but
-    # its dispatch sits on a chain four clusters wait on, so none of these wins.
+    # Host pushes on the system iDMA, the second wide pipe, instead of cluster loads.
     k_push_all: bool = False
     k_push_owner: bool = False     # only consulted while k_pull_from_cl0 is on
     v_push_owner: bool = False     # only consulted while v_pull_from_cl0 is on
@@ -207,10 +201,9 @@ class FaCfg:
     # Read by BOTH decompositions -- where P8 lands for PV. The softmax writes P8 as a flat
     # stream, so it can only choose the STRIDE between its 64 B blocks; at 64 (dense) PV's
     # k-major B walk steps round TCDM's 256 B bank rotation twice as fast as its A walk and
-    # the two keep colliding (1.44 cycles a pass on the snax reference). 160 matches the
-    # rates (1.15). p8_nest puts the two P buffers of a ping-pong pair into one region,
-    # the second offset by P8_NEST so its blocks fill the first one's gaps: 8 KiB extra at
-    # Bc = 512 instead of 48. See "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
+    # the two keep colliding; 160 makes the B walk step at the A walk's rate. p8_nest puts
+    # the two P buffers of a ping-pong pair into one region, the second offset by P8_NEST so
+    # its blocks fill the first one's gaps: 8 KiB extra at Bc = 512 instead of 48. See "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
     p8_pitch: int = SnaxBingoKernelSimdFaSoftmaxArgs.PITCH_SPACED
     p8_nest: bool = True
 
@@ -291,12 +284,14 @@ class FaCfg:
                 f"contiguous tuple starting at 0.")
         # Br IS NOT A FREE KNOB. Every per-query-row vector in the softmax arena -- the
         # running max, the running sum, every correction factor -- is ONE SIMD beat, and a
-        # score row is one beat too. A beat is SIMD_WIDTH = 512 b, so it holds exactly
-        # 512/16 = 32 fp16 lanes and Br must be 32. A larger Br does not fault: it writes
-        # the first 32 rows scrambled and leaves the rest zero, which only a host check
-        # catches. Raising it means a second temporal dimension in all eleven SIMD task
-        # shapes and in the arena layout -- a kernel change, not a parameter. Bc is the
-        # knob that is actually free, and L1 is what bounds it.
+        # score row is one beat too, so the softmax kernel fixes Br at the beat's FP16 lane
+        # count (SIMD_FP16_LANES; kernel_simd.simd_fp16_lanes()). That count is a property
+        # of the cluster cfg (a 32-B beat is 16 lanes, a 64-B beat 32); the check below
+        # hard-codes 32. A larger Br does not fault: it writes the first rows scrambled and
+        # leaves the rest zero, which only a host check catches. Raising it means a second
+        # temporal dimension in every FA softmax task shape (simd.h FA_SH_*) and in the
+        # arena layout -- a kernel change, not a parameter. Bc is the knob that is actually
+        # free, and L1 is what bounds it.
         if self.br != 32:
             raise ValueError(
                 f"Br={self.br} (n={self.n}) but the softmax kernel packs one query-row "
@@ -766,10 +761,10 @@ def _alloc_cluster(ctx, cfg, c):
     """
     g = ctx.at(c)
     # ---- L1 ---------------------------------------------------------------------------
-    # Allocated FIRST, before the score buffers, and that order is load-bearing: the negate
-    # task writes -m_new to rmax (here) and to the one-beat prefix of the live score buffer
-    # (below) as a single two-beat shape, and a shape stride is unsigned. Arena first keeps
-    # it positive.
+    # Allocated FIRST, before the score buffers, and that order is load-bearing: task 2 of
+    # the softmax writes m_new to the arena's mnew beat (here) and to the one-beat prefix
+    # (the latch) of the live score buffer (below) as a single two-beat shape, and a shape
+    # stride is unsigned. Arena first keeps it positive.
     # ONE ARENA PER QUERY TILE. Each carries its own independent (m, l, O) recurrence,
     # which is exactly why NQ costs nothing in correctness: the query tiles never interact.
     arena = [g.l1(f"fa_arena_{q}",
@@ -777,10 +772,10 @@ def _alloc_cluster(ctx, cfg, c):
              for q in range(cfg.nq)]
 
     # K and V are DOUBLE BUFFERED because they STREAM: one pair per KV tile, refilled from
-    # main memory while the previous tile computes. Every tile is fed the same bytes -- the
-    # golden relies on that, and m stops moving after tile 0 -- but they are RE-FETCHED per
-    # tile, so the memory traffic is what a real KV stream would cost. Loading once and
-    # replaying leaves the iDMA idle and makes any utilisation figure exclude memory.
+    # main memory while the previous tile computes. Every tile is a different slice of K and
+    # V, RE-FETCHED per tile, so the memory traffic is what a real KV stream costs. Loading
+    # once and replaying leaves the iDMA idle and makes any utilisation figure exclude
+    # memory.
     # TWO K buffers. A third would let the loads run one tile further ahead, which is the
     # right diagnosis -- every QK is gated by its own K load -- but it also raises the
     # number of simultaneously-ready DMA nodes past what the manager's ready set tolerates,
@@ -795,22 +790,18 @@ def _alloc_cluster(ctx, cfg, c):
                          for q in range(cfg.nq)]                         # B of the score matmul
     v8 = [] if res else [g.l1(f"fa_v8_{i}", cfg.s2_m * cfg.s2_k * cfg.mesh_row * cfg.tile_size)
                          for i in range(cfg.nvbuf)]
-    # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
-    # READ through this pointer -- the AGU walks addresses that are never dereferenced.
-    # It exists only because the descriptor needs a base pointer. One block, not M*N.
-    # fa_cz REMOVED. Every C channel of the score matmul is masked, so the AGU walks
-    # addresses that are never dereferenced -- and the kernel already substitutes D_addr
-    # when C_addr is 0 (the same path PV's first tile takes). A whole 1,024 B allocation
-    # existed only to give that never-read pointer somewhere to point.
+    # C is 0: every C channel of the score matmul is masked (see gemm_fa.h), so the AGU walks
+    # addresses that are never dereferenced, and the kernel substitutes D_addr when C_addr
+    # is 0 (the same path PV's first tile takes).
     cz = 0
     # TWO score buffers. A third lets QK run three deep and does remove the WAR edge it
     # targets, but it loses overall: the extra QK streams A, B and D through TCDM alongside
     # the softmax, and the softmax is the critical path. Slack bought for the GEMM is paid
     # for in SIMD bandwidth.
     # ONE BEAT OF HEADROOM in front of each score buffer. The softmax's fused exp pass reads
-    # [-m_new][the tile] as a single contiguous stream. Reserving the beat here lets that
+    # [m_new][the tile] as a single contiguous stream. Reserving the beat here lets that
     # pass read the GEMM's own output buffer directly, instead of copying the whole tile
-    # into the arena beside a -m_new slot -- a copy comparable in size to the K/V stream
+    # into the arena beside an m_new slot -- a copy comparable in size to the K/V stream
     # itself. The GEMM writes its D at +64; the beat below it is the prefix.
     s16 = [g.l1(f"fa_s16_{i}", 64 + cfg.bc * cfg.br * 2) for i in range(cfg.nscore)]  # score tile, fp16
     # TWO TRAILING BEATS past the quantised P. The fused exp pass emits bc/2 INT8 beats and
@@ -840,7 +831,7 @@ def _alloc_cluster(ctx, cfg, c):
     # entire cost of the reuse. K, V, the score tile and P stay single sets: they are
     # exactly what we are trying not to re-read.
     oacc = [g.l1(f"fa_oacc32_{q}", cfg.br * cfg.dhead * 4) for q in range(cfg.nq)]
-    # Destination of the BCAST_WARMUP multicast. Its own allocation rather than a corner of
+    # Destination of the bcast_warmup multicast. Its own allocation rather than a corner of
     # fa_warm_buf: that one is the SIMD warm-up's, and a broadcast landing in it while the
     # SIMD warm-up reads it would be a data race for no reason. 64 B x 4 clusters.
     bwarm = g.l1("fa_bcast_warm", 64)
@@ -852,8 +843,8 @@ def _shard_handles(h_all, c):
     """The staged handles this cluster reads, with the per-cluster lists resolved.
 
     Which of these are genuinely per-cluster depends on DECOMP: kvsplit gives every cluster
-    its own K, headpar its own Q. stage() already collapsed whatever is shared onto one
-    handle, so indexing is uniform here either way.
+    its own K, headpar its own Q. FlashAttention._shard_handles already gives a shared
+    operand the same handle for every cluster, so indexing is uniform here either way.
     """
     h = dict(h_all)
     for key in ("a", "b", "v", "m", "l", "o", "q_ends", "k_ends", "v_ends"):
@@ -867,12 +858,11 @@ def _shard_handles(h_all, c):
 def _build_head(ctx, cfg, c, h_all, buf):
     """Everything a cluster does BEFORE its first KV tile: warm-ups, Q, the arena fills.
 
-    Split from the body so that under headpar EVERY cluster's head nodes are created before
-    ANY broadcast node is. That ordering is what makes it safe to spread the broadcasts
-    over all four xDMAs: a core dispatches in creation order, so a broadcast placed on
-    cluster c's xDMA sits BEHIND c's own fills rather than in front of them. In front, a
-    later broadcast would wait on a PV that waits on a softmax that waits on the very fills
-    queued behind it -- a genuine cycle, not a slowdown.
+    Split from the body so the head can be built at the start of each cluster's own pass: a
+    core dispatches in creation order, so a broadcast on this cluster's xDMA is then created
+    BEHIND this cluster's fills rather than in front of them. In front, a broadcast would
+    wait on a PV that waits on a softmax that waits on the very fills queued behind it -- a
+    genuine cycle, not a slowdown.
     """
     g = ctx.at(c)
     h = _shard_handles(h_all, c)
@@ -894,10 +884,9 @@ def _build_head(ctx, cfg, c, h_all, buf):
     # ready set small rather than handing the manager four nodes that must queue anyway.
     # ORDER MATTERS, and it is not the order the buffers are declared in. There is one
     # iDMA engine so these serialise regardless; what the chain decides is WHICH of them
-    # QK(0) has to wait behind. QK reads K, Q and the zero C bias. V and the O zero are
-    # PV's, and PV cannot run until SM(0) is done anyway -- so they belong AFTER the
-    # loads QK needs, where they stream underneath QK(0) and SM(0) instead of delaying
-    # the first matmul by their own duration.
+    # QK(0) has to wait behind. QK reads K and Q. V is PV's, and PV cannot run until SM(0)
+    # is done anyway -- so it belongs AFTER the loads QK needs, where it streams underneath
+    # QK(0) and SM(0) instead of delaying the first matmul by its own duration.
     # ---- warm every core's config path BEFORE the first byte moves ---------------------
     # A core's FIRST dispatch of a given kernel costs far more than its next, and the
     # difference is instruction-cache line refills. A refill is tens of cycles on an idle
@@ -953,7 +942,7 @@ def _build_head(ctx, cfg, c, h_all, buf):
                           SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), warm_z)
     # warm_b needs the same fill as warm_a: WarmGemm below takes it as BOTH its B and its C
     # operand, and TCDM that nothing has written reads back X. A node, not a knob -- feeding
-    # the array X is never correct, and the pair is what the name WarmZeroAB always implied.
+    # the array X is never correct.
     warm_ab = g.node("WarmZeroB", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
                      SnaxBingoKernelXdmaMemsetArgs(
                          warm_b, cfg.mesh_col * cfg.tile_size,
@@ -1019,13 +1008,12 @@ def _build_head(ctx, cfg, c, h_all, buf):
                 for q in range(cfg.nq)]
     # No Czero load: with the C channels masked the score matmul never reads this buffer,
     # which keeps 64 KiB of zeros off the head of the chain, in front of QK(0).
-    # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
-    # C, and C is oacc itself. A prefix of the same zero region does it.
+    # O starts at zero: tile 0's PV reads no C (C masked), and later tiles read oacc back
+    # as C.
 
     # The softmax's OWN running O lives in the arena and is a different buffer from the
-    # INT32 oacc32 above. Zeroing it from the SIMD core costs dhead beats -- ~8 KiB, and
-    # the single largest serial bubble in the run -- so the idle DM core takes the same
-    # zero region instead. The device side then only seeds mrun/lrun, which is two beats.
+    # INT32 oacc32 above. The idle xDMA core zeroes it in place and seeds m and l (SeedM /
+    # SeedL below), so the softmax runs with seed_state=0.
     _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
     # ZERO THE O ACCUMULATOR ON THE xDMA, not the iDMA.
     #
@@ -1039,7 +1027,7 @@ def _build_head(ctx, cfg, c, h_all, buf):
     # cycle zero and overlaps the Q load rather than queueing behind it.
     # THE WHOLE RECURRENCE STATE IS GENERATED, NOT LOADED.
     #
-    # m = -inf, l = 0 and O = 0 are constants. Seeding m and l from the SIMD kernel and
+    # m = -65504, l = 0 and O = 0 are constants. Seeding m and l from the SIMD kernel and
     # carrying O's zeros on the iDMA both sit on the critical head: at NQ query tiles that
     # is NQ transfers in front of K(0) plus NQ scalar fills in front of the first softmax.
     # None of it needs an operand, so the idle xDMA core generates all three in place --
@@ -1066,10 +1054,10 @@ def _build_head(ctx, cfg, c, h_all, buf):
                    SnaxBingoKernelXdmaMemsetArgs(
                        arena[q].view(_lay["oacc"]), cfg.dhead * 64,
                        SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), ld_q[q])
-        # m and l are one beat each and NOT adjacent (rmax, mrun, mnew, delta, corrL,
-        # lrun), so they are two fills rather than one. Chained after the O fill: they
-        # share the one xDMA engine, and stating the order costs nothing at run time while
-        # leaving the dep-tag allocator one chain instead of three concurrent ones.
+        # m and l are one beat each and NOT adjacent (mnew, rmax, mrun, corrL, lrun), so
+        # they are two fills rather than one. Chained after the O fill: they share the one
+        # xDMA engine, and stating the order costs nothing at run time while leaving the
+        # dep-tag allocator one chain instead of three concurrent ones.
         mfill = g.node(f"SeedM{q}", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
                        SnaxBingoKernelXdmaMemsetArgs(
                            arena[q].view(_lay["mrun"]), 64, _NEG_INF16), z)
@@ -1087,13 +1075,13 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                    all_bufs=None, verify=True):
     """The KV-tile pipeline and this cluster's own checks, on top of _build_head.
 
-    Byte-for-byte the tuned one-cluster graph -- same double buffering, same load-chain
-    order -- with three differences and no others: it runs NKV_PER tiles instead of NKV, it
-    reads this cluster's operands, and it ends at the partial rather than at a check.
+    The KV-tile pipeline of one cluster over cfg.nkv_per tiles, plus this shard's own
+    checks when verify is on.
 
     `bcast` is None under kvsplit, where this cluster loads its own K and V. Under headpar
-    it is {"k": [...], "v": [...]}: the MULTICAST nodes, already created by build(), that
-    fill every cluster's k8/v8 from one read. This cluster then only depends on them.
+    it is the shared bookkeeping (k, v, ksrc, vsrc, kpull, vpull): the owner cluster
+    creates the tile's broadcast or load in its own pass, and fa_attention closes forward
+    references afterwards.
     """
     g = ctx.at(c)
     h = _shard_handles(h_all, c)
@@ -1105,11 +1093,9 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
 
     # HEAD FIRST, IN THIS CLUSTER'S OWN PASS -- do not hoist it into build().
     #
-    # MEASURED: building every cluster's head before any body changes the GLOBAL node
-    # creation order, and that order IS the task-descriptor list the BINGO manager streams.
-    # It cost several points of array utilisation on a graph that was otherwise identical --
-    # same per-core kernel sequences in every cell, same allocations. Dispatch is
-    # order-sensitive; the list order is not cosmetic.
+    # Building every cluster's head before any body would change the GLOBAL node creation
+    # order, and that order IS the task-descriptor list the BINGO manager streams. Dispatch
+    # is order-sensitive; the list order is not cosmetic.
     head = _build_head(ctx, cfg, c, h_all, buf)
     warm_gemm, warm = head["warm_gemm"], head["warm"]
     ld_q, ld_az, perf = head["ld_q"], head["ld_az"], head["perf"]
@@ -1191,7 +1177,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                         k_after, cluster=0)
                 ld_k.append(bcast["k"].get(j))
             elif q == 0 and bcast is not None and cfg.k_pull_from_cl0:
-                # K on the xDMA: cluster 0 reads main memory, the rest read cluster 0's L1.
+                # K on the xDMA: tile j's owner (_pull_owner) reads main memory, the other
+                # clusters read the owner's L1.
                 k_after = ld_q if j < cfg.nkbuf else [qk[(j - cfg.nkbuf + 1) * cfg.nq - 1]]
                 own = _pull_owner(cfg, j)
                 if j < cfg.pull_skip_first:
@@ -1249,16 +1236,17 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                             at_offset(h_all["a"][0], j * KBYTES),
                             [bf["k8"][j % cfg.nkbuf] for bf in all_bufs], KBYTES),
                         k_after)
-                # Under BCAST_SPREAD a cluster built LATER owns some tiles, so the node
+                # Under bcast_spread a cluster built LATER owns some tiles, so the node
                 # can be missing here. Leave a hole and let build() close it once every
                 # pass has run -- the same deferral the cross-cluster WAR edges already
                 # need, and for the same reason.
                 ld_k.append(bcast["k"].get(j))
             elif q == 0:
-                # Tile 0 under BCAST_SKIP_FIRST lands here too, and wants exactly what this
+                # Tile 0 under bcast_skip_first lands here too, and wants exactly what this
                 # branch already does: this cluster's own iDMA pulling the shared K into its
-                # own k8. stage() collapsed headpar's K onto one handle, so h["a"] is that
-                # shared array for every cluster -- four reads of the same bytes, in parallel.
+                # own k8. FlashAttention._shard_handles gives headpar's K one handle for every
+                # cluster, so h["a"] is that shared array for every cluster -- four reads of
+                # the same bytes, in parallel.
                 # --- stream this KV tile's K and V --------------------------------------
                 # Into the buffer every query tile of step j-2 has finished with, so it
                 # waits for the LAST of them. Before tile 2 there is nothing but Q.
@@ -1320,8 +1308,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                                                                v8[j % cfg.nvbuf], VBYTES),
                                        v_after, cluster=0))
                 elif bcast is not None and cfg.v_pull_from_cl0:
-                    # HEADPAR, V PULLED: cluster 0 reads main memory, the rest read
-                    # cluster 0's L1. Every cluster still issues exactly one transfer per
+                    # HEADPAR, V PULLED: tile j's owner reads main memory, the rest read
+                    # the owner's L1. Every cluster still issues exactly one transfer per
                     # tile on its own iDMA, so no engine gains work -- only the SOURCE
                     # changes, and with it three quarters of the main-memory traffic.
                     own = _pull_owner(cfg, j)
@@ -1344,7 +1332,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                                      off=j * VBYTES)
                         bcast["vsrc"][j] = n
                     else:
-                        # wait for cluster 0's copy of THIS tile as well as our own WAR edge
+                        # wait for the owner's copy of THIS tile as well as our own WAR edge
                         src = bcast["vsrc"].get(j)
                         after = list(v_after) + ([src] if src is not None else [])
                         n = g.node(f"PullV{j}", ctx.dm,
@@ -1365,12 +1353,10 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                     # -- so a cluster cannot be running its own transfer and absorbing a
                     # broadcast at the same time.
                     #
-                    # MEASURED. With V on the cluster xDMAs and K broadcast into them, ALL
-                    # FOUR xDMA harts wedged in their wait loops (three at 1.8 GB of trace).
-                    # The arm where every cluster xDMA did nothing but five tiny memsets
-                    # while the broadcasts landed is the one that PASSED. Under headpar the
-                    # iDMA is free anyway -- it carries only Q, not K -- so this costs
-                    # nothing and keeps the receiving xDMAs clear.
+                    # With V on the cluster xDMAs and K broadcast into them, the receiving
+                    # xDMAs deadlock, so V goes on the iDMA. Under headpar the iDMA is free
+                    # anyway -- it carries only Q, not K -- so this costs nothing and keeps
+                    # the receiving xDMAs clear.
                     ld_v.append(load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after,
                                      off=j * VBYTES))
                 else:
@@ -1409,8 +1395,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
             # the load chain puts every K(j) behind Q, so QK(j) inherits the wait; a
             # resident K is ready the moment its producer finishes, and QK(1) -- whose
             # only other edge is that producer -- was dispatched ahead of QK(0) and read
-            # a Q the pull had not written yet (MEASURED: llm_chain_4cluster cluster 2,
-            # where K lives in place, X in the running max two nodes later).
+            # a Q the pull had not written yet.
             if (bcast is not None and j == 0) or res:
                 deps += _flat(ld_q[q])
             # WAR on the score buffer: QK(i) overwrites the tile SM(i-NSCORE) read.
@@ -1496,8 +1481,9 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
     lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
     last = sm[cfg.nkv_per * cfg.nq - 1]
 
-    # Host kernels live on cluster 0 core HOST_CORE and may not be placed anywhere else, so
-    # these are pinned there explicitly even though the data they read is on cluster c.
+    # Host kernels live on cluster 0's host core (ctx.host) and may not be placed anywhere
+    # else, so these are pinned there explicitly even though the data they read is on
+    # cluster c.
     def host(name, kname, kargs, after):
         return g.node(name, ctx.host, kname, kargs, after, cluster=0)
 
@@ -1517,9 +1503,10 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
         tol_s = float(8 * np.max(np.spacing(np.abs(l_gold).astype(np.float16))))
         if cfg.debug_loose_ml:
             # DEBUG ONLY. m and rowsum are the FIRST checks dispatched, and a failing host
-            # kernel breaks the scheduler loop (bingo_api.c:906), so one bad m costs the other
-            # eleven results. Widening these two lets the run reach the O check, which is the
-            # one that says whether the COMPUTATION is wrong or only the m/rowsum readback.
+            # kernel breaks the scheduler loop (bingo_hw_scheduler_run in bingo_api.c,
+            # BINGO_RET_FAIL), so one bad m costs the other eleven results. Widening these
+            # two lets the run reach the O check, which is the one that says whether the
+            # COMPUTATION is wrong or only the m/rowsum readback.
             tol_m = tol_s = 1.0e4
 
         if cfg.debug_per_tile_m and c == 2:
@@ -1572,35 +1559,23 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                                   label=f"fa_l_c{c}")
 
         # CHECK O. m and l cover the softmax statistics, but only O depends on P reaching PV
-        # in the right layout and on every tile's corr having rescaled the accumulator: the
-        # two things this pipeline got wrong for as long as its tiles were all identical and
-        # its maximum never moved. O is the only checked value that depends on every tile
-        # having been folded in correctly.
+        # in the right layout and on every tile's corr having rescaled the accumulator. O is
+        # the only checked value that depends on every tile being folded in.
         #
-        # It is also what makes a layout experiment trustworthy. The static-L1 work found a
-        # write that lands past the end of fa_v8_1, and which buffer it damages depends on what
-        # the packer put next: with fa_s16_0 there, every softmax row maximum is wrong and the
-        # suite says so; with fa_oacc32_0 there, nothing looked at the damage. A green run whose
-        # checks cannot see the failure mode under test is not evidence, and adding this check
-        # is cheaper than reasoning about which layouts happen to be observable.
+        # Checking O also catches layout faults that land in an unchecked buffer: which
+        # buffer a stray write damages depends on what the packer put next to it, and a green
+        # run whose checks cannot see the failure mode under test is not evidence.
         o_bytes = cfg.br * cfg.dhead * 4
         l3_o = BingoMemAlloc(f"out_fa_o_c{c}", size=o_bytes, mem_level=MemLevel.L3)
         # WAITS ON THE LAST PV, NOT ON `last`. `last` is the last SOFTMAX, and every other store
         # here reads something a softmax wrote (m lives in the arena, rowsum in p8) -- but O is
         # written by the last PV, which is a SIBLING of this node, not an ancestor: PV(TOTAL-1) is
         # emitted in the loop's +1 iteration and depends on sm[TOTAL-1] exactly as this store did.
-        # So with `last` the host iDMA was free to read fa_oacc32_0 while the VersaCore was still
+        # So a store gated on `last` could read fa_oacc32_0 while the VersaCore is still
         # accumulating into it.
         #
-        # It is a RAW hazard, so the visible failure is not a wrong number -- the run HANGS, with
-        # the host parked and the UART stopping after the eighth check (all four m, all four
-        # rowsum) because the first Store_o/Check_o pair is where the host iDMA first overlaps a
-        # live VersaCore write to the same TCDM.
-        #
-        # It was latent at NSCORE=2: SM(i) takes a WAR edge on PV(i-NSCORE), so a smaller NSCORE
-        # drains the PV chain further before `last` retires. At NSCORE=2 only PV(TOTAL-1) can
-        # still be outstanding at that point; at NSCORE=3 three PVs can be, and the window is
-        # wide enough to hit every time.
+        # It is a RAW hazard, so the visible failure is not a wrong number -- the run HANGS,
+        # because the host iDMA overlaps a live VersaCore write to the same TCDM.
         st_o = host(f"Store_o_c{c}", "__host_bingo_kernel_idma",
                     HostBingoKernelIdmaArgs(buf["oacc"][cfg.nq - 1], l3_o, o_bytes), [pv[-1], ck_rs])
         ck_o = checks.check_int32_rel(
@@ -1646,22 +1621,20 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
 
     Under DECOMP = "headpar" (the default) the four clusters hold four query heads of one
     GQA group. They share a KV head by construction, so each KV tile is read from main
-    memory ONCE and multicast into all four L1s, and each cluster's (m, l, O) is already a
-    complete result -- there is nothing to fold. That is the configuration that keeps the
+    memory once by its owner and pulled (or, with bcast_k/bcast_v, multicast) into the
+    other clusters' L1, and each cluster's (m, l, O) is already a complete result -- there
+    is nothing to fold. That is the configuration that keeps the
     quadrant compute-bound; see the DECOMP notes in the configuration section.
 
     Under DECOMP = "kvsplit" the rest of this docstring applies.
 
-    The shards are independent: each is the tuned single-cluster pipeline over its own KV
-    tiles, producing its own (m_c, l_c). What makes this different from four
-    copies of the one-cluster run is the epilogue -- the online-softmax merge
+    The shards are independent: each is the single-cluster pipeline over its own KV tiles,
+    producing its own (m_c, l_c). Under kvsplit each shard returns its partial (m_c, l_c,
+    O_c); the online-softmax merge
 
         m* = max_c m_c        l* = sum_c exp(a * (m_c - m*)) * l_c
 
-    is not gathered to one cluster and reduced there. It is computed BY THE FABRIC: each
-    cluster copies its partial into the softmax-statistics junction's group, and one
-    ChainGather walks the four of them, folding at each hop, so the collector's buffer
-    receives the answer rather than the operands.
+    is fa_gather's (blocks/gather.py), not this function's.
     """
     # Every cluster's L1 first, with no nodes: a broadcast names destinations in all four,
     # so the handles have to exist before the first load node does.
@@ -1670,11 +1643,9 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
     if cfg.decomp == "headpar":
         # ---- one read per tile, fanned out in the writer --------------------------------
         # ALL BROADCASTS ON ONE ENGINE (cluster 0). Spreading them over the four clusters'
-        # xDMAs DEADLOCKS the fabric -- measured, and root-caused on a waveform to the
-        # adapter's single from_remote context: all four clusters' receive windows open
-        # inside 1.3 us and none ever closes, so every finish manager sticks in ReadBusy.
-        # See docs/xdma_per_source_remote_contexts.md. BCAST_SPREAD reproduces it on
-        # purpose; never enable it for a measurement.
+        # xDMAs DEADLOCKS the fabric: the adapter has a single from_remote context, so all
+        # four clusters' receive windows open together and none ever closes, and every
+        # finish manager sticks in ReadBusy. bcast_spread reproduces it on purpose.
         #
         # The nodes themselves are created inside cluster 0's own _build_cluster pass, so
         # the global node order stays what it was -- see the note there for what hoisting
@@ -1688,7 +1659,7 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
                   for c in cfg.clusters]
 
         # ---- close the forward references ----------------------------------------------
-        # Under BCAST_SPREAD cluster c consumes tiles issued by clusters built after it, so
+        # Under bcast_spread cluster c consumes tiles issued by clusters built after it, so
         # those RAW edges could not be stated inline. They are ordinary edges; only their
         # statement is deferred.
         for sh in shards:
@@ -1703,9 +1674,9 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
         # node is being created, so the edges are added here. One producer, four consumers:
         # this is the coupling that head-parallelism buys its bandwidth with.
         # Only the BROADCAST needs this: one producer writes every cluster's k8, so it must
-        # wait for every cluster's consumer. Under K_PULL each cluster fills its own buffer
-        # and its own k_after already covers its own consumer -- the only extra edge needed is
-        # puller -> cluster 0's refill, added below.
+        # wait for every cluster's consumer. Under k_pull_from_cl0 each cluster fills its own
+        # buffer and its own k_after already covers its own consumer -- the only extra edge
+        # needed is puller -> the owner's refill of that slot, added below.
         # The K push has exactly the broadcast's shape -- one producer writing every
         # cluster's k8 -- so it needs exactly the broadcast's WAR edges.
         if (cfg.bcast_k or cfg.k_push_all) and not cfg.k_pull_from_cl0:
@@ -1727,14 +1698,12 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
         # OWN fill of the same slot, which is its ld_k/ld_v[j + NBUF] -- so the edge must
         # be stated against that node, on that cluster.
         #
-        # Naming it through `ksrc` instead does not work once PULL_ROTATE is on: `ksrc[t]`
+        # Naming it through `ksrc` instead does not work once pull_rotate is on: `ksrc[t]`
         # is the node on cluster t % NCL, and the node that really overwrites own(j)'s slot
         # is often a PULL, which lives in `kpull` and never appears in ksrc at all.
         #
         # Get it wrong and the source buffer is overwritten mid-pull: the puller gets a later
         # tile's K, its scores are wrong, and the running max m comes out far too large.
-        # It is latent at NSCORE=2 and at four tiles per cluster -- the schedule has no
-        # slack to open the window -- and fires every time at NSCORE=3 with sixteen.
         def _close_pull_war(pulls, key, nbuf):
             for j, n in pulls:
                 own = _pull_owner(cfg, j)
@@ -1755,12 +1724,11 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
         # a 16 KB host iDMA read out of cluster 2's L1 while clusters 0/1/3 were still
         # streaming K and V through the same fabric. That combination wedges the machine:
         # host and all sixteen snitch traces freeze together and VCS keeps burning CPU. It is
-        # the RTL fragility in docs/soc_bottlenecks.md section 9, and this is the SW way
-        # around it.
+        # an RTL fragility, and this is the SW way around it.
         #
-        # It costs nothing measurable. Every utilisation figure here ends its window at the
-        # LAST PV, so the host tail sits outside the measurement; all this does is stop the
-        # tail from overlapping live traffic.
+        # Every utilisation figure here ends its window at the LAST PV, so the host tail sits
+        # outside the measurement; all this does is stop the tail from overlapping live
+        # traffic.
         last_pvs = [sh["pv"][-1] for sh in shards if sh["pv"]]
         for sh in shards:
             for lp in last_pvs:
@@ -1776,7 +1744,7 @@ def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
               for c in cfg.clusters]
     g = ctx.at(0)
 
-    # De-synchronise the cold xdma_1d_copy config (see STAGGER_FIRST_V). One edge per
+    # De-synchronise the cold xdma_1d_copy config (see FaCfg.stagger_first_v). One edge per
     # consecutive pair; the transfers still overlap, only the cold CONFIGS are serialised.
     if cfg.stagger_first_v:
         prev = None
@@ -1808,14 +1776,12 @@ def _check_mesh(cfg: FaCfg, hwcfg=None, mesh=None, array_shape: int = 0) -> FaCf
 
 
 def configure(param: dict, *, hwcfg=None, mesh=None, array_shape: int = 0) -> FaCfg:
-    """Set the shape from a params dict and publish it. Returns the FaCfg.
+    """Build and validate a FaCfg from a params dict.
 
     PASS hwcfg (or mesh). The mesh is not a knob -- it is what the RTL was elaborated
     with -- and every buffer size and tile count derives from it, so a wrong one is a
     graph that builds, runs and computes the wrong thing rather than a fault. The default
     is the array these kernels were written for, and it is CHECKED, not assumed.
-
-    One shape per process; see the module docstring.
     """
     want = tuple(mesh) if mesh is not None else \
         (mesh_from_hwcfg(hwcfg, array_shape) if hwcfg is not None else _MESH_DEFAULT)
@@ -1897,7 +1863,8 @@ class FlashAttention(Block):
     fabric; scaling and summing the O_c is the caller's, and it needs the m* the fold
     returns.
 
-    TODO: CAUSAL MASKING. There is none, here or anywhere else in this tree. Every query
+    TODO: CAUSAL MASKING. This block has none (MlaAttention masks scores with an iDMA copy
+    of -65504 between QK and the softmax, which this block could reuse). Every query
     tile attends to every key tile, which is CORRECT for a decode step -- the new token
     legitimately sees the whole cache -- and WRONG for a real prefill, where query i must
     not see key j > i. Without a mask, prefill is right only for the last query row of the
@@ -1905,14 +1872,14 @@ class FlashAttention(Block):
     does; a toy sequence makes it look nearly right.
 
     Note that `nq` alone does not make this block a prefill. It sets how many query tiles
-    the pipeline runs, and that is what fa_prefill_4cluster varies (NQ=2 against decode's
-    NQ=1) -- the two workloads differ in nothing else. So "prefill" in this tree means
-    multiple query tiles over FULL attention, and this block expresses exactly that.
+    the pipeline runs (fa_prefill_4cluster has NQ=2, fa_decode_4cluster NQ=1). So "prefill"
+    in this tree means multiple query tiles over FULL attention, and this block expresses
+    exactly that.
 
-    Adding the mask is a SIMD-kernel change, not a parameter: the score tile is masked
-    between the QK matmul and the softmax, and at Br = Bc = 32 the mask is diagonal only
-    on the tile where the query and key ranges overlap -- tiles strictly below it need no
-    mask, tiles strictly above are skipped entirely, which is also where the saving is.
+    A mask would be applied to the score tile between the QK matmul and the softmax; with
+    Br = Bc the mask is diagonal only on the tile where the query and key ranges overlap --
+    tiles strictly below it need no mask, tiles strictly above are skipped entirely, which
+    is also where the saving is.
 
     THE THREE THINGS EVERY PORT CARRIES. Layout, precision and location are all in the
     signature, because none of the three faults when it is wrong -- a mismatched layout is

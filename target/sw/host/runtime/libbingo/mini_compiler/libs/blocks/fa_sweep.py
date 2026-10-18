@@ -116,7 +116,7 @@ def fa_sweep_alloc(l1, cfg: FaSweepCfg) -> FaSweepBufs:
 def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None, oacc_free=None,
              name="s", early=2):
     """Build one sweep on the cluster `g` names. g: an object with node(name, core, kernel, args,
-    after), gemm, chiplet, cluster (a Ctx, or the chiplet driver's adapter). q8: {q: (handle, ready
+    after), dfg, gemm, chiplet, cluster (a Ctx, or the chiplet driver's adapter). q8: {q: (handle, ready
     tasks)}, the query tiles in the A layout. roles: {"gemm", "simd", "xdma"} core ids.
     prev: the previous sweep's result on these buffers (its tasks are the reuse edges);
     oacc_free: {q: [tasks]}, what must finish before oacc[q] is overwritten (the readers of the

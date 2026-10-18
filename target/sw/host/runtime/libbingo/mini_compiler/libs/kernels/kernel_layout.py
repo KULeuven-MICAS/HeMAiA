@@ -10,21 +10,20 @@
     row_major <-> D      R[i, j] -> D[i/meshRow, j/meshCol, i%meshRow, j%meshCol]
 
 THE PAIR AND THE ARRAY SHAPE ARE ARGUMENTS, not part of the kernel's identity. The device
-dispatches on them, and the transfer is the same AGU pass however it was reached. Binding
-either to the symbol meant a new direction or a new tiling needed a new device symbol, and
-a tiling nobody had pre-declared -- a (16, 4, 16) array wants M16K4 -- simply had none.
+dispatches on them, and the transfer is the same AGU pass however it was reached. Neither is
+bound to the symbol, so every direction and every tiling (M16K4 on a (16, 4, 16) array
+included) uses the same kernel.
 
 ROWS AND COLS, NOT TILE COUNTS. The caller gives the ROW-MAJOR tensor's dimensions and the
 device derives the tile counts from them and the mesh, so a tile count cannot be paired
 with the wrong mesh. Which dimension divides by what depends on the blocked layout -- A
-reads [M, K], B reads [K, N], D reads [M, N] -- and that derivation now lives in one place
-instead of at every call site.
+reads [M, K], B reads [K, N], D reads [M, N] -- and that derivation lives in one place.
 
 ANYTHING TOUCHING B IS A TRANSPOSE, and that is a hardware fact rather than a quirk of the
 kernel: row_major, A and D all run contiguously along rows, B runs down columns. The
-device takes the 8x8 block transposer where the shape allows it and a DM-core element loop
-otherwise -- two orders of magnitude apart, so libs/comm/transfer.py prefers to decompose
-such a pair rather than emit it.
+device takes the 8x8 block transposer where the shape allows it and an element loop on
+the xDMA core otherwise, which is much slower, so libs/comm/transfer.py prefers to
+decompose such a pair rather than emit it.
 
 FOR A PAIR WITH NO ROW-MAJOR SIDE (A <-> D, A <-> B, anything with col_major), this kernel
 is not the answer: it converts to and from row_major only. libs/comm/transfer.py
@@ -47,8 +46,8 @@ strides. The device is not asked to rediscover it.
 WHEN NO NEST EXISTS -- an A-layout atom is 4 B at int8 against the xDMA's 8 B lane, which
 is why a quantise belongs after a reshape rather than before -- this falls back to
 __snax_bingo_kernel_xdma_layout_convert, whose element loop is correct at any shape and
-about two orders of magnitude slower. `.KERNEL_NAME` on the INSTANCE says which of the two
-it became; the class attribute is only the common case."""
+much slower. `.KERNEL_NAME` on the INSTANCE says which of the two it became; the class
+attribute is only the common case."""
 
 from typing import Dict, Union
 
@@ -161,12 +160,10 @@ class SnaxBingoKernelXdmaLayoutConvertArgs(BingoKernelArgs):
         return a
 
 
-# The six DIRECTIONS the one kernel serves, by the family names the op sweeps and the
-# workloads use. They are no longer separate classes -- the pair is a constructor argument
-# -- but the names stay because a caller thinks in directions, not in layout pairs.
-# KEYED BY THE OLD SYMBOL NAMES, which is what every caller already passes. They no
-# longer name a device symbol -- there is one, __snax_bingo_kernel_xdma_layout_convert --
-# but they still name a DIRECTION, and a direction is what a caller picks.
+# The six DIRECTIONS the one kernel serves, keyed by the family names the op sweeps and the
+# workloads pass. A family name is not a device symbol (there is one,
+# __snax_bingo_kernel_xdma_layout_convert); it names a DIRECTION, which a caller thinks in
+# rather than in layout pairs, and maps to the (src, dst) layout pair the kernel converts.
 _CONV_FAMILIES = {
     "xdma_row_major_to_a": ("row_major", "A"),
     "xdma_a_to_row_major": ("A", "row_major"),
@@ -180,10 +177,10 @@ _CONV_FAMILIES = {
 def xdma_conv_args(family: str):
     """A constructor for one converter family: (src, dst, rows, cols, mesh, elem_bytes).
 
-    The MESH AND THE ELEMENT WIDTH are constructor arguments, and so now is the direction:
-    one device symbol serves every tiling and every pair, so there is nothing left for a
-    family to select but which two layouts to fill in. `rows` and `cols` are the ROW-MAJOR
-    tensor's dimensions on whichever side it sits; the tile counts follow from the mesh.
+    The MESH, THE ELEMENT WIDTH AND THE DIRECTION are constructor arguments: one device
+    symbol serves every tiling and every pair, so a family only selects which two layouts to
+    fill in. `rows` and `cols` are the ROW-MAJOR tensor's dimensions on whichever side it
+    sits; the tile counts follow from the mesh.
     """
     try:
         src, dst = _CONV_FAMILIES[family]
@@ -197,7 +194,6 @@ def xdma_conv_args(family: str):
             src_addr, dst_addr, rows, cols, src, dst, mesh, elem_bytes)
     make.__name__ = f"{family}_args"
     make.layouts = (src, dst)
-    # The symbol is the same for every family now, but callers still read it off whatever
-    # xdma_conv_args hands back, so it is carried here rather than made their problem.
-    make.KERNEL_NAME = "__snax_bingo_kernel_xdma_6d"
+    # No KERNEL_NAME here: which kernel a call becomes (the derived xdma_6d nest, or the
+    # element loop) depends on its shape and element width, so only the built instance knows.
     return make

@@ -170,8 +170,8 @@ class BingoKernelArgs(ABC):
                 assignments[base_name] = f"(uint32_t)({final_expr})"
         # A LITERAL IS WIDENED BEFORE IT IS SHIFTED. `0` or `0x1000` is a 32-bit int in C,
         # so `(0 >> 32)` is undefined behaviour and -Werror=shift-count-overflow rejects the
-        # whole host build -- which it did for every row_major rmsnorm node, whose unused
-        # seed_addr is the int 0. The handle branches above are uint64_t already.
+        # host build; a literal is cast to uint64_t before it is shifted. The handle branches
+        # above are uint64_t already.
         elif isinstance(val, BingoMemFixedAddr):
             addr = val.address
             if split_64bit:

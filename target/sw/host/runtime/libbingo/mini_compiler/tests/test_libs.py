@@ -28,6 +28,9 @@ from bingo_liveness import collect_handle_users, reachability, can_share
 from libs import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Pipeline, Port,
                   PortSpec, check_contract)
 from libs.blocks import record_spec
+from bingo_kernel_args import set_simd_beat_bytes  # noqa: E402
+
+set_simd_beat_bytes(32)             # the paper cluster's SIMD: 16 FP16 lanes
 
 FAILED = []
 
@@ -211,8 +214,8 @@ check("a bound port agrees with its handle",
 check("...and a staged symbol is main memory",
       Port(PortSpec("A", "i8", (32, 128), mem_level="L3"), _Sym("staged"),
            ()).spec.mem_level == "L3")
-# A FIXED ADDRESS records neither level nor cluster, so the spec is the only statement
-# there is and it stands. Anything the handle DOES know is checked against instead: a
+# A fixed address with no mem_level records neither level nor cluster, so the spec is the
+# only statement there is and it stands. Anything the handle DOES know is checked against instead: a
 # staged symbol is main memory by construction, so calling it L4 is refused rather than
 # carried downstream as fact.
 from bingo_mem_handle import BingoMemFixedAddr as _Fixed                 # noqa: E402
@@ -425,8 +428,8 @@ check("...and leaving only WHERE x arrives open offers one per level",
                                out_dtype=DType.F16))) == 2)
 
 # FOLDS RANK FIRST, so the resolver takes the col_major kernel even though it costs the
-# chain more passes than the row_major arm -- 2,062 cycles off the busy engine for one
-# extra transfer on an idle one.
+# chain more passes than the row_major arm -- a fold on the busy engine costs more than
+# one extra transfer on an idle one.
 _p, _n, _r = _chain(32)
 check("rows=32: the chain comes out fold-free", _p.cost.folds == 0, str(_p.cost))
 check("...on the col_major kernel", _n.block.col_major, _n.chosen.describe())
@@ -716,7 +719,7 @@ for _mesh, _want in (((16, 4, 16), "AAAA"), ((16, 8, 8), "AAAA"), ((16, 8, 16), 
                 _got += "-"
     check(f"mesh {_mesh}: A f16, B f16, A i8, B i8 = {_want}", _got == _want, _got)
 
-# (16, 4, 16) STILL DERIVES TO THE HAND-WRITTEN NEST that ran bit-exact on RTL.
+# (16, 4, 16) derives to the reference nest checked below.
 _n = _bn(_T, _D, _PR, 16, 4, 1, True)
 check("(16,4,16) int8 A is the RTL-validated nest",
       (_n.rd_lane, _n.rd, _n.wr_lane, _n.wr, _n.tasks)
@@ -741,7 +744,7 @@ _bn(32, 4096, (4096 // 32 + 1) * 64 + 8, 16, 8, 1, True)
 check("[32, 4096] on (16, 8, 16) derives in under 10 s", _time.time() - _t0 < 10.0,
       _time.time() - _t0)
 
-# THE ARGS CARRY IT: a non-(16,4,16) mesh now builds, and the refusals surface there too.
+# THE ARGS CARRY IT: a non-(16,4,16) mesh builds, and the refusals surface there too.
 _a = _RNA(0, 0, _T, _D, output_layout="A", out_i8=True, mesh=(16, 8, 16))
 _f = _a.get_c_field_assignments({})
 check("args on (16,8,16) emit a descriptor", int(_f["blk_rd_lane"]) > 0
@@ -1069,6 +1072,8 @@ check("the shift moves no result: m scales by exactly 2^-6, l and O are bit-iden
       and _np.array_equal(_o6, _o0))
 
 # The P buffer on the pitch grid: P8 beats, then the row sum, then corr, one pitch apart.
+# The offsets below are written for a 64-B SIMD beat, so the beat is pinned to it for this group.
+set_simd_beat_bytes(64)
 _bc, _br = 512, 32
 check("dense P8 is the old buffer: bc*br + row sum + corr",
       _Sm.p8_bytes(_bc, _br, _Sm.EXACT) == _bc * _br + 128
@@ -1092,6 +1097,7 @@ refuses("PV takes no shift (it writes INT32)",
 refuses("a QK shift past 14 is refused", lambda: _Qk(0, 0, 0, 0, 1, 1, 1, d_shift=15), "0..14")
 refuses("a P8 pitch below one beat is refused",
         lambda: _Sm(0, 0, 0, bc=64, dhead=128, tile_idx=0, p8_pitch=32), "p8_pitch")
+set_simd_beat_bytes(32)
 
 
 print("\nRMSNorm: the scratch the host passes in instead of the kernel allocating it")
@@ -1291,7 +1297,7 @@ check("...each one m-block of one chunk, at its D offset",
       and _tg[2].kernel_args.output_D_addr.offset == 4 * 512)
 check("...and the shift rides every task", all(t.kernel_args.d_shift == 9 for t in _tg))
 
-# NOT streamed, nothing changes: the graph an existing layer builds is the one it built.
+# Not streamed: one load and one gemm_full over the whole matrix.
 _cn = new_ctx()
 _xn = Port(PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0),
            _cn.at(0).l1("xn", 32 * 128), ())

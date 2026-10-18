@@ -11,12 +11,13 @@ initialises cleanly and a kernel that does the wrong thing without failing.
 |---|---|
 | `bingo_kernel_args.py` | **Facade.** Re-exports everything below, so `from bingo_kernel_args import …` keeps working for the ~60 workloads that do it. |
 | `kernel_base.py` | The `BingoKernelArgs` ABC: address resolution across the four handle types, C field emission, and `PLACEMENT_ORDER` for the few kernels that compute one buffer's address as an offset from another. |
-| `kernel_misc.py` | Dummy, sync probe, sync report — kernels that drive no accelerator — and the cluster iDMA. |
+| `kernel_misc.py` | Dummy, sync probe/mark, chip barrier and sync report — kernels that drive no accelerator; the cluster iDMA transfers; the xDMA CREST expand; the MoE route and router pack. |
 | `kernel_gemm.py` | VersaCore GEMM: the general descriptor, the minimal one, and the typed variants. |
 | `kernel_gemm_fa.py` | The FlashAttention QK/PV pair and the array's performance counters. |
 | `kernel_xdma.py` | xDMA transfers, the 6-D AGU, 2-D shape ops, and the in-fabric junction CSR builders. |
-| `kernel_layout.py` | The dedicated layout converters: D↔row-major, row-major↔A, row-major↔B. |
+| `kernel_layout.py` | One layout-convert class for row_major↔A/B/D (six directions via `xdma_conv_args`), emitted as a derived `xdma_6d` nest or the `xdma_layout_convert` element loop. |
 | `kernel_simd.py` | SIMD streaming primitives and the fused whole-operators. |
+| `kernel_moe.py` | The MoE prefill: route table, row lists, row gather, row-tile SIMD passes. |
 | `blocked_nest.py` | Not an args class: the loop nest `simd_rmsnorm` needs to write A/B blocks for a given mesh, derived per (tile, mesh, precision) and checked against the layout's index map. `kernel_simd.py` calls it while building the args, and the result goes into the struct's `blk_*` fields. |
 | `kernel_host.py` | Host transfers and the per-precision result checks. |
 | `kernel_ara.py` | Ara (RVV) host kernels, typed by precision. |
@@ -32,10 +33,11 @@ that does not exist there links fine and dispatches to nothing.
 
 ## Three things these classes exist to catch
 
-- **The typed GEMM and layout classes are spelled out, not generated.** A generated name
+- **The typed GEMM classes are spelled out, not generated.** A generated name
   that has no `SNAX_EXPORT_FUNC` behind it fails silently, so the list is explicit.
-- **`row_major_to_b` and `b_to_row_major` drive the hardware transposer**, which is correct
-  only at `elem_bytes=1`. At 2 and 4 it returns wrong data without failing.
+- **row_major↔B uses the 8×8 byte transposer** only at `elem_bytes=1` with `tileSize` and
+  `meshCol` multiples of 8; other widths run the xDMA core's element loop, which is correct
+  but slow.
 - **`check_result` is one class per precision.** The kernel selects its comparison with an
   integer, and that integer silently couples three decisions — which comparison runs, what
   `num_elements` counts, and whether `tolerance` is a distance or a ratio. Getting any of

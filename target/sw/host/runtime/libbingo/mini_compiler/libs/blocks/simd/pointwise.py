@@ -7,22 +7,16 @@
 values are ordered.
 
 WHY THAT IS THE AXIS THIS FILE IS CUT ON. A permutation of the inputs of an elementwise op
-is the same permutation of its output, so quantise, dequantise and the residual add are
-correct in ANY layout and in either orientation -- MoE runs its SwiGLU straight over a
-D-layout block for exactly this reason. Their ports carry a `layout` so the contract can
-still state what they were handed -- layout included, orientation with it -- but neither
-changes what they compute.
+is the same permutation of its output, so quantise is correct in ANY layout and in either
+orientation. Its ports carry a `layout` so the contract can still state what it was handed
+-- layout included, orientation with it -- but neither changes what it computes.
 
-The per-row operators are the ones where layout is load-bearing (norm.py, rope.py). The
+The per-row operators are the ones where layout is load-bearing (norm.py). The
 split is not tidiness: it is the difference between an operand a block may accept as it
 finds it and one it has to convert first.
 """
 
-from dataclasses import replace
-
-from bingo_kernel_args import (SnaxBingoKernelSimdAddF16Args,
-                               SnaxBingoKernelSimdFp16ToInt8Args,
-                               SnaxBingoKernelSimdScaleF16Args)
+from bingo_kernel_args import SnaxBingoKernelSimdFp16ToInt8Args
 
 from ...comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                      PortSpec)
@@ -95,151 +89,6 @@ class Quantize(Block):
                         bound["x"].handle, out,
                         beats=(c.rows * c.cols * 2) // 64, rows=1,
                         inv_scale_f32bits=self.inv_scale_f32bits))
-        return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
-            inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,), name="x")},
-            nodes=[nd])
-
-
-class Residual(Block):
-    """a + b, elementwise, on the SIMD core. The skip connection.
-
-    NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` drives the
-    HasElementwiseAdd WRITER extension, which snax_split_cluster does not have. That path
-    still gives the right answer -- it falls back to scalar C -- but it sums every int32
-    element one at a time on the xDMA hart. This drives HasStreamElementwise, a reader
-    extension the cluster does have, so the residual stays a vector op.
-
-    Elementwise, so the layout passes through; both operands must already agree on one,
-    which the contract checks.
-    """
-
-    name = "residual"
-
-    def __init__(self, cfg: RowCfg = None, *, layout: Layout = None,
-                 dtype: DType = DType.F16, **params):
-        self.cfg = cfg if cfg is not None else RowCfg(**params)
-        self.layout = Layout(layout) if layout is not None else None
-        self.dtype = DType(dtype)
-
-    def variants(self) -> list:
-        """Any layout, as long as BOTH operands arrive in it -- which the resolver
-        enforces, because one realisation declares both ports at once."""
-        return [{}] if self.layout is not None else [{"layout": l} for l in _ELEMENTWISE]
-
-    def respec(self, **p) -> "Residual":
-        return Residual(cfg=self.cfg, layout=p.get("layout", self.layout),
-                        dtype=self.dtype)
-
-    def simd_passes(self) -> int:
-        """ONE SIMD task. What this step costs the engine the resolver ranks first."""
-        return 1
-
-    @property
-    def inputs(self) -> dict:
-        c = self.cfg
-        spec = PortSpec(self.layout, self.dtype, (c.rows, c.cols),
-                        mem_level=MemLevel.L1, cluster=c.cluster)
-        return {"a": replace(spec, doc="the branch output"),
-                "b": replace(spec, doc="the skip")}
-
-    @property
-    def outputs(self) -> dict:
-        c = self.cfg
-        return {"y": PortSpec(self.layout, self.dtype, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, cluster=c.cluster,
-                              doc="a + b")}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        c = self.cfg
-        if self.dtype != DType.F16:
-            raise ValueError(
-                f"Residual is fp16 only on this cluster: the add runs on "
-                f"HasStreamElementwise, whose op is ADD_FP16. Got {self.dtype}.")
-        g = ctx.at(c.cluster)
-        out = g.l1(f"{self.name}_y", c.rows * c.cols * 2)
-        nd = g.node("Add", ctx.simd, "__snax_bingo_kernel_simd_stream_elementwise",
-                    SnaxBingoKernelSimdAddF16Args(
-                        bound["a"].handle, bound["b"].handle, out,
-                        rows=c.rows, cols=c.cols))
-        return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
-            inputs={n: Port(self.inputs[n], bound[n].handle, (nd,), name=n)
-                    for n in ("a", "b")},
-            nodes=[nd])
-
-
-class Dequantize(Block):
-    """out = x * scale. The step back from GEMM output to activation range.
-
-    WHY A LAYER NEEDS THIS, stated in the two hard limits that bracket the GEMM -- both
-    fp16, both silent when exceeded:
-
-      THE D PORT narrows the array's int32 accumulator to fp16, so `x_q @ w_q` must stay
-      under 65504. That is what keeps the operands small: at d=128 with int8 activations
-      an |w| of more than about 2 already saturates.
-
-      RMSNorm reduces SUM(x^2) into an fp16 SCALAR before the rsqrt sees it, so its input
-      needs sum_j x[j]^2 < 65504 -- about |x| < 22 at d=128. Past that the reduce saturates
-      and 1/sqrt of a saturated sum is a power-of-two-wrong answer rather than an error:
-      the output looks like a well-formed tensor scaled by 2^16. (That limit is the FP16
-      narrow in the transport grid, not the rsqrt, so it did not move when the scalar
-      epilogue did -- see norm.py.)
-
-    Between the two sits a factor of roughly a thousand, which is exactly the product of
-    the operands' quantisation scales, and nothing else in the chain is free to absorb it.
-    So the scale is applied here, on the SIMD core, in one pass.
-
-    Elementwise, so the layout passes straight through.
-    """
-
-    name = "dequantize"
-
-    def __init__(self, cfg: RowCfg = None, *, scale_f32bits: int = None,
-                 layout: Layout = None, **params):
-        if scale_f32bits is None:
-            raise ValueError(
-                "Dequantize needs scale_f32bits: it is 1/(scale_x * scale_w) for the GEMM "
-                "that produced this tensor, and no default can be right for every stage.")
-        self.cfg = cfg if cfg is not None else RowCfg(**params)
-        self.scale_f32bits = int(scale_f32bits)
-        self.layout = Layout(layout) if layout is not None else None
-        check_row(self.cfg.cols, "Dequantize")
-
-    def variants(self) -> list:
-        """Any layout: scaling is elementwise, so it passes whatever it is handed."""
-        return [{}] if self.layout is not None else [{"layout": l} for l in _ELEMENTWISE]
-
-    def respec(self, **p) -> "Dequantize":
-        return Dequantize(cfg=self.cfg, scale_f32bits=self.scale_f32bits,
-                          layout=p.get("layout", self.layout))
-
-    def simd_passes(self) -> int:
-        """ONE SIMD task. What this step costs the engine the resolver ranks first."""
-        return 1
-
-    @property
-    def inputs(self) -> dict:
-        c = self.cfg
-        return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, cluster=c.cluster,
-                              doc="fp16 straight off the GEMM's D port")}
-
-    @property
-    def outputs(self) -> dict:
-        c = self.cfg
-        return {"y": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, cluster=c.cluster,
-                              doc="fp16 back in activation range, same layout")}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        c = self.cfg
-        g = ctx.at(c.cluster)
-        out = g.l1(f"{self.name}_y", c.rows * c.cols * 2)
-        nd = g.node("Dequant", ctx.simd, "__snax_bingo_kernel_simd_stream_map",
-                    SnaxBingoKernelSimdScaleF16Args(
-                        bound["x"].handle, out, scale_f32bits=self.scale_f32bits,
-                        rows=c.rows, cols=c.cols))
         return BlockResult(
             outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,), name="x")},

@@ -32,8 +32,8 @@ from bingo_reach import reach_sets
 def collect_handle_users(nodes) -> Dict[int, Tuple[BingoMemAlloc, Set]]:
     """handle id -> (handle, {nodes that mention it}).
 
-    Walks kernel_args the way _collect_memory_handles does: scalars, lists, tuples, dicts and
-    views. A use this walk misses is one the packer will not know about.
+    Walks kernel_args: handles, views, and lists, tuples, sets and dicts of them. A use this
+    walk misses is one the packer will not know about.
     """
     users: Dict[int, Set] = {}
     handles: Dict[int, BingoMemAlloc] = {}
@@ -133,7 +133,7 @@ def build_interference(handle_users, desc, level: str = "L1"):
 
 
 def liveness_report(handle_users, desc, level: str = "L1") -> str:
-    """What packing WOULD save, without changing any layout. Stage 1 of the plan."""
+    """What packing would save, without changing any layout."""
     items, interference = build_interference(handle_users, desc, level)
     per_cluster: Dict[Tuple[int, int], List[int]] = {}
     for idx, (h, _u) in enumerate(items):

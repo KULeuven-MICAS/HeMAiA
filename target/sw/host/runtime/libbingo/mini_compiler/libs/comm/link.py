@@ -52,15 +52,15 @@ lanes, and adds or drops its own transposes to reach the one it picked. That cho
 invisible from the outside, which is exactly why the block should be the one making it.
 
 ======================================================================================
-WHY THE LINKER STILL INSERTS NOTHING
+WHY THE LINKER INSERTS NOTHING
 ======================================================================================
 
 Node CREATION order is dispatch order on this machine. A linker that injected a node
 between two blocks would put it at a point in the order neither block chose, and the
-schedule would move without anything in the source saying so. So the rule is unchanged:
-this file adds EDGES, never nodes. A conversion is owned by the consuming or producing
-block, inside its own build and in its own order, which is why a block has to be able to
-say which conversions it is willing to own. That is `variants()`.
+schedule would move without anything in the source saying so. So this file adds EDGES,
+never nodes. A conversion is owned by the consuming or producing block, inside its own
+build and in its own order, which is why a block has to be able to say which conversions
+it is willing to own. That is `variants()`.
 
 DEFERRING THE BUILD DOES NOT REORDER IT. Stages build in the order they were added, and
 `raw()` puts non-block work -- an input load, a readback, a check -- into that same order.
@@ -72,9 +72,8 @@ MATCHING IS EXACT, AND ASKS THE BLOCK
 ======================================================================================
 
 A boundary is legal when the producer's output spec EQUALS the consumer's input spec --
-same layout, same precision, same shape -- with memory level the one exception: a
-consumer whose port says `mem_level=None` takes the operand wherever it lies and loads it
-itself, which is what every block that fetches declares.
+same layout, precision, shape, memory level and cluster. A block that accepts an operand
+from more than one level offers one variant per level.
 
 Equality, and not "could the hardware convert this", because those are different
 questions. A block reading A-layout bytes that arrived row-major computes a scrambled

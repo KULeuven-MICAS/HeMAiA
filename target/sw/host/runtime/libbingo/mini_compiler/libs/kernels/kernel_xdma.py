@@ -83,8 +83,8 @@ class SnaxBingoKernelXdmaMemsetArgs(BingoKernelArgs):
     Generates a constant into L1 instead of loading it from main memory. FlashAttention
     seeds m to -inf and l to 0 and zeroes the O accumulator; those are CONSTANTS, and
     fetching them over the iDMA puts NQ separate transfers in front of K(0) on the load
-    engine's critical head. The xDMA core is otherwise idle -- on HeMAiA it owns nothing
-    but its exit node -- so it generates them in place.
+    engine's critical head. The xDMA core is often idle between its transfers, so it
+    generates them in place.
 
     The pattern is 32 bits, not a byte, because FP16 -inf is 0xFBFF and no single byte
     repeats into it. One mechanism then covers INT8, FP16, BF16, FP32 and INT32.
@@ -367,8 +367,10 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
 XDMA_JCT_ELEMENTWISE = "WRITER_JCT_ELEMENTWISEJUNCTION"
 XDMA_JCT_SOFTMAX_STATS = "WRITER_JCT_SOFTMAXSTATSJUNCTION"
 
-# ElementwiseJunction CSR(0): [3:0] op, [6:4] fmt.
+# ElementwiseJunction CSR(0): [3:0] op (0 ADD, 2 MAX), [6:4] fmt (0 FP16, 3 FP32).
 XDMA_EWJCT_OP_ADD = 0
+XDMA_EWJCT_OP_MAX = 2
+XDMA_EWJCT_FMT_FP16 = 0
 XDMA_EWJCT_FMT_FP32 = 3
 
 
@@ -449,11 +451,16 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
 
     def __init__(self, local_src: Union[BingoMemAlloc, int], chain: list,
                  size: int, junction: str, jct_csr0: int, hops: list | None = None,
-                 jct_csr1: int = 0):
+                 jct_csr1: int = 0, holds=()):
         """`hops`: the (chiplet, cluster) whose xDMA each chain entry reaches, in chain order.
         Needed when the entries are address expressions; an L1 BingoMemAlloc entry (or a view
         of one) names its own. The compiler orders gathers that would meet as middle hops on
-        one xDMA from these (bingo_transform_order_crossed_chain_gathers)."""
+        one xDMA from these (bingo_transform_order_crossed_chain_gathers).
+
+        `holds`: buffers the chain reaches only through address expressions, which the static
+        L1 planner does not see; naming one here makes its live range cover the gather. The
+        attribute exists only when there is something to hold, so an empty `holds` leaves the
+        args exactly as they were without it."""
         if not 2 <= len(chain) <= self.CHAIN_MAX:
             raise ValueError(
                 f"chain gather: chain has {len(chain)} entries; it must have 2.."
@@ -468,6 +475,21 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         self.jct_csr0 = jct_csr0
         self.jct_csr1 = jct_csr1
         self.hops = [tuple(h) for h in hops] if hops is not None else None
+        if holds:
+            self.holds = list(holds)
+
+    @classmethod
+    def fold_into(cls, remote, root, cluster, others, src, dst, size, junction, jct_csr0,
+                  jct_csr1=0, holds=()):
+        """The gather that folds `src` of every chip in `others` (in chain order) into `dst` on
+        `root`, all on `cluster`'s xDMA. `remote(chip, local_expr)` is the fabric's address
+        expression for a local address on a chip; `src` and `dst` are local expressions, `src`
+        the same on every chip. `junction` is the junction's index (or C name). `holds` as in
+        the constructor: name the buffer `dst` lands in, so the planner sees it."""
+        return cls(local_src=remote(root, src),
+                   chain=[remote(k, src) for k in others] + [remote(root, dst)],
+                   size=size, junction=str(junction), jct_csr0=jct_csr0, jct_csr1=jct_csr1,
+                   hops=[(k, cluster) for k in others] + [(root, cluster)], holds=holds)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_chain_gather_args_t"

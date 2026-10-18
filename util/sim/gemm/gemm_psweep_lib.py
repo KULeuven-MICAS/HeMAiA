@@ -18,7 +18,7 @@
 #
 # Precision is split across workloads (one per precision) because it changes the
 # generated data layout (int4 packing / quant int8 / fp16 output) and so cannot
-# be looped inside one binary. Running the 5 workloads as a task list gives the
+# be looped inside one binary. Running the per-precision workloads as a task list gives the
 # parallel multi-precision sweep.
 #
 # Data + golden come from the validated gemm_sim_utils.generate_gemm_test_data

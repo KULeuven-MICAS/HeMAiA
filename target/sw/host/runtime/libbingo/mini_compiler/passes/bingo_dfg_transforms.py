@@ -77,14 +77,11 @@ class BingoDFGTransformsMixin:
 
     def bingo_transform_dfg_add_exit_nodes(self) -> None:
         """Transform the DFG to add external nodes."""
-        # Notice here the exit nodes are correlated with the hw architecture
-        # Since we use the host core to do the simd ops,
-        # We configure each cluster to have 2(gemm, dma) + 1(simd) accs 
-        # But the host core only fetches the cluster0's simd ready queue
-        # The other clusters' simd ready queue are not used
-        # We need to add num_cluseter*(num_cores_per_cluster-1) [all the normal cores] + 1 [host core] exit nodes for each of the chiplets
-        # We put those nodes at the end of user-specified nodes and put them in serials
-        # first is all the normal cores and then finally the host core
+        # The exit nodes are correlated with the hw architecture: each chiplet gets one
+        # exit node per SNAX core of every cluster, then one on the host core (cluster 0,
+        # core num_cores_per_cluster - 1 when is_host_as_acc).
+        # We put those nodes at the end of user-specified nodes and put them in serials:
+        # first all the normal cores and then finally the host core.
         
         # We generate exit nodes for each chiplet in parallel
         print("Adding exit nodes for each chiplet...")
@@ -104,7 +101,7 @@ class BingoDFGTransformsMixin:
             # 1. Normal cores
             for cluster_id in range(self.num_clusters_per_chiplet):
                 for core_id in range(self.num_cores_per_cluster):
-                    # Skip the simd core for now
+                    # the host core gets its own exit node below
                     if self.is_host_as_acc and core_id == (self.num_cores_per_cluster -1):
                         continue
                     exit_node = BingoNode(
@@ -438,9 +435,9 @@ class BingoDFGTransformsMixin:
           3. Within each group, add an edge from node[i] to node[i+1]
              if no path already connects them (avoids redundant edges).
 
-        Must be called AFTER entry/exit/conditional/dummy transforms
-        (which insert infrastructure nodes on specific cores) and
-        BEFORE dep info assignment.
+        Must be called after the entry/exit nodes and the conditional pass (which
+        insert infrastructure nodes on specific cores), and before fan-out pruning,
+        the tag budget and the dummy set/check passes.
 
         Returns:
             Number of sequencing edges added.
@@ -480,10 +477,8 @@ class BingoDFGTransformsMixin:
         So when a producer P feeds B1, B2, ... Bn on ANOTHER core of its chiplet, B2 .. Bn
         are reachable from B1 through that chain, and P -> B2 .. P -> Bn say nothing
         P -> B1 does not. Each of them would still cost a dummy set task on P's core and a
-        dependency tag live in the (P core, B core) cell until its drain; a pass of four
-        tokens fans each projection's last dequantisation out to 10-18 tasks of one DM core
-        and runs that cell past the 32 tags of a 5-bit DepTagWidth. Only P -> B1, the first
-        of them in the core's order, is kept.
+        dependency tag live in the (P core, B core) cell until its drain. Only P -> B1, the
+        first of them in the core's order, is kept.
 
         The mirror case too: a consumer B waiting on A1 .. An of ONE core (a gather's
         copies, one per source, all on the DM core) needs only the last of them, An; the
@@ -575,9 +570,7 @@ class BingoDFGTransformsMixin:
         dep_set_chiplet_id, which is 0, so on any chip but 0x00 it takes the chiplet path,
         leaves without waiting for the task's done and never pops it. From then on the
         core's next local set fires when its task is dispatched, not when it finishes, and
-        the dummies behind it send their remote sets at once too. (A DM core's stash whose
-        only consumer was a remote collect, once prune_implied had dropped its sequencing
-        edge, released a quantize before the copy it read had landed: X in L1.)
+        the dummies behind it send their remote sets at once too.
 
         The edge added is to the next task on the same core, which runs after it anyway,
         so it orders nothing new; a graph that has no such task is left unchanged."""
@@ -1078,10 +1071,11 @@ class BingoDFGTransformsMixin:
         a tag iff a DFG happens-before path links one edge's CONSUMER to the
         other's PRODUCER (``has_path(consumerA, producerB)``): then B's set can
         only fire after A has dispatched and freed the tag, regardless of work
-        delays. Tags are assigned by greedy coloring that exploits this reuse.
+        delays. Tags come from a minimum chain cover per cell when every group is one edge
+        in one cell, else from DSATUR colouring of the group conflict graph.
 
         ``tag_width`` is the fixed HW knob (``DepTagWidth``): a cell may hold at
-        most ``2**tag_width`` concurrently-live edges. If coloring needs more we
+        most ``2**tag_width`` concurrently-live edges. If the allocation needs more we
         raise rather than silently reintroduce the aliasing bug -- the workload
         must reduce a cell's concurrency (co-locate / serialize the offending
         producers in placement) or ``DepTagWidth`` must be widened.
@@ -1118,10 +1112,9 @@ class BingoDFGTransformsMixin:
         # and every set->check edge requires u.dep_set_tag == v.dep_check_tag. So
         # the tag is a property of the NODE, and any set/check ops linked by an
         # edge must agree: a "tag group" is a connected component of the
-        # set-node <-> check-node bipartite graph. Today almost every group is a
-        # single edge touching a single cell. A broadcast dep_set, or (once the
-        # descriptor carries a mask) a multi-column join / multi-row fan-out, is
-        # a group spanning several cells that must hold ONE tag in all of them.
+        # set-node <-> check-node bipartite graph. A broadcast dep_set, a multi-column
+        # join (enable_multi_col_check) or a multi-row fan-out is a group spanning
+        # several cells that must hold ONE tag in all of them.
         # DETERMINISM. Node keys are INTEGERS derived from node_id, and the
         # components are sorted. Keys containing a string (or a node object)
         # hash differently in every process -- Python randomises str hashing --
@@ -1185,12 +1178,11 @@ class BingoDFGTransformsMixin:
                         return False
             return True
 
-        # FAST PATH -- every group is one edge in one cell, which is what the
-        # dummy passes guarantee today. Per cell the conflict graph is the
+        # FAST PATH -- taken when every group is one edge in one cell (no broadcast
+        # dep-set, no multi-column check). Per cell the conflict graph is the
         # incomparability graph of a partial order, so by Dilworth the minimum
         # number of tags is the largest antichain, and a min chain cover
-        # (bipartite matching) attains it EXACTLY. Keep using it: it is optimal,
-        # and it is the path every existing graph takes, so nothing moves.
+        # (bipartite matching) attains it EXACTLY.
         single_edge = all(len(edges_of[g]) == 1 and len(cells_of[g]) == 1
                           for g in range(n_groups))
         if single_edge:

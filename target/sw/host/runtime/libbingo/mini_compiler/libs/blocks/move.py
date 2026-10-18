@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""Moving a tensor between clusters, L1 to L1, as blocks -- and the two views that cost
-nothing.
+"""Moving tensors as blocks -- between clusters' L1 (Pull), between L3 / HBM and
+L1 (Fetch, Collect, Stash) -- and the views that cost nothing (View, Join, After).
 
 WHY MOVES ARE BLOCKS. check_contract refuses an L1 port on another cluster outright: a GEMM
 or SIMD kernel addresses only its own TCDM, and a remote handle does not fault -- the
@@ -13,35 +13,21 @@ tensor produced on one cluster and consumed on another needs a node that moves i
 linker may not insert one (node creation order is dispatch order). The layer names the move
 the same way it names a Reshape, and it shows up in the graph and in the cost.
 
-TWO ENGINES, CHOSEN BY WHO MAY BE BUSY.
-
-  Broadcast   ONE xDMA multicast on the SOURCE cluster: one read, N writes. The cheapest
-              fan-out there is -- but a remote write is absorbed by the RECEIVING cluster's
-              xDMA, which must be idle while it lands (four busy receivers wedged the fabric,
-              see libs/blocks/flash_attention.py on the headpar broadcast). Use it where the
-              receivers have not started yet, e.g. the first thing a layer hands out.
-
-  Pull        ONE iDMA read on the DESTINATION cluster's DM core. No xDMA on either side,
-              so it is safe while both clusters are busy -- the pattern FlashAttention's own
-              headpar V path runs on. Several sources may be stacked into one destination
-              buffer, which is how per-tile producers become one contiguous operand.
+Pull is ONE iDMA read on the DESTINATION cluster's DM core. No xDMA on either side, so it
+is safe while both clusters are busy -- the pattern FlashAttention's own headpar V path runs
+on. Several sources may be stacked into one destination buffer, which is how per-tile
+producers become one contiguous operand.
 
 Every move is a contiguous copy. A row range of a tensor is contiguous in row_major, A and D
-(whole meshRow blocks), and never in B or col_major; the moves refuse a slice they cannot
-express as one run rather than copy the wrong bytes.
+(whole meshRow blocks), and never in B or col_major; Pull refuses a slice it cannot express
+as one run rather than copy the wrong bytes.
 
-THE VIEWS emit no node and allocate nothing: `Slice` names a row range of a buffer, and
-`TransposeView` relabels A(X) as B(X^T) -- byte-identical when meshRow == meshCol, which is
-what lets one A-layout activation feed a GEMM as either operand.
+THE VIEWS emit no node and allocate nothing. `View`, `Join` and `After` are relabels: the
+same bytes under another spec, consecutive pieces of one buffer under one name, and a tensor
+that also waits for another's producers.
 """
 
-from dataclasses import dataclass
-from typing import Optional
-
-from bingo_kernel_args import (
-    SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaMulticastArgs,
-)
+from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs
 
 from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port, PortSpec,
                     at_offset)
@@ -66,79 +52,6 @@ def _row_span(layout, dtype, cols, row0, nrows, mesh):
                          f"meshRow={mesh[0]} block, which is not one contiguous run.")
     eb = _ELEM_BYTES[dtype]
     return row0 * cols * eb, nrows * cols * eb
-
-
-@dataclass(frozen=True)
-class MoveCfg:
-    """What moves: a [rows, cols] tensor, or rows [row0, row0 + nrows) of it."""
-
-    rows: int
-    cols: int
-    layout: Layout
-    dtype: DType
-    src: int                        # the cluster whose L1 holds the tensor
-    dst: tuple                      # the clusters that receive it (Pull: exactly one)
-    row0: int = 0
-    nrows: Optional[int] = None     # None: to the end
-    mesh: tuple = (16, 4, 16)
-
-    @property
-    def n(self) -> int:
-        return self.rows - self.row0 if self.nrows is None else self.nrows
-
-
-class Broadcast(Block):
-    """One multicast on the source cluster's xDMA: `x` (or a row range of it) lands in the
-    L1 of every cluster in `dst`, from ONE read.
-
-      in   x       [rows, cols] in cluster `src`'s L1
-      out  y_c{c}  [nrows, cols] in cluster c's L1, one port per destination
-
-    THE RECEIVERS' xDMAs MUST BE IDLE while it lands -- see the module doc. The caller owns
-    that ordering; this block cannot see what else the receivers run.
-    """
-
-    name = "broadcast"
-
-    def __init__(self, cfg: MoveCfg = None, **params):
-        self.cfg = cfg if cfg is not None else MoveCfg(**params)
-        c = self.cfg
-        if not c.dst:
-            raise ValueError("Broadcast: no destination cluster.")
-        if c.src in c.dst:
-            raise ValueError(f"Broadcast: cluster {c.src} is the source; it already holds "
-                             f"the tensor -- bind the producer's port there directly.")
-        if not 1 <= len(c.dst) <= SnaxBingoKernelXdmaMulticastArgs.DST_MAX:
-            raise ValueError(f"Broadcast: {len(c.dst)} destinations; the multicast takes "
-                             f"1..{SnaxBingoKernelXdmaMulticastArgs.DST_MAX}.")
-        self.off, self.nbytes = _row_span(c.layout, c.dtype, c.cols, c.row0, c.n, c.mesh)
-
-    @property
-    def inputs(self) -> dict:
-        c = self.cfg
-        return {"x": PortSpec(c.layout, c.dtype, (c.rows, c.cols), mem_level=MemLevel.L1,
-                              cluster=c.src, doc="the tensor, where it was produced")}
-
-    @property
-    def outputs(self) -> dict:
-        c = self.cfg
-        return {f"y_c{d}": PortSpec(c.layout, c.dtype, (c.n, c.cols), mem_level=MemLevel.L1,
-                                    cluster=d, doc=f"cluster {d}'s copy")
-                for d in c.dst}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        c = self.cfg
-        bufs = {d: ctx.at(d).l1(f"{self.name}_y", self.nbytes) for d in c.dst}
-        nd = ctx.at(c.src).node(
-            "Mcast", ctx.xdma, "__snax_bingo_kernel_xdma_multicast",
-            SnaxBingoKernelXdmaMulticastArgs(at_offset(bound["x"].handle, self.off),
-                                             [bufs[d] for d in c.dst], self.nbytes))
-        outs = {f"y_c{d}": Port(self.outputs[f"y_c{d}"], bufs[d], (nd,), name=f"y_c{d}")
-                for d in c.dst}
-        return BlockResult(outputs=outs,
-                           inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,),
-                                             name="x")},
-                           nodes=[nd])
 
 
 class Pull(Block):
@@ -203,99 +116,14 @@ class Pull(Block):
                            inputs=ins, nodes=nodes)
 
 
-class Slice(Block):
-    """Rows [row0, row0 + nrows) of a tensor, as a VIEW: no node, no copy, same buffer.
-
-      in   x  [rows, cols]
-      out  y  [nrows, cols], the same memory, level and cluster
-
-    The output's producers are the input's: a consumer of the slice waits for whatever
-    wrote the whole tensor.
-    """
-
-    name = "slice"
-
-    def __init__(self, *, rows: int, cols: int, layout: Layout, dtype: DType,
-                 row0: int, nrows: int, mem_level: MemLevel = MemLevel.L1,
-                 cluster: Optional[int] = None, mesh: tuple = (16, 4, 16)):
-        self.rows, self.cols, self.row0, self.nrows = rows, cols, row0, nrows
-        self.layout, self.dtype = Layout(layout), DType(dtype)
-        self.mem_level = MemLevel(mem_level)
-        self.cluster = cluster if self.mem_level == MemLevel.L1 else None
-        if row0 < 0 or row0 + nrows > rows:
-            raise ValueError(f"Slice: rows [{row0}, {row0 + nrows}) outside [0, {rows}).")
-        self.off, _ = _row_span(self.layout, self.dtype, cols, row0, nrows, mesh)
-
-    def _spec(self, shape, doc):
-        return PortSpec(self.layout, self.dtype, shape, mem_level=self.mem_level,
-                        cluster=self.cluster, doc=doc)
-
-    @property
-    def inputs(self) -> dict:
-        return {"x": self._spec((self.rows, self.cols), "the whole tensor")}
-
-    @property
-    def outputs(self) -> dict:
-        return {"y": self._spec((self.nrows, self.cols),
-                                f"rows [{self.row0}, {self.row0 + self.nrows})")}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        x = bound["x"]
-        return BlockResult(
-            outputs={"y": Port(self.outputs["y"], at_offset(x.handle, self.off),
-                               tuple(x.ends), name="y")},
-            inputs={"x": Port(self.inputs["x"], x.handle, (), name="x")},
-            nodes=[])
-
-
-class TransposeView(Block):
-    """A(X) [rows, cols] relabelled as B(X^T) [cols, rows]: the same bytes, no node.
-
-    A's block is [Mu][Ku] with a row of X along Ku; B's is [Nu][Ku] with a column of X^T --
-    that is, the same row of X -- along Ku. With Mu == Nu the two orders coincide byte for
-    byte, whatever the element width, which is what lets an A-layout activation feed a GEMM
-    as its B operand (V^T = Wv^T . X^T takes X^T as B).
-    """
-
-    name = "transpose_view"
-
-    def __init__(self, *, rows: int, cols: int, dtype: DType,
-                 mem_level: MemLevel = MemLevel.L1, cluster: Optional[int] = None,
-                 mesh: tuple = (16, 4, 16)):
-        if mesh[0] != mesh[2]:
-            raise ValueError(f"TransposeView: A(X) is B(X^T) only when meshRow == meshCol; "
-                             f"mesh={tuple(mesh)}.")
-        self.rows, self.cols, self.dtype = rows, cols, DType(dtype)
-        self.mem_level = MemLevel(mem_level)
-        self.cluster = cluster if self.mem_level == MemLevel.L1 else None
-
-    @property
-    def inputs(self) -> dict:
-        return {"x": PortSpec(Layout.A, self.dtype, (self.rows, self.cols),
-                              mem_level=self.mem_level, cluster=self.cluster, doc="A(X)")}
-
-    @property
-    def outputs(self) -> dict:
-        return {"y": PortSpec(Layout.B, self.dtype, (self.cols, self.rows),
-                              mem_level=self.mem_level, cluster=self.cluster,
-                              doc="B(X^T): the same bytes")}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        x = bound["x"]
-        return BlockResult(
-            outputs={"y": Port(self.outputs["y"], x.handle, tuple(x.ends), name="y")},
-            inputs={"x": Port(self.inputs["x"], x.handle, (), name="x")},
-            nodes=[])
-
-
 class View(Block):
     """The same bytes under another name: a relabel, no node and no copy.
 
       in   x  `src`
       out  y  `dst`, at x + offset
 
-    For what the other views cannot say -- a column range of a row, a row read as several
-    rows ([1, 2048] as [4, 512]), one row of a stack. Both specs must name the same memory
+    For a column range of a row, a row read as several rows ([1, 2048] as [4, 512]), one
+    row of a stack. Both specs must name the same memory
     and cluster; that the bytes agree is the caller's claim, as it is for any view.
     The output's producers are the input's.
     """

@@ -31,7 +31,7 @@ class BingoDFGValidateMixin:
         Must run LAST, after tags are allocated. Returns a summary dict; raises
         ValueError on the first violation with enough detail to act on.
 
-        The four ways a lowered graph can hang:
+        The ways a lowered graph can hang:
 
         1. TAG MISMATCH -- a producer writes one tag and its consumer waits on
            another, so the bit the consumer wants is never set.
@@ -45,6 +45,7 @@ class BingoDFGValidateMixin:
            encode.
         5. SPIN CYCLE -- a consumer that spins on a producer by itself (an ordering-only
            edge) is, through dependencies and queue order, a predecessor of that producer.
+        6. CROSS-DIE PREDICATE PATH -- a remote gated task that no cerf_carry set reaches.
 
         KNOWN GAP: this reasons about the GRAPH, so it assumes every task runs.
         A CERF-skipped task fires its dep_set immediately out of the checkout
@@ -146,7 +147,7 @@ class BingoDFGValidateMixin:
                                 f"  edge B: {sb.node_name} -> {cb.node_name}\n"
                                 f"  cell = (chiplet, cluster, consumer core, "
                                 f"producer core)")
-        # 5. CROSS-DIE PREDICATE PATH. A conditionally-gated task on another die
+        # 6. CROSS-DIE PREDICATE PATH. A conditionally-gated task on another die
         #    only learns its predicate if some task reachable from its gating
         #    node carries the CERF window to that die. The gating task's own
         #    dep_set does NOT: the dummy-set pass proxies every remote successor
@@ -335,12 +336,6 @@ class BingoDFGValidateMixin:
         one group's sets race ahead of the other group's drains, so a presence bit is
         consumed by the wrong consumer and somebody waits forever.
 
-        Measured, on a 4-expert graph whose per-expert store+check sat on the shared host
-        core: the static tag check passes (peak 9 tags on that one cell), the 'all'
-        routing runs clean, and every routing that actually skips something deadlocks.
-        Moving the same two tasks onto the expert's own cluster drops the cell to 4 tags
-        and all four routings pass.
-
         So the rule is per core, not per graph: every CERF-gated task on one core must
         carry the SAME group. Ungated tasks are free -- they run in every routing, so
         they cannot be the ones racing.
@@ -373,12 +368,11 @@ class BingoDFGValidateMixin:
     def _validate_cerf_cross_group_edges(self):
         """Refuse an unconditional edge out of a CERF-gated task that nothing guards.
 
-        This used to say the hazard was a deadlock, on the grounds that a skipped
-        task never signals. It does signal: the manager pushes the skipped
-        descriptor into the CHECKOUT queue retagged as a dummy
-        (bingo_hw_manager_top.sv:1149-1155) and only drops it from the READY queue
-        (:1052-1057), so its dep_set fires either way. That is what makes an
-        ordinary fan-in combine legal here at all.
+        A skipped task still signals: the manager pushes the skipped descriptor
+        into the CHECKOUT queue retagged as a dummy (bingo_hw_manager_top.sv,
+        checkout_queue_data_in under cond_exec_skip) and only drops it from the
+        READY queue (ready_queue_filter_drop), so its dep_set fires either way.
+        That is what makes an ordinary fan-in combine legal here at all.
 
         The real hazard is the opposite one, and it is silent rather than loud: a
         consumer outside the group runs whether or not the producer did, and reads

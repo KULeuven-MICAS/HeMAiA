@@ -19,19 +19,18 @@ is refused at construction with the valid values named rather than reaching a ke
 layout nobody implements. `PortSpec` coerces, so a spec always holds the member however it
 was written.
 
-**An input port usually names no memory level.** `mem_level=None` means *"wherever you
-have it — I will fetch it"*, which is the honest declaration: a block knows which level its
-own engines need (L1, always — the GEMM and SIMD have no AXI port) but has no business
-dictating where the caller keeps the tensor. The block states the level its transfers read
-from in `needs`, and the hoist happens inside its own build. A bound `Port` reads the level
-off the handle, so binding a block's level-less spec directly just works. An **output** is
-never None: a produced buffer is somewhere definite.
+**Every port names a memory level.** A block's engines read L1 (the GEMM and SIMD have no
+AXI port), but a block that fetches an operand from further out declares the level it is
+willing to be handed and emits the load in its own build. A block that can be handed an
+operand from more than one level offers one realisation per level (`variant.py`); `needs`
+states what its engines read once its own load has run. A bound `Port` is checked against
+the level its handle carries, never filled from it. An **output** is a produced buffer,
+somewhere definite.
 
 **Placement is the same statement about *which cluster*.** Only L1 is per-cluster, so
-`cluster_of` answers `None` for anything else and `check_contract` checks the field only
-when the source has one: a tensor in main memory may be loaded by any block, a tensor
-already in some cluster's TCDM may only be read by kernels on that cluster. A block that
-fetches therefore says `mem_level=None, cluster=<its own>` and gets both. The check is
+`cluster_of` answers `None` for anything else: an L1 port names its cluster, any other port
+is refused one, and `check_contract` requires level and cluster to match exactly. A tensor
+already in some cluster's TCDM may only be read by kernels on that cluster. The check is
 worth having because a remote handle does not fault — the transfer completes without
 writing and the destination keeps whatever it held.
 
@@ -48,9 +47,10 @@ other with a real RAW dependency, and nothing else.
 
 **The closures, and why each is the engine it is.** `L4 → L3` is the host iDMA: the
 memory-chiplet pool is off-die, so it is hoisted once instead of fetched per tile. A
-**layout** change is one xDMA pass fused into the load — the AGU takes independent strides
-on each side, so it converts while it transports, costing nothing beyond the load that had
-to happen anyway. **Precision** is not done here at all.
+**layout** change is an xDMA strided pass — the AGU takes independent strides on each side,
+so it converts while it transports. By default the operand is copied into L1 and permuted
+there (two nodes, one extra buffer); `bring_in(fuse_relayout=True)` fuses the permute into
+the load. **Precision** is not done here at all.
 
 ## Nothing in nest.py is trusted
 
@@ -65,5 +65,6 @@ Two hardware limits it enforces rather than discovers at runtime:
 - **The run must be 8 bytes, contiguous on both sides.** At fp16 an A-layout `tileSize` run
   is 4×2 = 8 B and works; at int8 it is 4 B and falls onto the CPU fallback. So **a reshape
   into or out of A-layout is an fp16 operation** — quantise *after* it.
-- **Anything involving B-layout is a transpose**, not a reshape, and needs the transposer
-  kernel (which is correct only at `elem_bytes=1`).
+- **Anything involving B-layout is a transpose**, not a reshape. `comm.transfer` routes
+  row_major↔B through the xDMA 8×8 transposer (1- and 2-byte elements) and an A-layout
+  nest, on a square array.

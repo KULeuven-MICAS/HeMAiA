@@ -205,10 +205,9 @@ order = list(nx.lexicographical_topological_sort(ctx.dfg, key=lambda t: t.node_i
 pos = {t.node_name: i for i, t in enumerate(order)}
 # the GEMM core runs QK(j, *) and then PV(j - 1, *), with the next start before each wait
 gc = [t.node_name for t in order if t.assigned_core_id == ROLES["gemm"]]
-first = gc[:14]
-check("the GEMM core's program opens QK0 QK0 QK1 QK1 PV0 PV0 as starts, waits behind them",
-      [n.split("_")[0] for n in first[:6]] == ["c0qk0q0", "c0qk0q1", "c0qk1q0", "c0qk1q1", "c0pv0q0", "c0pv0q1"]
-      or True)
+starts = [n for n in gc if "_w_" not in n]
+check("the GEMM core issues the starts QK0 QK0 QK1 QK1 PV0 PV0 in that order",
+      [n.split("_")[0] for n in starts[:6]] == ["c0qk0q0", "c0qk0q1", "c0qk1q0", "c0qk1q1", "c0pv0q0", "c0pv0q1"])
 starts_before_wait = pos["c0qk1q0_cl0"] < pos["c0qk0q0_w_cl0"] + 4
 check("a wait is not ahead of the next dispatch's start", starts_before_wait)
 check("a tile's slab is not refilled before its last reader: K2 loads after both QK0",

@@ -165,9 +165,8 @@ def _c_static_table(name: str, ctype: str, length: int, entries: dict, fill=None
 # Every args struct is carved out of the BINGO L1 arena, which is NEVER CLEARED. A field
 # the args class forgets to assign is therefore read as whatever that TCDM word last held
 # -- and depending on the field that is a wrong answer, a dead hart, or a task that stalls
-# forever with no error (anything feeding an AGU stride: see src_row_stride in
-# __snax_bingo_kernel_simd_stream_elementwise_args_t, which hung four workloads before
-# this check existed).
+# forever with no error (anything feeding an AGU stride, e.g. src_row_stride in
+# __snax_bingo_kernel_simd_stream_elementwise_args_t).
 #
 # So the field list is checked against the C header the device compiles against, at emit
 # time, where the fix is one line in the args class. The alternative is finding it as a
@@ -198,7 +197,7 @@ def _args_struct_fields():
         src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
         src = re.sub(r"//[^\n]*", "", src)
         for body, struct in re.findall(
-                r"(?:__SNAX_KERNEL_ARGS_DEFINE|__HOST_KERNEL_ARGS_DEFINE)\s*\w*\s*"
+                r"(?:__SNAX_KERNEL_ARGS_DEFINE|__HOST_BINGO_KERNEL_ARGS_DEFINE)\s*\w*\s*"
                 r"\{([^{}]*)\}\s*(\w+_args_t)\s*;", src, re.S):
             out[struct] = re.findall(r"\b(?:uint|int)(?:8|16|32|64)_t\s+(\w+)\s*;", body)
     _struct_fields_cache = out
@@ -236,22 +235,6 @@ def _args_complete_problems(struct_name, assignments, node):
             f"must be assigned -- the struct lives in the BINGO L1 arena, which is never "
             f"cleared, so an unassigned field reads stale TCDM. Set it explicitly, even "
             f"when the value is 0."]
-
-
-def _check_args_complete(struct_name, assignments, node):
-    """Refuse an args struct with a field nobody assigned."""
-    declared = _args_struct_fields().get(struct_name)
-    if not declared:
-        return                        # struct not found in the headers: nothing to check
-    missing = [f for f in declared
-               if f not in assignments and f not in _ARGS_TRAILER_FIELDS]
-    if missing:
-        raise ValueError(
-            f"{struct_name} (node {getattr(node, 'node_name', '?')}): "
-            f"get_c_field_assignments() does not set {', '.join(missing)}. Every field "
-            f"must be assigned -- the struct lives in the BINGO L1 arena, which is never "
-            f"cleared, so an unassigned field reads stale TCDM. Set it explicitly, even "
-            f"when the value is 0.")
 
 
 class BingoDFGEmitMixin:
@@ -346,7 +329,7 @@ class BingoDFGEmitMixin:
 
             if num_local_nodes == 0:
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
-                 # Using 1 for safety, similar to original array [1]
+                 # An empty list still allocates one descriptor slot, since a zero-size allocation is not supported.
                  task_description_list += (
                      f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
                      f"1 * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
@@ -365,9 +348,8 @@ class BingoDFGEmitMixin:
                     desc_words = self.bingo_task_desc_words(packed_val)
 
                     # Word 0 at the lower address holds the low bits, the rest follow in
-                    # ascending significance. Each word is masked to 64 bits -- formatting
-                    # the whole descriptor as one %016X emitted a 32-digit constant that no
-                    # C integer type can hold.
+                    # ascending significance. Each word is masked to 64 bits so every
+                    # constant fits a uint64_t.
                     task_description_list += (
                         "    " + ", ".join(f"0x{w:016X}ULL" for w in desc_words[:words]) +
                         f", // Node ID {node.node_id}\n"
@@ -571,13 +553,16 @@ class BingoDFGEmitMixin:
             elif isinstance(value, BingoMemAllocView):
                 unique_handles.add(value.base)
             # A LIST of handles is still a reference to every one of them. Multi-destination
-            # kernels (xdma_multicast, xdma_chain_gather) hold their operands this way, and
-            # walking only scalar attributes left those buffers unallocated unless some
-            # OTHER node happened to name the same handle -- which is how both kernels got
-            # away with it so far. That is an accident, not an invariant: a destination no
-            # local node reads would silently get no allocation at all.
-            elif isinstance(value, (list, tuple)):
+            # kernels (xdma_multicast, xdma_chain_gather) hold their operands this way, so
+            # every handle in the list is collected and allocated, even when no other node
+            # names it: a destination no local node reads still needs its allocation.
+            # Sets and the values of dicts count too, as in bingo_liveness.collect_handle_users:
+            # a handle the packer places must be one this emitter allocates.
+            elif isinstance(value, (list, tuple, set)):
                 for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for item in value.values():
                     collect(item)
 
         for node in sorted_nodes:
@@ -596,7 +581,7 @@ class BingoDFGEmitMixin:
         f.write('#include "libbingo/bingo_api.h"\n')
         f.write('#include "host.h"\n')
         # bingo_compile_dfg types this `list[str] | None`, and a workload with no data
-        # header passes None -- which used to raise here instead of emitting nothing.
+        # header passes None, which emits no extra include.
         for include in (extra_include_header_list or ()):
             f.write(f'#include "{include}"\n')
         f.write("\n")
@@ -681,10 +666,10 @@ class BingoDFGEmitMixin:
         compiler has already decided every offset, so the runtime takes ONE allocation per
         cluster -- the packed arena -- and each buffer is a constant displacement into it.
 
-        Taking the arena from bingo_l1_alloc rather than addressing TCDM directly is
-        deliberate for this milestone: the heap keeps owning the base address and the
-        capacity check, so nothing downstream has to learn a new address map, and a workload
-        can be switched back with static_l1=False and no other change.
+        The arena comes from bingo_l1_alloc rather than from addressing TCDM directly, so the
+        heap keeps owning the base address and the capacity check, nothing downstream has to
+        learn a new address map, and static_l1=False switches a workload back with no other
+        change.
         """
         placement = getattr(self, "static_l1_placement", None)
         stats = getattr(self, "static_l1_stats", None)
@@ -749,20 +734,19 @@ class BingoDFGEmitMixin:
         # are available when expert nodes reference them via SW guard.
         # ---- ARENAS for scratchpads and device args -------------------------------------
         #
-        # These were one bingoHeapMalloc per node, so allocation cost scaled with graph size and
-        # dominated start-up on any non-trivial DFG. None of it is needed: per-node scratchpads
-        # and arg blocks live for the whole run and are never freed individually, so a free-list
-        # allocator buys nothing and charges a bin search plus heap-metadata traffic -- the
-        # latter crossing the fabric -- on every single one.
+        # Per-node scratchpads and arg blocks live for the whole run and are never freed
+        # individually, so a free-list allocator buys nothing and charges a bin search plus
+        # heap-metadata traffic -- the latter crossing the fabric -- on every single one, and
+        # its cost would scale with graph size.
         #
-        # Instead take ONE block per memory and slice it with a bump pointer. Sizes of the arg
+        # So each memory gets ONE block, sliced with a bump pointer. Sizes of the arg
         # structs are only known to the C compiler (sizeof), so the total is emitted as a
         # constant expression and the bump happens at runtime -- a couple of integer ops per
         # node instead of an allocator call.
         #
-        # Placement is unchanged: device scratchpads and device args stay in their own cluster's
-        # L1, host scratchpads stay in L3. Moving device scratchpads to L3 would turn every
-        # device-side access into a fabric round trip.
+        # Device scratchpads and device args are in their own cluster's L1, host scratchpads
+        # in L3. Moving device scratchpads to L3 would turn every device-side access into a
+        # fabric round trip.
         #
         # The named workload buffers are allocated BEFORE this point, so collapsing these
         # allocations cannot disturb the cross-chip name/offset agreement they rely on.
@@ -771,7 +755,7 @@ class BingoDFGEmitMixin:
         l3_terms = []
         # With slot packing the DEVICE scratchpad term is (slots x sp_align), added below --
         # one term per cluster, not one per node. Emitting both would make the packed arena
-        # LARGER than the unpacked one, which is what the first version of this did.
+        # LARGER than the unpacked one.
         sp_packed = bool(getattr(self, "static_l1_sp_slots", None))
         for node in local_nodes:
             kn = node.kernel_name
@@ -882,10 +866,9 @@ class BingoDFGEmitMixin:
 
         # Resolve each DISTINCT device kernel name exactly once.
         #
-        # get_device_function() linearly scans the device symbol table, so emitting one call per
-        # TASK made the host rescan the whole table once per task, while only a handful of names
-        # are ever distinct -- most calls re-derive an answer already sitting in a register.
-        # Hoisting costs one local per distinct name.
+        # get_device_function() linearly scans the device symbol table, so the distinct names
+        # are resolved once, in one pass, rather than once per task: only a handful of names
+        # are ever distinct. Hoisting costs one local per distinct name.
         dev_kernel_names = []
         for node in local_nodes:
             kn = node.kernel_name
@@ -1082,7 +1065,8 @@ class BingoDFGEmitMixin:
     def _emit_device_args_images(self, f, chiplet_id, local_nodes, handle_name_map, sp_packed):
         """One static image a cluster of the device args structs this chiplet's host would
         otherwise write field by field into L1. Returns {node_id: (image var, image type,
-        member, {field: runtime value}, L1 address var)}; empty when the images are off.
+        member, {field: runtime value}, L1 address var, its compile-time address macro or
+        None)}; empty when the images are off.
 
         Only with packed scratchpad slots: then the args are the arena's last tenant and sit
         back to back from the bump pointer, so a struct whose members are each 64-B aligned

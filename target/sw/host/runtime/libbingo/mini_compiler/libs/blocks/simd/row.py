@@ -12,8 +12,6 @@ row of FP16, and the operators on it are shaped by that:
                    so the SIMD latches it (STICKY_B) instead of writing it out
     QuantizeARow   FP16 -> INT8 into ROW 0 of the GEMV's 16-row A operand and nothing
                    else -- a quarter of the input beats of a fully written operand
-    ARowLoad       an INT8 row into ROW 0 of that operand, one 2-D iDMA copy (after
-                   RMSNormRow(quant_inv=...), which quantises in its own pass)
     ARowPack       an INT8 row into a_row, the GEMV's operand cut to the word it reads: one
                    2-D copy by the producer, then a plain 1-D load by every consumer
     ScaleCols      the per-column dequantisation y (.) s, s[n] = s_x * s_w[n] * 2^k: the
@@ -88,8 +86,7 @@ class RMSNormRow(Block):
     must stay under FP16's 65,504: rms <= sqrt(65504 / cols), 5.66 at 2,048.
 
     quant_inv set: y is sat127(rne(norm(x) * inv)) as INT8, the quantiser fused into the
-    multiply's pass -- one task instead of two, and half the bytes to move on. A consumer
-    that needs the GEMV's A layout loads it with ARowLoad.
+    multiply's pass -- one task instead of two, and half the bytes to move on.
     """
 
     name = "rmsnorm_row"
@@ -240,76 +237,6 @@ class QuantizeARow(Block):
             # The memset has no predecessor: gated behind x's producer it cannot run early,
             # ungated it cannot reuse that producer's L1 -- the linker's call, as for loads.
             sources=[zero])
-
-
-@dataclass(frozen=True)
-class ARowLoadCfg:
-    """An INT8 row of `cols` values into row 0 of a one-token GEMV's A operand on
-    `cluster`. The row lies in L3 or the HBM (in_level), or in `src_cluster`'s L1."""
-
-    cols: int
-    cluster: int = 0
-    in_level: MemLevel = MemLevel.L3
-    src_cluster: Optional[int] = None
-
-
-class ARowLoad(Block):
-    """INT8 row -> ROW 0 of a one-token GEMV's A operand, in one iDMA copy.
-
-    The operand is QuantizeARow's: the (16, 4, 16) A layout of a [16, cols] tensor, value i
-    at (i // 4) * 64 + i % 4. So the load is a 2-D copy -- cols / 4 runs of 4 bytes, 4 bytes
-    apart in the source and 64 in the operand -- after the operand is zeroed once on the
-    otherwise idle xDMA (the GEMV reads rows 0 and 1 of every block, and TCDM nobody wrote
-    reads X on RTL). With RMSNormRow(quant_inv=...) upstream this replaces a per-cluster
-    FP16 fetch and QuantizeARow: the row moves at half the bytes and is quantised once.
-    """
-
-    name = "a_row_load"
-
-    def __init__(self, cfg: ARowLoadCfg = None, **params):
-        self.cfg = cfg if cfg is not None else ARowLoadCfg(**params)
-        check_row(self.cfg.cols, "ARowLoad")
-        if self.cfg.cols % 4:
-            raise ValueError(f"ARowLoad: cols={self.cfg.cols}; whole A blocks of 4 values.")
-        if self.cfg.in_level not in (MemLevel.L1, MemLevel.L3, MemLevel.HBM):
-            raise ValueError(f"ARowLoad: in_level={self.cfg.in_level}; L1, L3 or HBM.")
-
-    def idma_passes(self) -> int:
-        return 1
-
-    def xdma_passes(self) -> int:
-        return 1
-
-    @property
-    def inputs(self) -> dict:
-        c = self.cfg
-        src = c.cluster if c.src_cluster is None else c.src_cluster
-        return {"x": PortSpec(Layout.ROW_MAJOR, DType.I8, (1, c.cols), mem_level=c.in_level,
-                              cluster=src if c.in_level == MemLevel.L1 else None,
-                              doc="int8 row")}
-
-    @property
-    def outputs(self) -> dict:
-        c = self.cfg
-        return {"y": PortSpec(Layout.A, DType.I8, (1, c.cols), mem_level=MemLevel.L1,
-                              cluster=c.cluster,
-                              doc="int8, row 0 of a 16-row A operand (16 * cols bytes)")}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        c = self.cfg
-        g = ctx.at(c.cluster)
-        nbytes = SnaxBingoKernelSimdQuantARowArgs.a_bytes(c.cols)
-        a = g.l1(f"{self.name}_a", nbytes)
-        zero = g.node("ZeroA", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
-                      SnaxBingoKernelXdmaMemsetArgs(a, nbytes,
-                                                    SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))
-        ld = g.node("LdA", ctx.dm, "__snax_bingo_kernel_idma_2d_copy",
-                    SnaxBingoKernelIdma2dCopyArgs(bound["x"].handle, a, 4, 4, 64, c.cols // 4),
-                    [zero])
-        return BlockResult(
-            outputs={"y": Port(self.outputs["y"], a, (ld,), name="y")},
-            inputs={"x": Port(self.inputs["x"], bound["x"].handle, (ld,), name="x")},
-            nodes=[zero, ld], sources=[zero])
 
 
 @dataclass(frozen=True)

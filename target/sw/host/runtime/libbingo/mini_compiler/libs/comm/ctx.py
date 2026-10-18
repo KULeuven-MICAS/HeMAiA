@@ -117,7 +117,3 @@ class Ctx:
         so the cluster is not a choice -- and because `_cl0` is then the same on every one,
         any distinguishing id has to be in `name` itself."""
         return self.node(name, self.host, kname, kargs, after, cluster=0)
-
-
-# ======================================================================================
-# The linker

@@ -6,7 +6,7 @@ from [`../passes/`](../passes/), which is why this directory can be read on its 
 | file | what it is |
 |---|---|
 | `bingo_dfg.py` | `BingoDFG` itself: nodes, edges, handles, and `bingo_compile_dfg`, which runs the passes in order. The class is assembled from mixins, so this file is mostly the graph API and the compile driver. |
-| `bingo_node.py` | `BingoNode`: a kernel, its args, and the (chiplet, cluster, core) it is placed on. Also the dependency-tag fields the descriptor pass fills in. |
+| `bingo_node.py` | `BingoNode`: a kernel, its args, and the (chiplet, cluster, core) it is placed on. Also the dependency fields (set/check lists and tags) that the transform passes fill in and the descriptor pass packs. |
 | `bingo_utils.py` | `DiGraphWrapper`, the typed networkx graph `BingoDFG` derives from, and `install_package`. |
 
 How a node names memory -- the handle types -- and where a workload's arrays are placed live in
@@ -15,7 +15,7 @@ How a node names memory -- the handle types -- and where a workload's arrays are
 ## The mixin split
 
 `BingoDFG` is built by inheriting `BingoDFGTransformsMixin`, `…ConditionalMixin`,
-`…DescriptorMixin`, `…ValidateMixin` and `…EmitMixin`. The mixins may not import
+`…DescriptorMixin`, `…ValidateMixin`, `…EmitMixin`, `…ReportMixin` and `…StaticL1Mixin`. The mixins may not import
 `bingo_dfg` — it imports them — so anything they share lives where it is used: the
 kernel→engine map in `platform/`, beside the core-role map it is checked against, and the
 task-list word size in `passes/`, beside the descriptor measured in those words.

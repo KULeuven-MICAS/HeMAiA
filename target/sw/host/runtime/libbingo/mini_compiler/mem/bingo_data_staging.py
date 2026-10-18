@@ -304,8 +304,8 @@ class DataStaging:
 
         `preload`: zeros in a .data section of their own instead, so the testbench's image
         preload clears it at time zero; in .bss the boot clears it with the system DMA, which
-        for megabytes (a weight ring's slots) takes hundreds of microseconds of SIMULATED time
-        before the program starts.
+        for megabytes (a weight ring's slots) that clear delays the program's start in
+        simulation.
         """
         chip = self._chip(mem_chip, f"put_zeros({name!r})")
         if mem_chip is not None and not self.on_memchip:
@@ -380,7 +380,7 @@ class DataStaging:
         """build/hbm/manifest.txt and the images it lists; nothing if put_hbm was never
         called. A stale manifest from an earlier build is removed either way: the
         testharness loads whatever build/hbm/ holds. With one memory chiplet the image is
-        untagged, as it always was; with more, each is tagged chip=<id>."""
+        untagged; with more, each is tagged chip=<id>."""
         hbm_dir = os.path.join(output_dir, "build", "hbm")
         manifest = os.path.join(hbm_dir, "manifest.txt")
         chips = [c for c in self._chips.values() if c.hbm_items]

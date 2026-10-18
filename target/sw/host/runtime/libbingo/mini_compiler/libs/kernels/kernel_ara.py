@@ -132,7 +132,7 @@ class _HostBingoKernelAraUnaryArgs(BingoKernelArgs):
         return a
 
 
-# int-capable unary ops: F32/F16/I8/I16
+# int-capable unary ops: F32/F16/I8/I16/I32
 class HostBingoKernelAraReluF32Args(_HostBingoKernelAraUnaryArgs): KERNEL_NAME = "__host_bingo_kernel_relu"; PRECISION = BINGO_PREC_FP32
 class HostBingoKernelAraReluF16Args(_HostBingoKernelAraUnaryArgs): KERNEL_NAME = "__host_bingo_kernel_relu"; PRECISION = BINGO_PREC_FP16
 class HostBingoKernelAraReluI8Args(_HostBingoKernelAraUnaryArgs):  KERNEL_NAME = "__host_bingo_kernel_relu"; PRECISION = BINGO_PREC_INT8
@@ -401,37 +401,4 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
         else:
             assignments["cond_weight_addr"] = "0"
 
-        return assignments
-
-
-# Backward-compat aliases
-HostBingoKernelMoeGatingArgs = HostBingoKernelCerfGatingArgs
-HostBingoKernelCerfThresholdArgs = HostBingoKernelCerfGatingArgs
-HostBingoKernelCerfStaticArgs = HostBingoKernelCerfGatingArgs
-
-
-# DEVICE: Dynamic MoE gating (32-bit address space)
-class SnaxBingoKernelMoeGatingArgs(BingoKernelArgs):
-    """Device-side MoE gating. Reads predecessor scratchpad for logits."""
-    def __init__(self,
-                 pred_scratchpad_addr=None,
-                 top_k: int = 2,
-                 cerf_controlled_mask: int = 0,
-                 cerf_group_ids_addr: Union[BingoMemAlloc, BingoMemSymbol, int, None] = None):
-        self.pred_scratchpad_addr = pred_scratchpad_addr
-        self.top_k = top_k
-        self.cerf_controlled_mask = cerf_controlled_mask
-        self.cerf_group_ids_addr = cerf_group_ids_addr
-
-    def get_struct_name(self) -> str:
-        return "__snax_kernel_moe_gating_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        assignments = {}
-        if self.pred_scratchpad_addr is not None:
-            assignments["pred_scratchpad_addr"] = str(self.pred_scratchpad_addr)
-        assignments["top_k"] = str(self.top_k)
-        assignments["cerf_controlled_mask"] = f"0x{self.cerf_controlled_mask:04x}"
-        if self.cerf_group_ids_addr is not None:
-            self._process_addr(self.cerf_group_ids_addr, "cerf_group_ids_addr", assignments, handle_name_map, split_64bit=False)
         return assignments

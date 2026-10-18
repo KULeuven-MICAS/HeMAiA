@@ -5,9 +5,9 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The FlashAttention GEMM pair, and the array's performance counters.
 
-QK and PV are separate classes because they are different SHAPES of the same engine
-program, not different kernels: QK writes a score tile the softmax reads, PV accumulates
-into O. Keeping them apart is what lets the builder state which is which."""
+QK and PV are two kernels over one args struct: QK writes the FP16 score tile the softmax
+reads, PV accumulates into O. Keeping them apart is what lets the builder state which is
+which."""
 
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
@@ -167,7 +167,8 @@ class SnaxBingoKernelGemmFaQkArgs(_SnaxBingoKernelGemmFaArgs):
 
 
 class SnaxBingoKernelGemmFaPvArgs(_SnaxBingoKernelGemmFaArgs):
-    """O^T += V^T.P^T, accumulated in place in INT32 (converter off, C == D)."""
+    """O^T += V^T.P^T, accumulated in place in INT32 (C == D); with D_FP16 the last tile
+    leaves as FP16 into a separate D."""
     KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_pv"
 
 

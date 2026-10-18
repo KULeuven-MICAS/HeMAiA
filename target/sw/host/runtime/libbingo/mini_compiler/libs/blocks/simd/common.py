@@ -12,9 +12,10 @@ that when the beat width changes with the cfg there is one place to change.
 
 from dataclasses import dataclass
 
-# One 512-bit SIMD beat is 64 B = 32 FP16 lanes, and every fused kernel here works a whole
-# beat at a time. A row that is not a multiple of this has a partial final beat, which the
-# kernels do not handle.
+# These blocks assume a 64-B (32-lane) SIMD beat. The real beat is the cluster cfg's
+# (kernel_simd.simd_beat_bytes()), and the row kernels (simd_row.h) refuse any other. Every
+# fused kernel works a whole beat at a time; a row that is not a multiple of the lane count
+# has a partial final beat, which the kernels do not handle.
 LANES_PER_BEAT = 32
 BEAT_BYTES = 64
 
@@ -30,9 +31,8 @@ def check_row(cols: int, who: str) -> None:
 def check_pow2(cols: int, who: str) -> None:
     """For the reductions that divide by the row length.
 
-    The mean in a normalisation is an EXPONENT SUBTRACT -- on the core it was
-    `(E - log2D) << 10`, and in the datapath it is a 1/D immediate the RSQRT func
-    multiplies by. Both are exact at 2^k and only at 2^k. At any other width the kernel's
+    The mean in a normalisation is an EXPONENT SUBTRACT -- a 1/D immediate the RSQRT func
+    multiplies by. It is exact at 2^k and only at 2^k. At any other width the kernel's
     `for (t = cols; t > 1; t >>= 1) log2D++` truncates, the scale comes out a power of two
     wrong, and the result is a well-formed tensor scaled by the wrong constant.
     """

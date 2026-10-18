@@ -47,10 +47,8 @@ class BingoDFGDescriptorMixin:
         """THE packed-descriptor field table, LSB -> MSB, mirroring the RTL struct
         bingo_hw_manager_task_desc_t (a packed struct's last-declared member is the LSB).
 
-        Pack and unpack both walk this one list. They used to re-derive every width
-        independently from the same inputs, which is exactly how the C header's copy
-        rotted into a 50-bit layout against a real 65-bit one -- two derivations of the
-        same table drift the moment one of them is edited.
+        Pack and unpack both walk this one list, so the widths are derived in one place;
+        two derivations of the same table drift the moment one of them is edited.
 
         Returns [(name, width), ...]; the running sum of the widths is the bit offset of
         each field, so there are no shift constants to keep in sync either.
@@ -141,9 +139,9 @@ class BingoDFGDescriptorMixin:
             packed_val |= (value << current_shift)
             current_shift += width
 
-        # The descriptor no longer has to fit one host AXI-Lite beat -- the RTL fetch
-        # master reads task_desc_words beats and commits them as one atomic push -- but
-        # it must still fit TaskDescBusWidth, because the RTL builds the same struct
+        # The RTL fetch master reads task_desc_words beats and commits them as one
+        # atomic push, but the descriptor must still fit TaskDescBusWidth, because the
+        # RTL builds the same struct
         # from the same widths and ReservedBitsForTaskDesc goes negative on overflow:
         # it will not elaborate either. The occupancy is not fixed, it grows with the
         # cluster and core counts, so report the breakdown and name the knobs.

@@ -20,6 +20,13 @@ that exist only in MLA:
                   in rows 0-15, two segments with two scales, rows 16-31 zero
     MlaAttention  the online softmax over key tiles on ONE cluster, then o~ = O / l per
                   query and its transpose: [heads, 512] rows for W_UV
+    MlaShardScores / MlaRowMax / MlaShardPV / MlaShardOut
+                  the attention split over clusters by key (params att_split): each shard's
+                  row maximum, the lanewise maximum m*, each shard's softmax seeded at m*
+                  with its PV, and the attention cluster's sum, normalise and transpose
+    MlaShardP / MlaDimPV / MlaDimOut
+                  att_split_mode dim: each shard's P only, then PV split by latent slice
+                  over every key, and the transpose of the gathered slices
 
 THE ATTENTION IS FlashAttention's, TRANSPOSED (gemm_fa.h, simd.h): S^T = K . Q^T with one
 key per 64-byte beat and one query per lane, so the softmax reduces along beats, and
@@ -670,8 +677,8 @@ class MlaAttention(Block):
                     SnaxBingoKernelXdmaTranspose2dArgs(ot16, xt, c.d_v, c.br, 2), [nrm])
         nodes += [nrm, tr]
         # The key / value copies' readers, for the edges from their producer (the append): the
-        # fresh tile's loads. Named as tile 0's, every tile waited for the cache writes (tile
-        # 0 first in the chain) and the attention could not start on the old keys.
+        # fresh tile's loads. Naming tile 0's instead would make every tile wait for the
+        # cache writes.
         rd = max(fresh) if fresh else 0
         return BlockResult(
             outputs={"ot": Port(self.outputs["ot"], ot16, (nrm,), name="ot"),
@@ -715,7 +722,7 @@ class MlaShardCfg:
     # "dim" loads a latent slice of V^T over every key instead (MlaDimPV)
     with_v: bool = True
     # the key tile holding the rows the cache writes just produced (global index): only its
-    # loads wait for those writes. -1: every tile of the shard waits (as before)
+    # loads wait for those writes. -1: every tile of the shard waits
     fresh_tile: int = -1
 
 
@@ -847,7 +854,7 @@ class MlaRowMax(Block):
         g = ctx.at(c.cluster)
         fa = SnaxBingoKernelSimdFaSoftmaxArgs
         arena = g.l1(f"{self.name}_arena", fa.arena_bytes(c.rows, 1))
-        # the kernel writes -m into the beat just below its score tile: a prefixed copy
+        # the kernel writes m_new into the beat just below its score tile: a prefixed copy
         tile = g.l1(f"{self.name}_tile", BEAT + c.rows * BEAT)
         p8 = g.l1(f"{self.name}_p8", fa.p8_bytes(c.rows, c.br, 0))
         cp = g.node("Copy", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",

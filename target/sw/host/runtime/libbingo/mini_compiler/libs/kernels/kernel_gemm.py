@@ -630,5 +630,3 @@ class SnaxBingoKernelGemmI8I8F16M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalB
 # reuse of gemm_i8i8_f16_M16K8N16 -> op id gemm_i8i8_f16_M16K8N16_minimal
 class SnaxBingoKernelGemmI8I8F16M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
     ARRAY_SHAPE_IDX = 2
-
-# BINGO XDMA 1D Copy

@@ -28,9 +28,8 @@ DEFAULT_TASK_DESC_WIDTH = 128
 # chiplet-id fields, so guessing this wrong moves every field above
 # assigned_chiplet_id -- which is all of them but the first five.
 DEFAULT_CHIP_ID_WIDTH = 8
-# TaskIdWidth default, matching bingo_hw_manager_top's parameter default. A header from
-# before s1_quadrant.task_id_width existed carries no define, and 12 is what those builds
-# elaborated with.
+# TaskIdWidth default, matching bingo_hw_manager_top's parameter default. A header without
+# BINGO_TASK_ID_WIDTH falls back to this RTL default.
 DEFAULT_TASK_ID_WIDTH = 12
 DEFAULT_WAITING_QUEUE_DEPTH = 8
 
@@ -66,25 +65,26 @@ def _descriptor_geometry(defines, source):
     """
     width, words = _task_desc_geometry(defines, source)
     return {
-        # DepTagWidth as the RTL was generated with (cfg s1_quadrant.dep_tag_width). The
-        # packed descriptor must fit task_desc_width, and a 4-cluster config spends 2 more
-        # bits on cluster ids than a 1-cluster one, so this is NOT a constant across
+        # DepTagWidth as the RTL was generated with (cfg s1_quadrant.bingo_cfg.dep_tag_width).
+        # The packed descriptor must fit task_desc_width, and a 4-cluster config spends 2
+        # more bits on cluster ids than a 1-cluster one, so this is NOT a constant across
         # configs. A SW/RTL mismatch does not fault: the tag is not the top field, so
-        # every bit above it -- both dep codes, the dep_set chiplet and cluster ids --
-        # shifts, and tasks quietly dispatch to the wrong place.
+        # every bit above it -- the dep_set fields (en, all, chiplet, cluster, code, tag)
+        # and cerf_carry -- shifts, and tasks quietly dispatch to the wrong place.
         "dep_tag_width": defines.get("BINGO_DEP_TAG_WIDTH", DEFAULT_DEP_TAG_WIDTH),
         # ChipIdWidth as the RTL was generated with (cfg hemaia_multichip.chip_id_width).
         "chip_id_width": defines.get("BINGO_CHIP_ID_WIDTH", DEFAULT_CHIP_ID_WIDTH),
-        # TaskIdWidth as the RTL was generated with (cfg s1_quadrant.task_id_width). The id
-        # space is 2**width and the compiler assigns one id per task, so it caps the graph
-        # size; it is also a descriptor field, so a mismatch shifts every field above it.
+        # TaskIdWidth as the RTL was generated with (cfg s1_quadrant.bingo_cfg.task_id_width).
+        # The id space is 2**width and the compiler assigns one id per task, so it caps the
+        # graph size; it is also a descriptor field, so a mismatch shifts every field above it.
         "task_id_width": defines.get("BINGO_TASK_ID_WIDTH", DEFAULT_TASK_ID_WIDTH),
         # WaitingDepCheckQueueDepth (cfg s1_quadrant.bingo_cfg.waiting_queue_depth): not a
         # descriptor field, but the hang check models the queues the stream fills.
         "waiting_queue_depth": defines.get("BINGO_WAITING_QUEUE_DEPTH",
                                            DEFAULT_WAITING_QUEUE_DEPTH),
-        # TaskDescBusWidth as the RTL was generated with (cfg s1_quadrant.task_desc_width,
-        # otherwise derived: the smallest whole number of 64-bit words the layout fits).
+        # TaskDescBusWidth as the RTL was generated with (cfg
+        # s1_quadrant.bingo_cfg.task_desc_width, otherwise derived: the smallest whole
+        # number of 64-bit words the layout fits).
         # NOT the host AXI-Lite data width: the fetch master reads task_desc_words beats
         # and commits them as one atomic push, so the descriptor may be wider than a bus
         # beat. The packer and the task-list emitter both read these two, so there is one
@@ -123,11 +123,6 @@ def _remember_platform(platform):
     global _LAST_PARSED_PLATFORM
     _LAST_PARSED_PLATFORM = platform
     return platform
-
-
-def last_parsed_platform():
-    """The platform dict from the most recent parse_platform_cfg(), or None."""
-    return _LAST_PARSED_PLATFORM
 
 
 def parse_platform_cfg(occamy_h_path):
@@ -170,8 +165,9 @@ def parse_platform_cfg(occamy_h_path):
         # order. Empty for a header from before they were listed (then only
         # mem_chip_loc_x/y and the HBM above describe the one there is).
         "mem_chips": _mem_chips(defines, occamy_h_path),
-        # dep_tag_width / chip_id_width / task_desc_width / task_desc_words. Each is
-        # defaulted inside _descriptor_geometry so an older generated header still parses.
+        # dep_tag_width / chip_id_width / task_id_width / waiting_queue_depth /
+        # task_desc_width / task_desc_words. Each is defaulted inside _descriptor_geometry
+        # so an older generated header still parses.
         **_descriptor_geometry(defines, occamy_h_path),
     }
     return _remember_platform(platform)
@@ -210,8 +206,7 @@ def _hbm_geometry(occamy_h_path):
             "hbm_size": defines.get("HBM_SIZE", 0)}
 
 
-# The generated platform header, resolved from THIS file's location the same way
-# _DEFAULT_ROLES_HEADER below is: bingo_platform.py sits at
+# The generated platform header, found through _bingo_paths.target_sw().
 # FOUND BY MARKER, NOT BY COUNTING `..`. A fixed number of parent steps is right for one
 # directory depth only, and wrong silently: the path simply does not exist, and the failure
 # appears much later as a missing generated header from a module that never mentions paths.
@@ -224,10 +219,10 @@ def platform_descriptor_geometry():
     """(geometry, source) the packer should use when the caller named no widths.
 
     This is what makes the generated BINGO_TASK_DESC_WIDTH / BINGO_DEP_TAG_WIDTH /
-    BINGO_CHIP_ID_WIDTH reach BingoDFG: none of the ~50 workload generators passes them,
-    so without this they would all silently pack against a literal, and a task list packed
-    64 bits wide against a 128-bit RTL descriptor reads every entry after the first from
-    the wrong address. Preference order, most specific first:
+    BINGO_CHIP_ID_WIDTH / BINGO_TASK_ID_WIDTH reach BingoDFG: most workload generators
+    pass none of them, so without this they would silently pack against a literal, and
+    a task list packed 64 bits wide against a 128-bit RTL descriptor reads every entry
+    after the first from the wrong address. Preference order, most specific first:
 
       1. the platform this run already parsed (parse_platform_cfg) -- exactly the header
          the workload's --platformcfg pointed at, whatever its path;
@@ -256,30 +251,9 @@ def platform_descriptor_geometry():
             str(_DEFAULT_PLATFORM_HEADER))
 
 
-def default_dep_tag_width():
-    """DepTagWidth for a caller with no platform dict. See platform_descriptor_geometry."""
-    return platform_descriptor_geometry()[0]["dep_tag_width"]
-
-
-def default_chip_id_width():
-    """ChipIdWidth for a caller with no platform dict. See platform_descriptor_geometry."""
-    return platform_descriptor_geometry()[0]["chip_id_width"]
-
-
-def default_task_desc_width():
-    """TaskDescBusWidth for a caller with no platform dict. See above."""
-    return platform_descriptor_geometry()[0]["task_desc_width"]
-
-
-def default_task_desc_words():
-    """How many 64-bit task-list words one descriptor occupies. See above."""
-    return platform_descriptor_geometry()[0]["task_desc_words"]
-
-
 # The generated role map, mirrored into the device tree by `make snax-sw-gen`
-# (target/sw/Makefile). Resolved from THIS file's location so every workload's
-# core_roles(platform) keeps working unchanged: bingo_platform.py sits at
-# Same marker search as the platform header above, and for the same reason.
+# (target/sw/Makefile). Found through _bingo_paths.target_sw(), the same marker search as
+# the platform header above, and for the same reason.
 _DEFAULT_ROLES_HEADER = (
     Path(_bingo_paths.target_sw()) / "device" / "runtime" / "snax" /
     "snax_core_roles_defs.h"

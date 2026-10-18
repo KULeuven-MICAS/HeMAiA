@@ -70,7 +70,7 @@ def bingo_export_exec_ir(dfg, path: str, ring_tables: List[dict] = None, prefetc
         else:
             core = ["h", chip]
         args = _args(n.kernel_args)
-        chunk = getattr(n, "exec_chunk", None)
+        chunk = n.exec_chunk
         tasks.append({
             "tid": n.node_id, "name": n.node_name, "core": core, "kernel": n.kernel_name or "",
             "size": {k: v for k, v in args.items() if not isinstance(v, dict)},

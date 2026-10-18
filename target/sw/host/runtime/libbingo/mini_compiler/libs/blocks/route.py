@@ -14,7 +14,7 @@
 A slot's GEMVs are ordinary Linear blocks with w_slot=(slot, field): their chunk loads read
 the record too. So the graph is the same whatever the router decides -- nothing is skipped,
 nothing branches on an id -- and a model with 64 experts costs the graph of its 6 slots,
-not of 64 branches (compare MoeFFN, whose experts are branches of a conditional fork).
+not of 64 branches.
 This is the snax reference's design (snax-dsv2-moe.h, "EXPERT SLOTS, NOT BRANCHES").
 
 THE TABLE. n entries of 64 bytes in L3 (or any memory the iDMA reaches), entry e:
@@ -100,9 +100,10 @@ class MoeRouteCfg:
 class MoeRoute(Block):
     """The router's top k as an expert-slot record (offload_hw_kernels/moe_route.h).
 
-      in   p      [1, n] fp16, L1: the router's probabilities
+      in   p      [tokens, n] fp16, L1: the router's probabilities
            table  [n, 64] bytes, L3: the expert table (module doc)
-      out  rec    [k, 128] bytes, L1: the record, one slot per chosen expert, in order
+      out  rec    [tokens * slots, 128] bytes, L1: the record, one slot per chosen expert,
+                  in order (slots = k, or the union of the tokens' experts for a pass)
 
     On the DM core: core code for the top k (FP16 bit patterns compared as integers, ties to
     the lower index, hwmodel.top_k16), then one iDMA copy per slot for its table entry.
@@ -163,8 +164,7 @@ class SlotLoadCfg:
     # The cluster's LoadStream: with weight rings, the tensor is PUSHED through the ring
     # with the expert's weights (right after them, in take order) and the load is a copy
     # out of L3 -- instead of a PULL across the half-duplex link, which waits for the push
-    # stream to drain (~25 us for 5.6 KiB, measured) while the in-order DM core holds
-    # every later task behind it.
+    # stream to drain while the in-order DM core holds every later task behind it.
     stream: object = field(default=None, compare=False, repr=False)
     # Where the tensor starts in the record field, in bytes: this cluster's slice of a table
     # entry that names several clusters' slices back to back.

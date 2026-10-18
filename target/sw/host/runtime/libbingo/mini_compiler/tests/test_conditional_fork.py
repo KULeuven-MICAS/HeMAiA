@@ -252,8 +252,8 @@ refuses("a conditional target no branch declares", _stray_target,
 
 # ------------------------------------------------ two groups on one core
 # The one shape that passes every STATIC check and still deadlocks on silicon.
-# Measured on the cycle model: 'all' runs clean, and every routing that skips
-# anything hangs. See _validate_cerf_core_sharing for the mechanism.
+# On the cycle model it deadlocks for every routing that skips a branch; see
+# _validate_cerf_core_sharing for the mechanism.
 print("core sharing")
 
 def _two_groups_one_core():
@@ -302,9 +302,13 @@ print("SW guard exemption")
 
 d = new_dfg()
 _, fork, outs, _ = moe(d, with_combine=False)
-# A per-expert host check, inside the branch, guarded by the same gate.
-compile_cond(d)
-check("a lane with no consumer outside it is fine", True)
+# A conditional graph whose lanes have no consumer outside them compiles.
+try:
+    compile_cond(d)
+    _compiled, _why = True, ""
+except Exception as e:                      # noqa: BLE001
+    _compiled, _why = False, f"{type(e).__name__}: {e}"
+check("a lane with no consumer outside it is fine", _compiled, _why)
 
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")

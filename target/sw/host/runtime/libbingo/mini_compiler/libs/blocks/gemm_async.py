@@ -33,6 +33,8 @@ The queue is a registry on the DFG (`GemmQueue.of(dfg)`), because the blocks tha
 and the application that orders the cores share nothing else.
 """
 
+import inspect
+
 from bingo_kernel_args import (
     SnaxBingoKernelGemmFaPvArgs,
     SnaxBingoKernelGemmFaPvStartArgs,
@@ -44,6 +46,11 @@ from bingo_kernel_args import (
 )
 
 FA_QK, FA_PV, FULL = "fa_qk", "fa_pv", "full"
+
+# The fields a gemm_start descriptor takes from gemm_full's: gemm_full's constructor parameters, so a
+# field added there is copied without an edit here.
+_FULL_FIELDS = tuple(n for n in inspect.signature(SnaxBingoKernelGemmFullArgs.__init__).parameters
+                     if n != "self")
 
 
 def _kind(args):
@@ -60,11 +67,7 @@ def start_args(args, seq: int, shape_addr=0):
     """The start-kernel descriptor of a dispatch given as its blocking kernel's args."""
     kind = _kind(args)
     if kind == FULL:
-        fields = ("input_A_addr", "input_B_addr", "input_C_addr", "output_D_addr", "M", "K", "N",
-                  "array_shape_idx", "transpose_A", "transpose_B", "accumPrevC", "quantization_enable",
-                  "shift_i", "multiplier_i", "input_zp_i", "output_zp_i", "int32tofp16_enable",
-                  "int4_a_enable", "int4_b_enable", "d_shift", "a_pitch")
-        return SnaxBingoKernelGemmStartArgs(**{f: getattr(args, f) for f in fields}, seq=seq,
+        return SnaxBingoKernelGemmStartArgs(**{f: getattr(args, f) for f in _FULL_FIELDS}, seq=seq,
                                             shape_addr=shape_addr)
     if args.perf_addr:
         raise ValueError("a queued FlashAttention matmul takes no perf_addr: the array's counters "
@@ -139,7 +142,8 @@ class GemmQueue:
         """Each device core in `device_cores` (core ids) runs its tasks in creation order, as edges
         between consecutive tasks of every (chip, cluster, core), except that a queued dispatch's wait
         trails the next start of its phase. A move that would close a cycle with the dependency and
-        order edges is undone. Returns the number of edges added."""
+        order edges is undone. A queue with no dispatches (a disabled one) leaves the plain
+        creation-order chain. Returns the number of edges added."""
         import networkx as nx
         dev = set(device_cores)
         groups = {}
@@ -202,7 +206,7 @@ class GemmQueue:
             raise ValueError(f"the program order closes a cycle: "
                              f"{[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
         if verbose:
-            print(f"[{tag}] program order: {added} core-order edges; {len(moved)} of "
-                  f"{len(self.wait_phase)} GEMM waits behind the next start "
-                  f"({len(movable) - len(moved)} kept in place by a cycle)")
+            print(f"[{tag}] program order: {added} core-order edges"
+                  + (f"; {len(moved)} of {len(self.wait_phase)} GEMM waits behind the next start "
+                     f"({len(movable) - len(moved)} kept in place by a cycle)" if self.enabled else ""))
         return added

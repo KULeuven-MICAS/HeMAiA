@@ -94,8 +94,8 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 #           COLUMN moves +1: B runs contiguously down columns while row_major, A and D
 #           run along rows. So every conversion into or out of B is a TRANSPOSE, not a
 #           reshape,
-#           and no pair of strides expresses it -- it needs the xDMA transposer kernels,
-#           which are correct only at elem_bytes=1. comm/nest.py refuses it by name.
+#           and no pair of strides expresses it -- it needs the xDMA transposer (1- and
+#           2-byte elements), which comm.transfer inserts. comm/nest.py refuses it by name.
 #
 # "a_row"   ONE token's GEMV operand, the A layout cut to what the GEMV reads. The one-row
 #           GEMV walks an A operand one 8-byte word per 4-value block -- rows 0 and 1 of the
@@ -159,9 +159,9 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # still holds 32*128 elements indexed [r][c]; what changes is where element [r][c] sits,
 # which is exactly what an index map says.
 #
-# IT COSTS ONE NAME, NOT SIX. Orientation is only free on the UNBLOCKED layout: A, B and D
+# IT COSTS ONE NAME. Orientation is only free on the UNBLOCKED layout: A, B and D
 # already fix theirs -- B is defined as the one that runs down columns -- so there is no
-# A_T or D_T to name. Seven members, not twelve.
+# A_T or D_T to name, and col_major is the only extra member.
 #
 # KEEPING IT IN THE ENUM KEEPS BYTE ORDER IN ONE LANGUAGE: a verified permutation per
 # name, which convert_args derives strides from and _verify_nest checks element by
@@ -187,9 +187,9 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # accumulator per lane, lane k folding into acc[k] every beat -- and ACROSS the lanes of a
 # beat only through a serialised log-depth fold that stalls the reader once per row. Which
 # one a per-row operator gets is decided entirely by orientation: at [T, D] a row's terms
-# scatter across all 32 lanes and must be folded, at [D, T] one lane IS one token and the
-# answer is already in the accumulator. RMSNorm measures 3x cheaper in col_major for
-# exactly that reason, and softmax's rowmax is the same argument.
+# scatter across all of the beat's lanes and must be folded, at [D, T] one lane IS one
+# token and the answer is already in the accumulator. That is why RMSNorm prefers
+# col_major, and softmax's rowmax is the same argument.
 class _Vocab(StrEnum):
     """A closed set of names, where a typo is a build error rather than a wrong answer.
 
@@ -547,7 +547,7 @@ class Block:
 
         DEFAULT: just as constructed. A block with a pinned signature has nothing to
         choose between, so it offers one variant and the resolver has no decision to make
-        -- which is exactly right, and is why no existing block needs changing.
+        -- which is exactly right.
 
         A block that owns knobs -- a layout the caller left unset, a kernel it may pick
         between -- overrides this and returns one dict per realisation. It does NOT have
@@ -571,7 +571,3 @@ class Block:
                 f"{type(self).__name__}.variants() offers {sorted(params)} but the block "
                 f"has no `cfg` to respec from. Give it one, or override respec().")
         return type(self)(cfg=replace(cfg, **params))
-
-
-# ======================================================================================
-# The factory a block builds through

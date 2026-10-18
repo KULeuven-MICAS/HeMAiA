@@ -8,8 +8,7 @@ the happens-before graph, thousands of times.
     b in reach[a]                  # a reaches b (b is not a itself)
 
 Each node gets one bitset over a topological order of G (bit i = its i-th node), the union of its
-successors' and theirs, built in reverse order: a test is a bit test, where a networkx descendants()
-walk per node made those passes quadratic in the graph.
+successors' and theirs, built in reverse order: a membership test is one bit test.
 """
 import networkx as nx
 

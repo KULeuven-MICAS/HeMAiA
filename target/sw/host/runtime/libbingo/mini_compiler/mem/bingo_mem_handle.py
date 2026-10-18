@@ -1,8 +1,11 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-# This file defines three types of memory abstractions used in Bingo DFG compilation:
-# 1. BingoMemAlloc:
+# This file defines the four memory handle types used in Bingo DFG compilation:
+# BingoMemAlloc, BingoMemAllocView, BingoMemSymbol and BingoMemFixedAddr.
+#
+# 1. BingoMemAlloc (and BingoMemAllocView, a byte-offset view into one):
 #    - Represents dynamic memory allocation on the heap (e.g., via malloc-like calls).
-#    - The compiler will generate allocation calls (bingo_l1_alloc, bingo_l3_alloc) for these handles.
+#    - The compiler will generate allocation calls (bingo_l1_alloc, bingo_l2_alloc,
+#      bingo_l3_alloc) for these handles.
 #    - Addresses are determined at runtime.
 #
 # 2. BingoMemSymbol:

@@ -127,8 +127,8 @@ def _cerf_scenarios(dfg):
     """The routing outcomes the graph must survive, not just the static one.
 
     A conditional graph deadlocks for a SUBSET of predicates or for none at all,
-    so activating every group -- which is all this used to do -- is the one case
-    that is guaranteed not to exercise skipping. These four bracket it: nothing
+    so activating every group is the one case that is guaranteed not to exercise
+    skipping. These four bracket it: nothing
     runs, everything runs, and the lowest and highest k groups run, which are the
     two orderings a real router can produce.
     """

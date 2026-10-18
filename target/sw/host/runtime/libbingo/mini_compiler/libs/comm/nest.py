@@ -230,8 +230,8 @@ def convert_args(src_layout, dst_layout, rows, cols, mesh, elem_bytes, src, dst)
                 f"nothing from you. This message is the other case: a transpose between "
                 f"two BLOCKED layouts.\n"
                 f"Use a dedicated transposer kernel instead -- "
-                f"__snax_bingo_kernel_xdma_row_major_to_b and friends, via "
-                f"libs/kernels/kernel_layout.py. They take the array shape as RUNTIME ARGS, so "
+                f"__snax_bingo_kernel_xdma_layout_convert, via "
+                f"libs/kernels/kernel_layout.py. It takes the array shape as RUNTIME ARGS, so "
                 f"one kernel covers every tiling including this one; the old per-shape "
                 f"wrappers (K2N32, K16N32, K8N16) are gone.\n"
                 f"What to expect on a (16, 4, 16) array: the transposer's FAST path needs "
@@ -271,10 +271,10 @@ def convert_args(src_layout, dst_layout, rows, cols, mesh, elem_bytes, src, dst)
     # THE LANE DIMENSION IS CHOSEN, NOT TAKEN. The 8 lanes need an axis whose bound is a
     # multiple of 8 and whose stride is constant on both sides -- and that is often NOT the
     # innermost one. For D->A the innermost surviving axis is the tileSize-group with bound
-    # 4; the lanes go on `r` (bound meshRow), which is exactly what the hand-written nest
-    # in layout.py does. Taking the innermost blindly refuses a conversion the hardware
-    # performs. Temporal order is free -- a nest visits the same set whatever the order --
-    # so lifting one axis out of the middle costs nothing.
+    # 4; the lanes go on `r` (bound meshRow), which is exactly what d_to_a_args below does.
+    # Taking the innermost blindly refuses a conversion the hardware performs. Temporal
+    # order is free -- a nest visits the same set whatever the order -- so lifting one axis
+    # out of the middle costs nothing.
     lane = next((i for i, (_, b, _, _) in enumerate(merged) if b % _LANES == 0), None)
     if lane is None:
         raise ValueError(

@@ -2,9 +2,9 @@
 
     out[t, f] = x[t, f] / sqrt( (1/D) * SUM_f x[t, f]^2 )
 
-One multiply per element -- the arithmetic of a residual add, which runs four times
-cheaper over the same tile. All of the difference is the ONE SCALAR PER ROW: where it is
-reduced, and how it gets back to the data. Everything below follows from that.
+One multiply per element -- the arithmetic of a residual add. All of the difference is
+the ONE SCALAR PER ROW: where it is reduced, and how it gets back to the data. Everything
+below follows from that.
 
 ======================================================================================
 1. THE TWO KERNELS, AND WHY THE TILE'S ORIENTATION PICKS ONE
@@ -12,7 +12,7 @@ reduced, and how it gets back to the data. Everything below follows from that.
 
 StreamReduce carries one FP32 accumulator PER LANE and never moves data sideways. A
 reduction ALONG beats is therefore free; a reduction ACROSS the 32 lanes of a beat is a
-serialised log-depth fold, ~35 cc a row, with the reader stalled.
+serialised log-depth fold per row, with the reader stalled.
 
   row_major kernel   x [T, D]. A beat is 32 features of ONE token, so a row's terms land
                      in all 32 lanes and must be FOLDED, once per row. The scalar is then
@@ -23,9 +23,6 @@ serialised log-depth fold, ~35 cc a row, with the reader stalled.
                      LANEWISE emits them as one beat; a STICKY multiply applies it. No fold,
                      no plane. Needs rows == 32 (one FP16 lane per token).
                      reduce(SUMSQ|LANEWISE) -> map(RSQRT), 1 beat -> ew(MUL|STICKY_B)
-
-  Measured, snax_split_cluster, T = 32, D = 128:   row_major 3,135 cc   col_major 1,073 cc
-                                                   x -> x^T 244 cc      y^T -> y  385 cc (xDMA)
 
 Both are ONE device kernel, __snax_bingo_kernel_simd_rmsnorm, selected by the layout pair
 in its args. It runs exactly four pairs:
@@ -168,15 +165,15 @@ PLAIN COPIES GO ON THE iDMA, TRANSPOSES ON THE xDMA. Only the xDMA has the 8x8 t
 every other move is a contiguous copy the idle DM core does, instead of queueing behind
 the transposes on the xDMA.
 
-WHERE x LIVES IS READ OFF THE BINDING. `inputs` says mem_level=None -- wherever you have
-it -- and build() reads the real level off the bound port. It still names this block's
-cluster, so an x already in L1 has to be in the right one: `_land` only loads from main
-memory, and a plain copy cannot reach another cluster's TCDM.
+WHERE x LIVES IS `in_level`, a boundary field the pipeline resolves from the producer (L1
+used in place, L3 loaded). An x in L1 still names this block's cluster, so it has to be in
+the right one: `_land` only loads from main memory, and a plain copy cannot reach another
+cluster's TCDM.
 
 STILL OPEN: Xpose_out's bank conflict. The transposer's writer spaces its 8 channels
-M * 2 bytes apart; at M = D = 128 that is 256 B, one TCDM sweep, so all eight hit bank 0 --
-385 cc against Xpose_in's 244 for the same volume. It needs a destination row pitch on the
-transpose kernel, a device ABI change. Routes with a blocked output never pay it: they
+M * 2 bytes apart; at M = D = 128 that is 256 B, one TCDM sweep, so all eight hit bank 0.
+It needs a destination row pitch on the transpose
+kernel, a device ABI change. Routes with a blocked output never pay it: they
 write the operand directly.
 """
 

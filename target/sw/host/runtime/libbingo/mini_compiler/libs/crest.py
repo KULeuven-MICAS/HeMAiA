@@ -7,8 +7,9 @@
 
 The memory chiplet pushes each weight chunk COMPRESSED (snax_cluster hw/chisel/doc/
 crest_decompressor.md), so the half-duplex D2D link -- the layer's bottleneck -- carries
-fewer bytes; the cluster's xDMA reads the chunk from its L3 ring slot and the
-writer's CrestDecompressor expands it into the L1 slab (__snax_bingo_kernel_xdma_ring_load).
+fewer bytes; the DM core's ring load (__snax_bingo_kernel_idma_ring_load) copies the record
+from its L3 ring slot into the L1 slab and the xDMA's CrestDecompressor expands it in place
+(__snax_bingo_kernel_xdma_crest_expand).
 
 A chunk as stored and pushed (a RECORD): padding, the stream, then a 64-B TAIL beat -- bytes
 8..11 the stream's 64-B words W (0: the chunk is stored plain, its N beats instead of a

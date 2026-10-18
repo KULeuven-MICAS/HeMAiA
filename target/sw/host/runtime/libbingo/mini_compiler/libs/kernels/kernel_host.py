@@ -139,15 +139,21 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
         call-sites.
 
         check_type:
-            0 (BYTE_EXACT) = byte-exact comparison. data_size = byte count
-                             OR num_elements = byte count (they're identical).
-            1 (FP32_TOL)   = fp32 absolute tolerance: |out[i]-golden[i]| <= tolerance.
-                             num_elements = fp32 element count (→ data_size = num_elements*4)
-            2 (FP16_TOL)   = fp16 absolute tolerance (elements promoted to fp32 for compare).
-                             num_elements = fp16 element count (→ data_size = num_elements*2)
-        tolerance: absolute fp32 tolerance (only meaningful when check_type != 0).
-                   For fp16 mode this is still fp32 — the C kernel promotes
-                   fp16 to fp32 before comparing.
+            0 (BYTE_EXACT)   = byte-exact comparison. data_size = byte count
+                               OR num_elements = byte count (they're identical).
+            1 (FP32_TOL)     = fp32 absolute tolerance: |out[i]-golden[i]| <= tolerance.
+                               num_elements = fp32 element count (→ data_size = num_elements*4)
+            2 (FP16_TOL)     = fp16 absolute tolerance (elements promoted to fp32 for compare).
+                               num_elements = fp16 element count (→ data_size = num_elements*2)
+            3 (FP16_RELTOL)  = fp16 relative tolerance: |out-g| <= tolerance*|g| + 0.05.
+                               num_elements = fp16 element count (→ data_size = num_elements*2)
+            4 (INT8_TOL)     = signed int8, |out-g| <= tolerance LSBs.
+                               num_elements = int8 element count (→ data_size = num_elements)
+            5 (INT32_RELTOL) = signed int32 accumulator: |out-g| <= tolerance*|g| + 0.001*max|g|.
+                               num_elements = int32 element count (→ data_size = num_elements*4)
+        tolerance: an absolute distance for 1, 2 and 4 (LSBs for 4), a ratio (rtol) for 3
+                   and 5, unused for 0. It is always passed as fp32 — the C kernel
+                   promotes fp16 to fp32 before comparing.
 
         Validates that exactly one of data_size/num_elements is given and that
         data_size is a whole multiple of the element size.
@@ -340,10 +346,8 @@ class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
     """Up to four host iDMA transfers in ONE BINGO task, all the same size.
 
     The system iDMA is a second 512-bit path into the quadrant, disjoint from the clusters'
-    own pull, and one transfer on it measures 56.4 B/cc. The catch is that a BINGO task on
-    the host costs ~433 cc of dispatch, so one tile per task yields only 41.1 B/cc effective
-    -- less than four concurrent cluster xDMAs already deliver. Batching four amortises that
-    to 51.6 B/cc, which is what makes the second pipe worth using.
+    own pull. Batching up to four transfers in one task amortises the host's per-task
+    dispatch cost, which is what makes the second pipe worth using.
 
     Every transfer in a batch shares the task's dependencies, so batching across clusters
     couples them: the batch cannot start until every source dependency is met. That is the
@@ -446,15 +450,11 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         return assignments
 
 
-# HOST BINGO scalar broadcast bridge: read `rows` per-row reduce scalars from L1
-# (row r one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
-# splat each fp16 result across a [rows, D] fp16 broadcast buffer for a downstream
-# device StreamElementwise. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N)).
 class HostBingoKernelRequantScaleArgs(BingoKernelArgs):
-    """Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars the xDMA
-    StreamReduce(MAX) passes wrote to cluster L1) and writes scale = max|x|/127 (fp32 dequant qsc) +
-    inv_scale = 127/max|x| (fp32, the xDMA fp16_to_int8 runtime CSR). Replaces the host quantize_f16i8
-    (which streamed the whole tensor from L3); this reads/writes 2+2 scalars only."""
+    """Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars that
+    two MAX reduce passes wrote to cluster L1) and writes scale = max|x|/127 (fp32 dequant qsc) +
+    inv_scale = 127/max|x| (fp32, the runtime inv_scale of simd_fp16_to_int8). It reads and
+    writes 2+2 scalars only, not the tensor."""
     KERNEL_NAME = "__host_bingo_kernel_requant_scale"
 
     def __init__(self,

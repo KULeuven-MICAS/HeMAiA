@@ -9,12 +9,11 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | `fa_sweep.py` | `fa_sweep`, the FlashAttention sweep of one cluster over `nq` query tiles and `nt` key tiles of a caller's tile stream, on queued matmuls: a function, not a block. The multi-chip FA prefill builds on it. |
 | `collective.py` | Collectives across chips -- `all_gather`, `send`, `scatter` -- built as small graphs of blocks on the application's chips (a `Fabric`), each with interchangeable implementations behind `impl`: `"idma"` (local write, remote read; optional per-chip chain, two-level tree, per-chip hierarchy) and, for the all-gather, `"bcast"` (`BcastPut`: each part and a landed flag to every compute chip by D2D broadcast; `FlagFetch`: spin on the flags, read the whole array locally -- the waits are ordering-only edges, `BingoDFG.bingo_add_order_edge`, so they spend no dependency tag). Functions, not blocks. |
 | `gather.py` | `fa_gather`, the in-fabric fold of attention's per-cluster partials. A function, not a block. |
-| `moe.py` | `MoeFFN` — a mixture-of-experts feed-forward layer with CERF-skipped losers — and `MoeCfg`. |
-| `linear.py` | `Linear` — one INT8 GEMM, or a one-token GEMV (`gemv=True`, VersaCore's (1, 4, 32) shape; `groups=G` for per-head GEMVs), with its operand loads, and `LoadStream`, a cluster's shared weight slabs. A weight larger than one chunk is streamed in column chunks through `w_buffers` L1 buffers (double buffering by default), from main memory or from the memory chiplet's HBM. Every weight matrix in a layer is this block with different shapes. |
-| `simd/` | The per-row and per-element operators a layer is glued together with, split on whether layout is load-bearing: `simd/pointwise.py` (`Quantize`, `Dequantize`, `Residual` — elementwise, any layout), `simd/norm.py` (`RMSNorm` — reduces along a row, so orientation is worth 3x), `simd/rope.py` (`RoPE` — rotates along a row), `simd/row.py` (one token's row around a GEMV: `RMSNormRow`, `QuantizeARow` into row 0 of the GEMV's A operand -- with `segs`, every head's operand of a per-head GEMV in one task --, `ScaleCols` — the per-column dequantisation --, `SoftmaxRow` (the router's), `SwigluARow` (straight into the down GEMV's operand, a static or a slot's scale), `ScaleRowBySlot` (a routed weight chosen at run time) and `AddRow`), `simd/common.py` (the tile and the beat). |
-| `mla.py` | Multi-head latent attention (DeepSeek-V2), one token per pass: `RopeRows` (RoPE over the heads' q_pe and the k_pe, gathered from the projections' outputs), `CacheAppend` (the token's row into the key and value copies of the latent cache), `QAssemble` (the score operand Q8 from every head's q~ and q_pe, two scales) and `MlaAttention` (the online softmax over key tiles on one cluster, the last tile out as FP16, o~ = O / l, transposed). |
+| `linear.py` | `Linear` — one INT8 GEMM, or a one-token GEMV (`gemv=True`, VersaCore's (1, 4, 32) shape; `groups=G` for per-head GEMVs), with its operand loads, `LoadStream`, a cluster's shared weight slabs, and `WeightRings` (per-cluster rings in L3 that the memory chiplet pushes weight chunks into; every ring load goes through them). A weight larger than one chunk is streamed in column chunks through `w_buffers` L1 buffers (double buffering by default), from main memory or from the memory chiplet's HBM. Every weight matrix in a layer is this block with different shapes. |
+| `simd/` | The per-row and per-element operators a layer is glued together with, split on whether layout is load-bearing: `simd/pointwise.py` (`Quantize` — elementwise, any layout), `simd/norm.py` (`RMSNorm` — reduces along a row, so its orientation picks the kernel), `simd/row.py` (one token's row around a GEMV: `RMSNormRow`, `QuantizeARow` into row 0 of the GEMV's A operand -- with `segs`, every head's operand of a per-head GEMV in one task --, `ARowPack` (an INT8 row into a_row), `ScaleCols` — the per-column dequantisation --, `SoftmaxRow` (the router's), `SwigluARow` (straight into the down GEMV's operand, a static or a slot's scale), `ScaleRowBySlot` (a routed weight chosen at run time) and `AddRow`), `simd/common.py` (the tile and the beat). |
+| `mla.py` | Multi-head latent attention (DeepSeek-V2): `RopeRows` (RoPE over the heads' q_pe and the k_pe, gathered from the projections' outputs), `CacheAppend` (the token's row into the key and value copies of the latent cache), `QAssemble` (the score operand Q8 from every head's q~ and q_pe, two scales) and `MlaAttention` (the online softmax over key tiles on one cluster, the last tile out as FP16, o~ = O / l, transposed). The split attention: `MlaShardScores`, `MlaRowMax`, `MlaShardP`, `MlaShardPV`, `MlaShardOut` (key shards) and `MlaDimPV`, `MlaDimOut` (latent slices). |
 | `route.py` | A mixture of experts whose experts the router picks at run time, as data: `MoeRoute` (the top k as an expert-slot record: ids, weights and each expert's table entry) and `SlotLoad` (a slot's tensor from the address the record names). A slot's GEMVs are `Linear(w_slot=...)`. |
-| `move.py` | `Broadcast`, `Pull` (L1 to L1 across clusters), `Fetch` (L3/HBM to L1), `Stash` (a checked buffer copied to L3 by its own cluster as soon as it exists) and the zero-cost views `Slice`, `TransposeView`, `View`. |
+| `move.py` | `Pull` (L1 to L1 across clusters), `Fetch` (L3/HBM to L1), `Collect` (L3 parts from any chip stacked into one cluster's L1), `Stash` (a checked buffer copied to L3 by its own cluster as soon as it exists), the zero-cost views `View`, `Join` and the ordering relabel `After`. |
 | `reshape.py` | `Reshape` — an explicit layout change as a stage, for the gap between two blocks that both live in L1. |
 | `shard.py` | `Scatter` and `Gather` — the two ends of a row split, so a layer can run a row-independent operator on every cluster. |
 
@@ -40,11 +39,12 @@ stream's loads are not reported as block sources, so gating sources (for static 
 never serialises them behind a producer.
 
 A slot of a routed expert streams the same way from an address chosen at run time:
-`Linear(w_slot=(slot, "gu"), rec=...)` reads the expert-slot record `MoeRoute` wrote, and
-its loads form a chain after the record. A fan-out of many loads from the record's producer
-would need one dependency tag per edge in one cell (the compiler allows 32).
+`Linear(w_slot=(slot, "gu"), stream=...)`, its `rec` port bound to the record `MoeRoute`
+wrote, reads the expert-slot record, and its loads form a chain after the record. A
+fan-out of many loads from the record's producer would need one dependency tag per edge
+in one cell (2^dep_tag_width tags per cell, set by the cfg).
 
-`MemLevel.HBM` is the memory chiplet's HBM (`hemaia_twochiplet_16MBL3_4cluster` only).
+`MemLevel.HBM` is a memory chiplet's HBM (configs with a memory chiplet that declares `hbm`).
 `DataStaging.put_hbm()` places an array there and returns a fixed address that records its
 pool, and `emit()` writes the `build/hbm/manifest.txt` the testharness loads. An HBM operand
 is loaded straight into L1 by the block that reads it, never hoisted to L3 first: it is
@@ -58,11 +58,10 @@ the machine is therefore something the **layer writes** — `Scatter`, one block
 `Gather` — which keeps the decomposition visible in the layer's own source and every node's
 placement on a port that is checked.
 
-Two blocks do span clusters, and each states why it is one construct rather than several:
+One block does span clusters, and it states why it is one construct rather than several:
 `FlashAttention` interleaves its per-cluster pipelines (node creation order is dispatch
-order, so emitting them back to back would be a different schedule), and `MoeFFN`'s expert
-lanes are branches of one conditional fork. Both declare **per-cluster ports**, so what
-crosses their boundary is still explicit.
+order, so emitting them back to back would be a different schedule). It declares
+**per-cluster ports**, so what crosses its boundary is still explicit.
 
 A `Gather` costs one local copy on the root that a hand-written split would not: a block
 allocates its own output and cannot be handed someone else's buffer to write into. It is
@@ -70,23 +69,23 @@ one iDMA move on the otherwise idle DM core.
 
 ## Which ops care about layout
 
-**Elementwise** — `Quantize`, `Residual` — touch each value independently, so any layout
+**Elementwise** — `Quantize` — touches each value independently, so any layout
 works: a permutation of the inputs is the same permutation of the output.
 
-**Per-row** — `RMSNorm`, `RoPE` — reduce or rotate *along* a row, so the row must be
+**Per-row** — `RMSNorm` — reduces *along* a row, so the row must be
 contiguous. In D-layout `(m, n, r, c)` a matrix row is **not** contiguous, so handing
 D-layout to `RMSNorm` normalises groups that are not rows. It does not fault and it does
-not go out of range; the answer is a well-formed tensor of wrong numbers. Their ports say
+not go out of range; the answer is a well-formed tensor of wrong numbers. Its ports say
 `row_major` and mean it.
 
-**And among the per-row ops, only the REDUCING one cares about orientation.** The SIMD
+**And among the per-row ops, only a REDUCING one cares about orientation.** The SIMD
 block reduces along beats for free (one FP32 accumulator per lane) and across the lanes of
 a beat only through a serialised fold that stalls the reader once per row. Store the tile
 transposed and one lane *is* one token, so the fold disappears and the scale rides back in
-as a sticky operand instead of a replicated plane: `RMSNorm` measures 3,135 → 1,073 cc at
-[32, 128]. `RoPE` has no reduction, so there is nothing for it to win. `NormCfg` carries `in_layout`
-/ `out_layout`; left unset each is a knob the block owns and the resolver fills from the
-neighbours, and pinned it is a boundary the layer asked for.
+as a sticky operand instead of a replicated plane, so the col_major kernel has no per-row
+fold. `NormCfg` carries `in_layout` / `out_layout`; left unset each is a knob the block
+owns and the resolver fills from the neighbours, and pinned it is a boundary the layer
+asked for.
 
 That forces the order a layer has to use, and it is hardware, not taste:
 
@@ -99,34 +98,35 @@ out of A-layout needs an 8-byte run contiguous on both sides — at int8 an A-la
 `tileSize` run is 4 bytes and falls off the hardware path. Quantising first would make the
 reshape impossible; `comm/nest.py` refuses it by name.
 
-## FlashAttention takes three ports, whatever the placement
+## FlashAttention takes q, k and v (per cluster when they are resident in L1)
 
-`q`, `k`, `v`. `FaCfg.clusters` names the clusters it runs on; how the operands are
-split across them is the block's business:
+`q`, `k`, `v`; with `operand_level` = L1 they become per-cluster ports `q_c{c}`, `k_c{c}`,
+`v_c{c}`. `FaCfg.clusters` names the clusters it runs on; how the operands are split
+across them is the block's business (T = `nkv_per` KV tiles per shard, NQ query tiles):
 
 | decomposition | `q` | `k` | `v` |
 |---|---|---|---|
-| `headpar` | `[clusters·Br, d]`, one query head per cluster, stacked | `[Bc, d]`, shared (that IS the GQA relation) | `[Bc, d]`, shared |
-| `kvsplit` | `[Br, d]`, shared | `[clusters·Bc, d]`, disjoint KV shards, stacked | `[Bc, d]`, shared |
+| `headpar` | `[clusters·NQ·Br, d]`, one query head per cluster, stacked | `[T·Bc, d]`, shared (that IS the GQA relation) | `[T·d, Bc]` (V_t^T per tile, stacked), shared |
+| `kvsplit` | `[NQ·Br, d]`, shared | `[clusters·T·Bc, d]`, disjoint KV shards, stacked | `[clusters·T·d, Bc]`, disjoint KV shards, stacked |
 
 The block slices them with byte offsets. Its per-cluster tables are indexed by position,
 so `validate()` refuses a placement that is not contiguous from 0 — lifting that is an
 audit of every such index, not a parameter change.
 
-It also names **no memory level** on those ports. Where the caller keeps Q, K and V is the
-caller's business — main memory, the memory-chiplet pool, or an L1 buffer a previous block
-just wrote. What the block knows is where its own transfers read from, and that is
-`FlashAttention.needs` (L3). Declaring L3 on `inputs` made a true statement about this block's
-loads into a false demand on everyone upstream.
+Its ports carry `FaCfg.operand_level`, where the caller keeps Q, K and V — main memory, the
+memory-chiplet pool, or an L1 buffer a previous block just wrote. What the block knows is
+where its own transfers read from, and that is `FlashAttention.needs` (L3), with `build()`
+hoisting the gap. `inputs` states where the caller keeps the operands, `needs` where the
+loads read.
 
 ## Every parameter comes from FaCfg
 
-There are no module-level knobs. `FaCfg` has four labelled groups — shape, topology,
-**internal performance tuning** (24 fields, every default the measured best on this
-quadrant), and hardware, which is *checked* rather than chosen.
+There are no module-level knobs. `FaCfg` has four groups — hardware (*checked* rather than chosen), arguments,
+**internal performance tuning** (23 fields; none changes the answer) and derived
+properties.
 
-Two of them come from the split cluster's FA datapath extensions (snax
-`hw/chisel/doc/fa_datapath_extensions.md`):
+Two of them come from the split cluster's FA datapath extensions (see `flash_attention.py`
+and `offload_hw_kernels/gemm_fa.h`, "THE B PITCH"):
 
 - **`score_shift`** (k) — the QK D port writes the score tile as RNE(S · 2^-k), and the
   softmax is handed `exp_scale` = a · 2^k, so `score_scale` keeps meaning *a on the raw
@@ -137,8 +137,8 @@ Two of them come from the split cluster's FA datapath extensions (snax
   kernels leave is in the shifted domain; the gather folds `exp_scale · m`, which is a·m.
 - **`p8_pitch`, `p8_nest`** — P8's 64 B blocks 160 B apart, and the two ping-pong P
   buffers nested in one region. At the dense 64 B PV's two operand streams step round the
-  TCDM banks at different rates and collide (1.44 cycles a pass on the snax reference,
-  1.15 at 160). Nesting costs 8 KiB at Bc = 512 instead of 48.
+  TCDM banks at different rates and collide; a 160 B pitch makes them step at the same
+  rate. Nesting costs 8 KiB at Bc = 512 instead of 48.
 
 `validate()` refuses a tuning knob the chosen decomposition never reads. That is not
 pedantry: all fourteen pull/broadcast/push knobs are `headpar`-only (under kvsplit the
@@ -153,9 +153,8 @@ applied"*.
 a different bijection from `D`), in that cluster's L1. Under `kvsplit` with more than one
 cluster there are also `m_c{c}` and `l_c{c}`, the partial running max and sum.
 
-Those are two ports rather than one because that is what they physically are: the max lives
-in the softmax arena and the sum in the last score buffer, written by different kernels
-into different allocations. The single contiguous FP32 `(m, l)` the junction folds does not
+Those are two ports rather than one because they are two separate regions of the softmax
+arena (`mrun`, `lrun`). The single contiguous FP32 `(m, l)` the junction folds does not
 exist until the gather's pack builds it.
 
 ## What the gather folds
@@ -190,12 +189,12 @@ Under `headpar`, or with one cluster, it is a no-op: there is nothing to fold.
 
 ## Not yet here
 
-**Causal masking.** There is none — in this file or anywhere in the tree. Every query
-tile attends to every key tile, which is right for a decode step and wrong for a real
-prefill. `NQ` sets how many query tiles run, and that is the *only* difference between
-`fa_decode_4cluster` (NQ=1) and `fa_prefill_4cluster` (NQ=2), so "prefill" here means
-multiple query tiles over full attention. The mask is a SIMD-kernel change — applied to
-the score tile between QK and the softmax — not a parameter. See the TODO on the class.
+**Causal masking.** `FlashAttention` has none: every query tile attends to every key tile,
+which is right for a decode step and wrong for a real prefill. (`MlaAttention` masks
+through `masks`.) `NQ` sets how many query tiles run (`fa_decode_4cluster` NQ=1,
+`fa_prefill_4cluster` NQ=2), so "prefill" here means multiple query tiles over full
+attention. A mask would be applied to the score tile between QK and the softmax. See the
+TODO on the class.
 
 **Plain attention.** `flash_attention.py` is named for what it is; a straightforward
 non-flash implementation would land beside it as `attention.py`.

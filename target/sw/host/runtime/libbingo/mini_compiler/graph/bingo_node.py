@@ -1,11 +1,15 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-# The node types and the base class for nodes in the DFG
+# BingoNode, the task node of the DFG
 from abc import ABCMeta
 from typing import Literal, Optional
 from bingo_kernel_args import BingoKernelArgs
 
 class BingoNode(metaclass=ABCMeta):
-    """Abstract base class for nodes in the DFG."""
+    """A task in the DFG: its kernel, args, placement and dependency fields."""
+    # (ring, index) of the weight-ring chunk this task loads; WeightRings.load_chunk sets it on the
+    # instance for the Execution-IR export.
+    exec_chunk = None
+
     def __init__(
         self,
         assigned_chiplet_id: int,
@@ -38,7 +42,7 @@ class BingoNode(metaclass=ABCMeta):
         self._dep_set_list: list[int] = []
         self._dep_set_chiplet_id: int = 0
         self._dep_set_cluster_id: int = 0
-        # Per-edge identity tags (EnableTaggedDeps). None until the tag-allocator
+        # Per-edge identity tags (DepTagWidth bits each). None until the tag-allocator
         # pass runs; packed as 0 otherwise so untagged descriptors are unchanged.
         self._dep_check_tag: int | None = None
         self._dep_set_tag: int | None = None
@@ -245,12 +249,3 @@ class BingoNode(metaclass=ABCMeta):
 
     def __str__(self):
         return f"Node_ID{self._node_id}_Chiplet{self._assigned_chiplet_id}_Cluster{self._assigned_cluster_id}_Core{self._assigned_core_id}_Kernel{self._kernel_name}"
-
-    def list_to_one_hot(lst: list[int]) -> str:
-        if (lst==[]):
-            return "'0"
-        one_hot = 0
-        for idx in lst:
-            one_hot |= (1 << idx)
-        return f"{one_hot}"
-    

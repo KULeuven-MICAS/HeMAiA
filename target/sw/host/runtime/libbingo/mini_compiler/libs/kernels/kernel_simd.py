@@ -6,12 +6,8 @@
 """The fused SIMD whole-operators.
 
 Softmax, rmsnorm, silu, swiglu, rope, the quantiser, the MoE combine and FlashAttention's
-softmax epilogue -- each ONE kernel rather than a chain of primitives, because the per-task
-fixed cost is ~190 cycles on this machine and a decomposed chain spends more on dispatch
-than on arithmetic.
-
-The row operators come in an F16F16 and an F16I8 form; the second folds the quantisation
-into the same pass, so a layer that narrows to int8 pays for one task, not two."""
+softmax epilogue -- each ONE kernel rather than a chain of primitives, because every task
+carries a fixed dispatch and configuration cost, which a decomposed chain pays per primitive."""
 
 from typing import Union, Dict, Optional
 
@@ -91,8 +87,8 @@ def _check_simd_cols(cols: int) -> int:
 
 class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
     """Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over `rows*beats` flat beats,
-    on the HasFp16ToInt8 xDMA datapath -- the dedicated activation fp16 -> int8 GEMM-operand
-    requant that replaces the host quantize_f16i8. inv_scale_f32bits = FP32 bits of 127/max|x|
+    on the SIMD block's Fp16ToInt8 operator (activation fp16 -> int8 GEMM-operand requant).
+    inv_scale_f32bits = FP32 bits of 127/max|x|
     (the producer computes max|x| via MAX(x)+MAX(-x) reduces). dst_bound0 = rows*beats//2
     (int8 packs two elements per fp16 lane)."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_fp16_to_int8"
@@ -202,7 +198,6 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
     """RoPE as ONE SIMD task: out = x (.) cos_full + xswap (.) sin_signed, with the two
     products on the PRE-map elementwise and their sum on the post-map one. Four operand
     beats per output beat instead of six, and neither intermediate tile is ever written.
-    The reference app measures 207 -> 131 cc of datapath and 1,184 -> 304 cc of wall.
 
     ONE BLOCK, FOUR ROWS, IN THIS ORDER. The reader adds a single stride per axis, so the
     operands must be equally spaced -- and the order IS the pairing, because EW0 multiplies
@@ -245,12 +240,11 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
 class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
     """out = a + b, elementwise over [rows, cols] fp16, on the SIMD core.
 
-    WHY THIS AND NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` drives the
-    HasElementwiseAdd WRITER extension, which snax_split_cluster does not have. It stays
-    CORRECT there -- the kernel has a CPU fallback -- but the fallback is a scalar loop
-    over every int32 element on the xDMA hart, where the extension folds 16 lanes per
-    512-bit beat. This drives HasStreamElementwise, a READER extension the cluster does
-    have, so the residual is a vector op rather than a scalar one.
+    WHY THIS AND NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` is an INT32
+    add on the xDMA (the HasElementwiseAdd extension where the cfg has it, a scalar loop over
+    every int32 element on the xDMA hart otherwise). This is the FP16 add on the SIMD
+    block's HasSimdStreamElementwise, so the residual stays FP16 and is a vector op on the
+    SIMD core.
 
     It is a whole operator, not a primitive: the op, the operand count and the output
     precision are fixed here rather than being arguments, so a caller cannot ask for a
@@ -322,13 +316,10 @@ class SnaxBingoKernelSimdMulF16Args(SnaxBingoKernelSimdAddF16Args):
 
 class _SimdRowOpArgs(BingoKernelArgs):
     """Shared base for the fused fp16 SIMD kernels that reduce ALONG a row and write one
-    output tensor -- softmax, rmsnorm, silu. The user's args are HW-free: `input_addr` / `output_addr` are the
-    [rows, cols] tensors (cols = per-row length D, a multiple of 32). The OUTPUT PRECISION is
-    chosen by which subclass (kernel) you pick, not an arg:
-      *F16F16Args -> fp16 output; output_addr is the fp16 buffer.
-      *F16I8Args  -> int8 output (fused Fp16ToInt8, kernel-baked scale); output_addr is the
-                     int8 buffer. No fp16 output is written (the fp16 result stays in scratch).
-    Subclasses set KERNEL_NAME and STRUCT_NAME."""
+    output tensor -- softmax, rmsnorm, silu. The user's args are HW-free: `input_addr` /
+    `output_addr` are the [rows, cols] tensors (cols = per-row length D, a multiple of
+    simd_fp16_lanes()). The output is fp16; output_addr is the fp16 buffer. Subclasses set
+    KERNEL_NAME and STRUCT_NAME."""
     STRUCT_NAME = None  # subclass sets
 
     def __init__(self, input_addr: Union[BingoMemAlloc, int],
@@ -355,11 +346,11 @@ class SnaxBingoKernelSimdSoftmaxF16F16Args(_SimdRowOpArgs):
     into the broadcast, then sub-max + EXP + row-sum as a SINGLE pass (the pre-map
     elementwise is what makes that possible), then the reciprocal and the scale.
 
-    THE RECIPROCAL IS ON THE DATAPATH NOW, for rows > 1: this core cannot divide, but
+    THE RECIPROCAL IS ON THE DATAPATH, for rows > 1: this core cannot divide, but
     rsqrt(s*s) = 1/s exactly, so the square rides one narrow elementwise pass over the
     tap beats and the inversion rides the broadcast that had to replicate the scalar
-    anyway. That removed an integer `divu` and 16 volatile stores PER ROW. The core's
-    integer reciprocal survives in exactly two places, both deliberate: at rows == 1,
+    anyway, with no integer `divu` and no splat stores per row. The core's
+    integer reciprocal is used in exactly two places, both deliberate: at rows == 1,
     where one scalar folds into a StreamMap immediate and the core route is both faster
     and slightly more accurate; and past cols == 255, where the FP16 square of Sexp would
     overflow. Host does only Load / Store / Check."""
@@ -367,31 +358,24 @@ class SnaxBingoKernelSimdSoftmaxF16F16Args(_SimdRowOpArgs):
     STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
 
 
-class SnaxBingoKernelSimdSoftmaxF16I8Args(_SimdRowOpArgs):
-    """Same fused softmax pipeline -> int8 output (fused Fp16ToInt8, baked 127.0 scale since
-    softmax output is in [0,1]). output_addr is the int8 [rows, cols] buffer."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_f16_i8"
-    STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
-
-
 class SnaxBingoKernelSimdSoftmaxTF16F16Args(BingoKernelArgs):
-    """The same softmax over x^T -- one token per FP16 LANE, which is ~3x cheaper on the
-    SIMD core. Softmax has TWO per-row scalars, and transposing removes the cost of both:
+    """The same softmax over x^T -- one token per FP16 LANE, which needs no cross-lane fold
+    on the SIMD core. Softmax has TWO per-row scalars, and transposing removes the cost of both:
     the row max and the row sum fall out of the per-lane accumulators (SIMD_RED_LANEWISE)
     with no cross-lane fold, and each rides back in as a sticky seed beat rather than a
     replicated [T, D] plane.
 
     It also removes the last thing that had to leave the datapath. This core cannot
-    divide, so the normalisation used to end in an integer reciprocal per row; StreamMap
-    has no reciprocal either, but rsqrt(s*s) = 1/s exactly and the square needs no operand
-    but the number itself. All T tokens are inverted in ONE pass, because all T sums live
-    in the lanes of one beat.
+    divide and StreamMap has no reciprocal, but rsqrt(s*s) = 1/s exactly and the square
+    needs no operand but the number itself. All T tokens are inverted in ONE pass, because
+    all T sums live in the lanes of one beat.
 
-    `rows` MUST BE 32 -- the FP16 lanes in one 512-bit beat -- and `cols` <= 255, because
-    the square is FP16 and Sexp <= cols. Both are checked by the kernel.
+    `rows` must equal the FP16 lanes of one SIMD beat (simd_fp16_lanes()) and `cols` <= 255,
+    because the square is FP16 and Sexp <= cols. Both are checked by the kernel.
 
-    seed_addr AND input_addr ARE ONE ALLOCATION: allocate (1 + cols) * 64 bytes, pass the
-    base as `seed_addr` and base + 64 as `input_addr`. The kernel writes the negated row
+    seed_addr AND input_addr ARE ONE ALLOCATION: allocate (1 + cols) beats of
+    simd_beat_bytes(), pass the base as `seed_addr` and one beat in as `input_addr`. The
+    kernel writes the negated row
     maxima into the seed beat and then sweeps seed-then-tile as one flat stream, so the
     two must be adjacent; it checks rather than trusts. (The second such buffer, 1/Sexp
     below the exp tile, is the kernel's own scratch.)"""
@@ -428,14 +412,15 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
     `input_layout` / `output_layout` are Layout values (or their strings), and only four
     pairs exist:
 
-      row_major -> row_major   x[rows, cols]. A row's terms scatter across all 32 lanes, so
-                               each row costs a serialised cross-lane fold and the scale is
-                               splatted back. `seed_addr` unused.
+      row_major -> row_major   x[rows, cols]. A row's terms scatter across all of the beat's
+                               lanes, so each row costs a serialised cross-lane fold and the
+                               scale is splatted back. `seed_addr` unused.
       col_major -> col_major   x^T, stored [cols, rows]. One lane is one token, so the sums
-                               fall out of the per-lane accumulators: no fold, no splat,
-                               ~3x cheaper. rows == 32, FP16 out, and `seed_addr` REQUIRED --
-                               a 64 B beat directly below the tile (input_addr ==
-                               seed_addr + 64), allocated as one (1 + cols)-beat buffer.
+                               fall out of the per-lane accumulators: no fold, no splat.
+                               rows == simd_fp16_lanes(), FP16 out, and `seed_addr`
+                               REQUIRED -- one SIMD beat directly below the tile
+                               (input_addr == seed_addr + simd_beat_bytes()), allocated as
+                               one (1 + cols)-beat buffer.
       row_major -> A           the row_major kernel, written straight into the GEMM's A
                                operand of y [rows, cols] -- (m, k, r, s), K = cols. Replaces
                                the row_major -> A reshape and the quantise that followed.
@@ -583,24 +568,16 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         return a
 
 class SnaxBingoKernelSimdSiluF16F16Args(_SimdRowOpArgs):
-    """Whole FP16 SiLU (x*sigmoid(x)) in ONE DM-core kernel -> fp16 output (one StreamMap pass).
+    """Whole FP16 SiLU (x*sigmoid(x)) in ONE SIMD-core kernel -> fp16 output (one StreamMap pass).
     Host does only Load / Store / Check."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_silu_f16_f16"
     STRUCT_NAME = "__snax_bingo_kernel_simd_silu_args_t"
 
 
-class SnaxBingoKernelSimdSiluF16I8Args(_SimdRowOpArgs):
-    """Same fused silu -> int8 output (fused Fp16ToInt8, baked 16.0 scale). output_addr is the
-    int8 [rows, cols] buffer."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_silu_f16_i8"
-    STRUCT_NAME = "__snax_bingo_kernel_simd_silu_args_t"
-
-
 class _SnaxBingoKernelSimdSwigluArgs(BingoKernelArgs):
     """Shared base for the fused fp16 SwiGLU kernel (out = silu(gate) * up): two input tensors
-    (gate, up) + one output, all [rows, cols] (cols a whole number of SIMD beats). Output precision is chosen
-    by the subclass: F16F16 -> fp16 output; F16I8 -> int8 (fused Fp16ToInt8, baked 16.0 scale).
-    The kernel allocates the intermediate silu(gate) scratch itself. Subclasses set KERNEL_NAME."""
+    (gate, up) + one output, all [rows, cols] (cols a whole number of SIMD beats). The output is
+    fp16. The kernel allocates the intermediate silu(gate) scratch itself. Subclasses set KERNEL_NAME."""
     STRUCT_NAME = "__snax_bingo_kernel_simd_swiglu_args_t"
 
     def __init__(self, gate_addr: Union[BingoMemAlloc, int], up_addr: Union[BingoMemAlloc, int],
@@ -626,15 +603,9 @@ class _SnaxBingoKernelSimdSwigluArgs(BingoKernelArgs):
 
 
 class SnaxBingoKernelSimdSwigluF16F16Args(_SnaxBingoKernelSimdSwigluArgs):
-    """Whole FP16 SwiGLU in ONE DM-core kernel -> fp16 output (StreamMap SiLU + StreamElementwise
+    """Whole FP16 SwiGLU in ONE SIMD-core kernel -> fp16 output (StreamMap SiLU + StreamElementwise
     MUL). Host does only Load / Store / Check."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_swiglu_f16_f16"
-
-
-class SnaxBingoKernelSimdSwigluF16I8Args(_SnaxBingoKernelSimdSwigluArgs):
-    """Same fused swiglu -> int8 output (fused Fp16ToInt8, baked 16.0 scale). output_addr is the
-    int8 [rows, cols] buffer."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_swiglu_f16_i8"
 
 
 class SnaxBingoKernelSimdMoeCombineF16Args(BingoKernelArgs):
@@ -719,8 +690,8 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         FA_SH_LNEW_IN    reads  [lsc][rsum]              rsum = the trailing beat of p8_dst
 
     `snax_simd_shape_t.stride` is a uint32_t, so the arena must sit at a LOWER address than
-    both s16_src and p8_dst. That held for free while addresses came from bingo_l1_alloc in
-    alphabetical order, and stopped being free once a compiler took over placement. Breaking
+    both s16_src and p8_dst. Runtime bingo_l1_alloc order (alphabetical) happens to satisfy
+    it; the static-L1 planner enforces it through PLACEMENT_ORDER. Breaking
     it does not corrupt the row maximum -- that chain is arena-internal -- it corrupts P and
     the row sum, and the run hangs before those checks report.
     """
@@ -754,7 +725,7 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     # an interleaved P must be dense (pitch 0): see spaced_pitch().
     PITCH_SPACED = 160
     # The arena opens with a FIXED block reserved for the cached task geometries, which is
-    # NOT sizeof(snax_simd_shape_t) * 12: that struct's size follows the cluster's
+    # NOT FA_SH_COUNT * sizeof(snax_simd_shape_t): that struct's size follows the cluster's
     # reader_agu_temporal_dimension, so deriving the reservation from it would make every
     # data offset below depend on the hjson as well. Must equal SIMD_FA_SHAPES_BYTES in
     # offload_hw_kernels/simd.h, where a _Static_assert checks the shapes still fit.
@@ -864,9 +835,10 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         # 1 keeps the kernel seeding m and l itself, which is what every existing workload
         # expects. 0 says the workload has already filled them -- see the xDMA memset.
         self.seed_state = int(seed_state)
-        # SELF / PROLOGUE / PRIMED; see the geom_mode comment on the C struct. PRIMED is a
-        # PROMISE about the GRAPH -- that a PROLOGUE node for this same arena is an ancestor
-        # of this node -- and nothing on the device can check it, so it is opt-in per node.
+        # SELF / PROLOGUE / PRIMED / CSR_PRIMED; see the geom_mode comment on the C struct.
+        # PRIMED is a PROMISE about the GRAPH -- that a PROLOGUE node for this same arena is
+        # an ancestor of this node -- and nothing on the device can check it, so it is
+        # opt-in per node.
         if geom_mode not in (self.GEOM_SELF, self.GEOM_PROLOGUE, self.GEOM_PRIMED,
                              self.GEOM_CSR_PRIMED):
             raise ValueError(f"geom_mode must be 0 (SELF), 1 (PROLOGUE), 2 (PRIMED) "

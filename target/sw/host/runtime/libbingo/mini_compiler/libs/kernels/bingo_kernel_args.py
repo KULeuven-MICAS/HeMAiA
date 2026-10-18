@@ -9,11 +9,12 @@ The classes live one file per engine:
 
     kernel_base.py      the BingoKernelArgs ABC: address resolution, C field emission,
                         and the placement-order constraint a few kernels declare
-    kernel_misc.py      dummy / sync probe / sync report, and the cluster iDMA
+    kernel_misc.py      dummy / sync probe / sync mark / chip barrier / sync report, the
+                        cluster iDMA, the xDMA CREST expand, the MoE route and router pack
     kernel_gemm.py      VersaCore GEMM, general and typed
     kernel_gemm_fa.py   the FlashAttention QK/PV pair and the array's counters
     kernel_xdma.py      xDMA transfers, 2-D shape ops, and the in-fabric junction CSRs
-    kernel_layout.py    the dedicated layout converters (D<->row, row<->A, row<->B)
+    kernel_layout.py    the layout converter (row_major <-> A/B/D)
     kernel_simd.py      SIMD streaming primitives and the fused whole-operators
     kernel_host.py      host transfers and the per-precision result checks
     kernel_ara.py       Ara (RVV) host kernels, typed by precision

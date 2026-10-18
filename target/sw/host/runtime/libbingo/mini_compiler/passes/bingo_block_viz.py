@@ -6,9 +6,8 @@
 """One picture per block: the sub-DFG each libs block built, drawn at the node level.
 
 final_dfg.png draws the whole LOWERED graph, which answers a different question. Most of
-its nodes are the compiler's own -- llm_chain_4cluster lowers 181 task nodes into 663, 482
-of them dummy set/check nodes -- and its labels are bare ids, so one block's work cannot be
-picked out of it. A block's author needs something narrower: which nodes did THIS block
+its nodes are the compiler's own dummy set/check nodes, and its labels are bare ids, so one
+block's work cannot be picked out of it. A block's author needs something narrower: which nodes did THIS block
 create, on which engine, in what dependency order, handing which buffers to which kernel,
 and how is it joined to the blocks around it.
 
@@ -343,7 +342,7 @@ class _World:
                     direct[(s, q)].append((r.name, p.name, list(p.ends)))
 
         def resolve(key, seen=()):
-            # A view (Slice, TransposeView) builds no node, so "consumed by the view" says
+            # A view (View, Join, After) builds no node, so "consumed by the view" says
             # nothing about who reads the bytes. Follow it to the stage that does.
             out = []
             for (s, q, cends) in direct.get(key, []):

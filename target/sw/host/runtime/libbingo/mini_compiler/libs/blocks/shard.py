@@ -15,11 +15,11 @@ anyone's, and every node they emit is in the layer's own order.
     Scatter   [rows, cols] -> N row slices, one in each cluster's L1
     Gather    N row slices, one per cluster -> one [rows, cols] in the root's L1
 
-ROW-MAJOR ONLY, AND THAT IS NOT A SIMPLIFICATION. A row slice is a contiguous byte range
-only when rows are contiguous runs. In A, B or D layout a block of rows is interleaved
-with every other block, so "the first eight rows" is not an address range and slicing one
-off is a relayout, not a move. Convert first, or split along whatever axis that layout
-does make contiguous.
+ROW-MAJOR ONLY. A row slice is a contiguous byte range only when rows are contiguous
+runs. In B a row range is interleaved with every other; in A and D only whole meshRow
+blocks are contiguous (move.py _row_span), and a split that is not block-aligned is a
+relayout, not a move. Convert first, or split along whatever axis that layout does make
+contiguous.
 
 THE DIRECTION IS NOT SYMMETRIC, because the hardware is not. Which side issues a transfer
 is decided by which side can address both ends:

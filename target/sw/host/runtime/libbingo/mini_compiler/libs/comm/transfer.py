@@ -8,7 +8,7 @@
 WHY A BLOCK CANNOT JUST ASSUME. A block declares the layout, precision and memory level it
 consumes. The thing bound to it was produced by something else -- a projection that emits
 D-layout, a datagen that staged into the memory chiplet, a previous layer whose output is
-fp16 where this one wants int8. Three kinds of mismatch, and NONE of them faults:
+fp16 where this one wants int8. Four kinds of mismatch, and NONE of them faults:
 
   LOCATION   a memory-chiplet address on a config without one is simply unmapped. The
              loads return whatever the fabric gives back and the checks compare one piece
@@ -41,14 +41,14 @@ THE CLOSURES, and why each is the engine it is:
              in this tree does it. bring_in(fuse_relayout=True) opts in.
   transpose  the xDMA's 8x8 BLOCK TRANSPOSER, a real unit in the writer datapath and not a
              pair of strides -- no stride nest expresses an axis exchange, which is why
-             nest.py refuses one by name and points here. Being a WRITER extension it
-             scatters into the writer's OWN local TCDM, so the transposed result always
-             lands in L1; a non-local source is staged by the kernel. Native at 1- and
-             2-byte elements only, so this runs at fp16 and a quantiser comes after it.
+             nest.py refuses one by name and points here. It is a local-loopback
+             transform on whichever side the cfg declares it, so the transposed result
+             always lands in L1; a non-local source is staged by the kernel. Native at 1-
+             and 2-byte elements only, so this runs at fp16 and a quantiser comes after it.
   precision  NOT DONE HERE. A precision change needs a scale, and there is no correct
              default -- the right one depends on the range of the data, which this module
-             cannot see. Choosing one silently is how a tensor ends up 83% saturated and
-             agreeing with its golden anyway. It is refused, with a pointer.
+             cannot see. Choosing one silently is how a tensor ends up mostly saturated
+             and still agrees with its golden. It is refused, with a pointer.
 
 WHERE THE ARITHMETIC IS. This module decides WHAT a mismatch costs and emits the nodes;
 deriving the actual strided transfer, and verifying it against ground-truth index maps,
@@ -101,16 +101,15 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
             f"shape {tuple(have.shape)} cannot satisfy {tuple(want.shape)}: this module "
             f"moves and permutes, it does not tile or pad. Reshape upstream.")
     if have.mem_level is None:
-        # `have` is a BOUND port -- a real buffer, which is somewhere. None is only
-        # meaningful on the declaration side, where it means "wherever you have it".
+        # `have` is a BOUND port -- a real buffer, which is somewhere. PortSpec refuses a
+        # level of None, so a spec cannot reach this branch.
         raise ValueError(
             "the bound operand declares no mem_level. None is a DECLARATION saying the "
             "consuming block will fetch it from wherever it is; a buffer that actually "
             "exists has a level. Bind a Port whose spec says where the buffer lives.")
     if want.mem_level is None:
-        # The consumer declared no level: it fetches the operand itself, from wherever the
-        # caller keeps it. Nothing to plan here -- the block calls this again with the
-        # level it actually needs, and THAT call plans the hoist.
+        # A `want` with no level states no requirement, so there is nothing to plan.
+        # PortSpec refuses a level of None, so a spec cannot reach this branch.
         pass
     elif have.mem_level != want.mem_level:
         if have.mem_level == "L4":
@@ -131,7 +130,8 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
     #   row_major <-> col_major        the transposer alone
     #   col_major  -> A/B/D            transpose to row_major FIRST, then the nest
     #   A/B/D      -> col_major        the nest FIRST, then transpose
-    #   row_major <-> A/B/D            the nest alone, as before
+    #   row_major <-> A/D              the nest alone
+    #   row_major <-> B                the transposer plus an A nest (square mesh only)
     #
     # ORDER IS FORCED, not chosen: the transposer permutes a PLAIN array, so it runs while
     # the operand is unblocked, and the nest is derived in the blocked side's own

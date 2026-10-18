@@ -5,33 +5,28 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The per-element and per-row operators a layer is glued together with.
 
-RMSNorm, RoPE, quantise, dequantise and the residual add. Each is one fused kernel, so each
-is one node, and the block around it exists to state the layouts -- which is the whole
-difficulty, because these do NOT all care about layout in the same way. That difference is
-what the files are cut on:
+RMSNorm, quantise, and the one-token row operators of the decode path. Each is one fused
+kernel, so each is one node, and the block around it exists to state the layouts -- which
+is the whole difficulty, because these do NOT all care about layout in the same way. That
+difference is what the files are cut on:
 
-  pointwise.py  ELEMENTWISE -- quantise, dequantise, residual add. They touch each value
-                independently, so a permutation of the inputs is the same permutation of
-                the output and ANY layout works. They declare one for readability and pass
-                it through; MoE runs its SwiGLU straight over a D-layout block for exactly
-                this reason.
+  pointwise.py  ELEMENTWISE -- quantise. It touches each value independently, so a
+                permutation of the inputs is the same permutation of the output and ANY
+                layout works. It declares one for readability and passes it through.
 
   norm.py       PER-ROW, AND REDUCING -- RMSNorm. It reduces ALONG a row, which is both a
-                contiguity requirement and, on this block, a 3x cost difference depending
-                on orientation. That file is mostly about the difference.
+                contiguity requirement and, on this block, a choice of kernel by orientation.
+                That file is mostly about the difference.
 
-  rope.py       PER-ROW, NOT REDUCING -- RoPE. It rotates along a row, so it needs the row
-                contiguous but has no reduction for a transposed layout to make cheap.
-
-  row.py        ONE TOKEN'S ROW -- the decode path around a one-token GEMV: its RMSNorm with
-                a sticky scale, the quantiser into row 0 of the GEMV's A operand, and the
-                per-column dequantisation of the GEMV's output.
+  row.py        ONE TOKEN'S ROW -- the decode path around a one-token GEMV: RMSNormRow,
+                QuantizeARow, ARowPack, ScaleCols, SoftmaxRow, SwigluARow,
+                ScaleRowBySlot and AddRow.
 
   common.py     the tile description and the beat it has to tile to.
 
 WHY THE DISTINCTION IS NOT A DETAIL. In D-layout (m, n, r, c) a matrix row is NOT
 contiguous: consecutive columns of one row are `meshCol` apart across n-blocks. Handing
-D-layout to a per-row operator normalises or rotates groups that are not rows. It does not
+D-layout to a per-row operator normalises groups that are not rows. It does not
 fault, it does not go out of range, and the answer is a well-formed tensor of wrong
 numbers. So their ports say `row_major` and mean it.
 
@@ -51,14 +46,13 @@ second reshape, and it is worked through in norm.py.
 
 from .common import BEAT_BYTES, LANES_PER_BEAT, RowCfg, check_pow2, check_row
 from .norm import NormCfg, RMSNorm
-from .pointwise import Dequantize, Quantize, Residual
-from .rope import RoPE
-from .row import (AddRow, AddRowCfg, ARowLoad, ARowLoadCfg, ARowPack, ARowPackCfg, NormRowCfg, QuantARowCfg, QuantizeARow, RMSNormRow,
+from .pointwise import Quantize
+from .row import (AddRow, AddRowCfg, ARowPack, ARowPackCfg, NormRowCfg, QuantARowCfg, QuantizeARow, RMSNormRow,
                   ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                   SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
 __all__ = ["BEAT_BYTES", "LANES_PER_BEAT", "RowCfg", "check_pow2", "check_row",
-           "NormCfg", "RMSNorm", "Dequantize", "Quantize", "Residual", "RoPE",
-           "ARowLoad", "ARowLoadCfg", "ARowPack", "ARowPackCfg", "NormRowCfg", "QuantARowCfg", "QuantizeARow", "RMSNormRow", "ScaleCols",
+           "NormCfg", "RMSNorm", "Quantize",
+           "ARowPack", "ARowPackCfg", "NormRowCfg", "QuantARowCfg", "QuantizeARow", "RMSNormRow", "ScaleCols",
            "ScaleColsCfg", "AddRow", "AddRowCfg", "ScaleRowBySlot", "ScaleRowCfg",
            "SoftmaxRow", "SoftmaxRowCfg", "SwigluARow", "SwigluARowCfg"]

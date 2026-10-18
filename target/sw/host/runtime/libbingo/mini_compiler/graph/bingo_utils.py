@@ -105,18 +105,6 @@ class DiGraphWrapper(Generic[T], DiGraph):
     ) -> None:
         super().add_edges_from(edges)  # type: ignore
 
-    def all_simple_paths(self, producer: T, consumer: T) -> Iterator[list[T]]:
-        return nx.all_simple_paths(self, source=producer, target=consumer)  # type: ignore
-
-    def shortest_path(self, producer: T, consumer: T) -> list[T]:
-        return nx.shortest_path(self, producer, consumer)  # type: ignore
-
     @property
     def node_list(self) -> list[T]:
         return list(self.nodes())  # type: ignore
-
-    def get_node_with_id(self, node_id: int) -> T:
-        for node in self.node_list:
-            if node.id == node_id:  # type: ignore
-                return node
-        raise ValueError(f"Node with id {node_id} not found.")

@@ -170,8 +170,8 @@ class BingoDFGStaticL1Mixin:
                       f"(this build does not place buffers)")
 
         if want_pack:
-            # The whole mode, not just that packing happened: "packing happened" does not
-            # say WHICH packing, which is how two bisect arms became silent duplicates.
+            # Print the whole mode, not just that packing happened, so two arms with
+            # different options never look identical.
             mode = [f"order={opts.order}"]
             if not opts.share:
                 mode.append("no-share")

@@ -8,10 +8,10 @@ from bingo_utils import install_package
 
 
 class BingoDFGReportMixin:
-    """Debugging output: the graph picture and the CSV dump.
+    """Debugging output: the graph pictures, the CSV dump and the per-block pictures.
 
-    Neither is on a build path. Both are allowed to fail without taking a build with
-    them, because a missing plotting library is not a reason to stop compiling.
+    The per-block pictures never fail a build; the graph picture and the CSV run
+    unguarded inside bingo_compile_dfg.
 
     Mixed into BingoDFG, so `self` is the whole DFG. These methods call each other
     and the other mixins' methods freely; nothing here is meant to stand alone.
@@ -19,7 +19,7 @@ class BingoDFGReportMixin:
 
     def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
-        if getattr(self, "skip_viz", False):    # a DSE export: no pictures (minutes at 6k nodes)
+        if getattr(self, "skip_viz", False):    # a DSE export: no pictures
             return
         try:
             import matplotlib.pyplot as plt

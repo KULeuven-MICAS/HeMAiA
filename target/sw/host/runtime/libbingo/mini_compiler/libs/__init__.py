@@ -4,16 +4,17 @@
     comm/     COMMON machinery: what a block declares (ports), what it builds through
               (ctx), how two are joined (link), and how an operand that does not match
               gets moved or reshaped (transfer, nest).
-    blocks/   the blocks: FlashAttention, its fold, the MoE FFN.
+    blocks/   the blocks (projections, attention, MoE, moves, collectives, SIMD rows).
+    crest.py  CREST weight records for WeightRings.
     kernels/  the kernel ABI the blocks build nodes from: one args class per kernel,
               matching the C structs. Imported FLAT (bingo_kernel_args, kernel_simd, ...),
               not as libs.kernels -- _bingo_paths puts it on sys.path.
-    verify/   host-side readbacks and comparisons, named by precision.
+    verify/   host-side comparisons, named by precision.
 
 A block declares its ports and parameters; Pipeline binds them and adds the edges. The
-mini-compiler still sees ONE assembled DFG and runs every pass on it exactly as before --
-this layer only does assembly, and it never inserts a node, because node creation order is
-dispatch order on this machine.
+mini-compiler sees ONE assembled DFG and runs every pass on it -- this layer only does
+assembly, and it never inserts a node, because node creation order is dispatch order on
+this machine.
 
 Every port carries SHAPE, LAYOUT, PRECISION and PLACEMENT -- the memory level and, for
 L1, which cluster's. All of it is in the signature rather than assumed, because none of it
@@ -24,9 +25,9 @@ without moving anything.
 
 ONE BLOCK, ONE CLUSTER. A block's kernels run where its cfg says and its ports declare it,
 so spreading an operator over the machine is something a layer assembles -- `Scatter`, one
-block per cluster, `Gather` -- and the pipeline checks every placement on the way. The two
-blocks that do span clusters, FlashAttention and MoeFFN, declare per-cluster ports and say
-in their own docstrings why they are one construct rather than several.
+block per cluster, `Gather` -- and the pipeline checks every placement on the way. The one
+block that does span clusters, FlashAttention, declares per-cluster ports and says in its
+own docstring why it is one construct rather than several.
 """
 
 # libs reaches the compiler by FLAT module name (bingo_kernel_args, bingo_node, ...), so

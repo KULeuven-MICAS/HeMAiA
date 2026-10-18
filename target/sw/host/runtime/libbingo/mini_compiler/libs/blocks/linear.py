@@ -67,8 +67,8 @@ consumes A-layout int8 and that is what its port says; getting there from whatev
 previous stage emitted is the caller's composition, and the order is forced by hardware:
 reshape at FP16, THEN quantise, because a row_major->A conversion needs an 8-byte run that
 int8 does not have. See comm/nest.py. For the GEMV the quantiser writes the A operand's row
-0 directly (block.simd.QuantizeARow). Dequantisation with a per-column weight scale is the
-caller's as well (block.simd.ScaleRow): one SIMD pass over the finished row.
+0 directly (blocks.simd.QuantizeARow). Dequantisation with a per-column weight scale is the
+caller's as well (blocks.simd.ScaleCols): one SIMD pass over the finished row.
 """
 
 import itertools
@@ -122,6 +122,10 @@ class LoadStream:
     The slabs are allocated once, here, and never belong to a block: they live for the
     whole graph, which is exactly the L1 a stream costs.
     """
+
+    # The cluster's WeightRings when its streamed weight chunks go through a ring; the workload
+    # sets it on the instance.
+    rings = None
 
     def __init__(self, ctx: Ctx, cluster: int, nbytes: int = DEFAULT_W_CHUNK_BYTES,
                  nbuf: int = 2, name: str = "stream", slack: int = 0):
@@ -209,22 +213,24 @@ class WeightRings:
 
     WHY. The D2D link is half-duplex. A pull sends a read request toward the memory
     chiplet for every burst and the data comes back the other way, so the link turns
-    around each time; a push only flows toward us. Measured on
-    hemaia_twochiplet_16MBL3_4cluster, 4 GHz SDR (host_only d2d_push_pull_bw, 1 MiB):
-    pull HBM -> L3 12.0 GB/s, pull L4 -> L3 15.7, push HBM or L4 -> L3 17.4-17.5 of the
-    link's 18.3. The ring also decouples the link from the clusters: the prefetcher runs
-    up to `n_slots` chunks ahead of each cluster, through the attention and the routing.
+    around each time; a push only flows toward us, so it keeps the link streaming. The
+    ring also decouples the link from the clusters: the prefetcher runs up to `n_slots`
+    chunks ahead of each cluster, through the attention and the routing.
 
     The workload stages the ring memory (symbols in L3: the slots of every ring, a 64-B
     flag and a 64-B release word per slot) and passes the handles; a LoadStream with
     `rings` set sends each streamed weight chunk whose source the host can name -- a
     fixed HBM or memchip-SRAM address, or an expert-slot field of the router's record --
     through its cluster's ring (Linear._build_streamed), and schedule() is the table the
-    prefetcher walks. Ring r is cluster r's.
+    prefetcher walks. Ring c is cluster c's (with `split`, ring c + n_rings / 2 holds its
+    routed chunks).
     """
 
     FIELDS = {"gu": 0, "gu_s": 1, "dn": 2, "dn_s": 3}
     MAX_RINGS = 4
+    # Without CREST, a dense chunk (kind 0) ends in a trailer its caller appended; the workload
+    # sets it on the instance.
+    plain_trailer = False
 
     def __init__(self, *, slots, flags, releases, n_rings: int, n_slots: int,
                  slot_bytes: int, batch: int = 1, batch_routed: int = 0, head: int = 0,
@@ -239,8 +245,8 @@ class WeightRings:
         # `split`: every cluster has TWO rings, its dense chunks in ring c and its routed ones
         # in ring c + n_rings / 2. In one ring a dense chunk taken after a routed one (the
         # shared expert's down, built after the first routed gate|up for the all-gather
-        # lag) waited behind it for the router's record and went over the link after the
-        # route; in a ring of its own it is pushed before. take*() still name the CLUSTER.
+        # lag) waits behind it for the router's record; in a ring of its own it is pushed
+        # first. take*() still name the CLUSTER.
         self.split = bool(split)
         if self.split and n_rings % 2:
             raise ValueError(f"WeightRings(split): {n_rings} rings; two per cluster.")
@@ -274,7 +280,8 @@ class WeightRings:
         # The run each ring's newest chunk belongs to: [first slot, chunks, bytes]
         self._run = [None] * n_rings
         # params weight_crest: the chip's CrestRings (libs/crest.py) -- every weight chunk is
-        # pushed compressed and loaded by the xDMA through its CrestDecompressor
+        # pushed compressed, copied into the slab by the DM core and expanded in place by the
+        # xDMA's CrestDecompressor
         self.crest = None
 
     def _continues(self, ring: int, k: int, src: int, kind: int, offset: int) -> bool:
@@ -323,7 +330,7 @@ class WeightRings:
         # marked (kind bit 1) so the prefetcher pushes no flag for it. A CREST record carries the
         # trailer; a plain dense chunk (plain_trailer) ends in one its caller appended.
         trailer = (compressed and self.crest.trailer) or \
-            (self.crest is None and getattr(self, "plain_trailer", False) and not kind & 1)
+            (self.crest is None and self.plain_trailer and not kind & 1)
         if trailer:
             kind |= 2
         if nbytes > self.slot_bytes:
@@ -347,6 +354,43 @@ class WeightRings:
             at_offset(self.flags, idx * 64)
         return (at_offset(self.slots, place), flag, at_offset(self.releases, idx * 64), k + 1,
                 int(compressed) | (2 if trailer else 0), nbytes)
+
+    def load_chunk(self, node, cluster: int, name: str, *, src: int, nbytes: int, slab, war,
+                   deps=(), kind: int = 0, offset: int = 0, dm: int, xdma: int = None,
+                   slab_bytes: int = None, expand_name: str = None, trailer: bool = False):
+        """The ring load of one chunk into an L1 slab: take_ex(), then an idma_ring_load that
+        waits for the prefetcher's push and copies the chunk from L3 into `slab` on core `dm`.
+        It follows `war` (the slab's last readers, LoadStream.take), then the ring's newest
+        load on `cluster` (so the loads run in the ring's order), then `deps`; the load becomes
+        the ring's newest and is tagged for the Execution-IR export. `node(name, core, kernel,
+        args, deps)` creates a node.
+
+        A CREST record (weight_crest) lands in the END of the slab (`slab_bytes` long) and an
+        xDMA task on core `xdma`, `expand_name`, expands it in place into the slab's first
+        beats; a CREST load always honours the record's trailer, a plain one only with
+        `trailer`. Returns (the load, the expand task or None, the chunk's place in the ring: the
+        address the load reads)."""
+        sl, fl, rl, seq, how, pushed = self.take_ex(cluster, src=src, nbytes=nbytes, kind=kind,
+                                                    offset=offset)
+        prev = [self.last[cluster]] if self.last.get(cluster) is not None else []
+        after = list(dict.fromkeys(list(war) + prev + list(deps)))
+        expand = None
+        if how & 1:
+            if xdma is None or slab_bytes is None:
+                raise ValueError("WeightRings.load_chunk: a CREST record needs xdma and slab_bytes.")
+            ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
+                      SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl,
+                                                      at_offset(slab, slab_bytes - pushed), pushed,
+                                                      rl, trailer=bool(how & 2)), after)
+            expand = node(expand_name, xdma, "__snax_bingo_kernel_xdma_crest_expand",
+                          SnaxBingoKernelXdmaCrestExpandArgs(slab, slab_bytes), [ld])
+        else:
+            ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
+                      SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl,
+                                                      trailer=trailer and bool(how & 2)), after)
+        self.last[cluster] = ld
+        ld.exec_chunk = self.last_take
+        return ld, expand, sl
 
     def schedule(self) -> list:
         """uint64 words: chunks per ring (4), first entry per ring (4), then 4 per entry."""
@@ -844,10 +888,10 @@ class Linear(Block):
             c.stream.wait_for(ld_x)
         if c.stream_after_x and ld_x is not None:
             c.stream.hold_until(ld_x)
-        rings = getattr(c.stream, "rings", None)
+        rings = c.stream.rings
         if rings is not None and c.w_slot is None and not isinstance(src_port.handle,
                                                                       BingoMemFixedAddr):
-            rings = None        # not a numbered HBM / memchip address: pull it as before
+            rings = None        # not a fixed HBM / memchip address: a plain iDMA copy
         loads, tasks, expands = [], [], []
         for i, (c0, n) in enumerate(chunks):
             off, nbytes = c._wb(c0 * c.d_in), c._wb(n * c.d_in)
@@ -863,28 +907,13 @@ class Linear(Block):
                     slot, fld = c.w_slot
                     ring_src = dict(src=(slot << 8) | WeightRings.FIELDS[fld], kind=1,
                                     offset=c.w_slot_off + off)
-                sl, fl, rl, seq, crest, pushed = rings.take_ex(c.cluster, nbytes=nbytes,
-                                                               **ring_src)
-                prev = [loads[-1]] if loads else \
-                    ([rings.last[c.cluster]] if rings.last.get(c.cluster) is not None else [])
-                deps = war + [n for n in prev if n not in war]
-                if crest & 1:
-                    # weight_crest: the record into the END of the slab, then the xDMA expands
-                    # it in place into the slab's first beats (libs/crest.py)
-                    ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_ring_load",
-                                SnaxBingoKernelIdmaRingLoadArgs(
-                                    fl, seq, sl, at_offset(slab, c.stream.slab_bytes - pushed),
-                                    pushed, rl, trailer=bool(crest & 2)), deps)
-                    expands.append(g.node(
-                        f"Ex_{self.name}_w{i}" if len(chunks) > 1 else f"Ex_{self.name}_w",
-                        ctx.xdma, "__snax_bingo_kernel_xdma_crest_expand",
-                        SnaxBingoKernelXdmaCrestExpandArgs(slab, c.stream.slab_bytes), [ld]))
-                else:
-                    ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_ring_load",
-                                SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl),
-                                deps)
-                rings.last[c.cluster] = ld
-                ld.exec_chunk = rings.last_take       # (ring, index): the Execution-IR export
+                ld, ex, _ = rings.load_chunk(
+                    g.node, c.cluster, nm, nbytes=nbytes, slab=slab, war=war, dm=ctx.dm,
+                    xdma=ctx.xdma, slab_bytes=c.stream.slab_bytes,
+                    expand_name=f"Ex_{self.name}_w{i}" if len(chunks) > 1 else f"Ex_{self.name}_w",
+                    **ring_src)
+                if ex is not None:
+                    expands.append(ex)
             elif c.w_slot is None:
                 args = SnaxBingoKernelIdma1dCopyArgs(at_offset(src_port.handle, off), slab,
                                                      nbytes)

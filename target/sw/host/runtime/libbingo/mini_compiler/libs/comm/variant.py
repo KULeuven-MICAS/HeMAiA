@@ -21,9 +21,9 @@ LEGALITY IS BY CONSTRUCTION
 ======================================================================================
 
 A variant is REALISED in order to be priced. So a configuration the block refuses -- an
-RMSNorm asking for the col_major kernel at rows != 32, a Reshape whose conversion is not a
-strided nest -- raises in its own constructor, with its own message, and drops out of the
-search. There is no second copy of the rules here to drift out of step with the first.
+RMSNorm asking for the col_major kernel at rows != the SIMD beat's FP16 lanes, a Reshape
+whose conversion is not a strided nest -- raises in its own constructor, with its own
+message, and drops out of the search. There is no second copy of the rules here to drift out of step with the first.
 This is the one property to protect when adding a block: state the refusal in __init__,
 and the resolver inherits it for free.
 
@@ -38,8 +38,8 @@ DM core is idle while the other two work, so a plain copy put there is very near
 
 Minimising TOTAL passes would be a different objective and a worse one. The layer's first
 RMSNorm is the case that separates them: the row-major arm is one pass and the col-major
-arm is two, and the col-major arm is the one worth having because it takes ~2,000 cycles
-off the busy engine to put one extra transfer on an idle one.
+arm is two, and the col-major arm is the one worth having because it moves work off the
+busy engine to put one extra transfer on an idle one.
 
 THESE ARE COUNTS, NOT CYCLES, DELIBERATELY. A cycle number is a constant correct for one
 shape on one RTL build, with nothing to stop it rotting into a model nobody re-measures.

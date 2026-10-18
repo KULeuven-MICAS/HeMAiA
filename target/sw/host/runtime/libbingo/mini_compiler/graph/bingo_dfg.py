@@ -34,15 +34,8 @@ from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_kernel_args import BingoKernelArgs
 
-# Re-exported so they stay importable from here. Each lives where it is USED: the
-# kernel/engine map beside the core-role map it is checked against, the task-list word
-# size beside the descriptor measured in those words.
-from bingo_platform import _ENGINE_BY_KERNEL_TOKEN, _engine_of_kernel   # noqa: F401
-from bingo_dfg_descriptor import (                                      # noqa: F401
-    BINGO_TASK_LIST_WORD_BITS,
-    BINGO_TASK_LIST_WORD_MASK,
-)
-from bingo_utils import install_package                                 # noqa: F401
+# The task-list word size lives beside the descriptor measured in those words.
+from bingo_dfg_descriptor import BINGO_TASK_LIST_WORD_BITS
 
 from bingo_dfg_transforms import BingoDFGTransformsMixin
 from bingo_dfg_conditional import BingoDFGConditionalMixin
@@ -83,8 +76,8 @@ class BingoDFG(
         self.is_host_as_acc = is_host_as_acc
         assert num_chiplets == len(chiplet_ids) or chiplet_ids is None, "Length of chiplet_ids must match num_chiplets"
         self.chiplet_ids = chiplet_ids if chiplet_ids else list(range(num_chiplets))
-        # Identity-aware dependencies. Must match the hw_manager's EnableTaggedDeps
-        # / DepTagWidth parameters. When enabled, bingo_compile_dfg runs the spill +
+        # Identity-aware dependencies. Must match the hw_manager's DepTagWidth
+        # parameter. When enabled, bingo_compile_dfg runs the tag-budget fit and the
         # per-edge tag-allocation passes; the tag bits are always present in the
         # packed descriptor (= 0 when disabled), matching the RTL struct layout.
         # MULTI-COLUMN CHECK: one descriptor checks every producer column of
@@ -95,18 +88,19 @@ class BingoDFG(
         self.enable_multi_col_check = False
         self.enable_tagged_deps = True
         # ------------------------------------------------------------------
-        # Descriptor geometry: the three widths that decide where every field of the
+        # Descriptor geometry: the four widths that decide where every field of the
         # packed descriptor lands and how far apart two descriptors sit in the task list.
         #
-        #   dep_tag_width    cfg s1_quadrant.dep_tag_width    -> BINGO_DEP_TAG_WIDTH
-        #   task_desc_width  cfg s1_quadrant.task_desc_width  -> BINGO_TASK_DESC_WIDTH
+        #   dep_tag_width    cfg s1_quadrant.bingo_cfg.dep_tag_width    -> BINGO_DEP_TAG_WIDTH
+        #   task_id_width    cfg s1_quadrant.bingo_cfg.task_id_width    -> BINGO_TASK_ID_WIDTH
+        #   task_desc_width  cfg s1_quadrant.bingo_cfg.task_desc_width  -> BINGO_TASK_DESC_WIDTH
         #                    (derived per config when the cfg does not pin it)
         #   chip_id_width    cfg hemaia_multichip.chip_id_width -> BINGO_CHIP_ID_WIDTH
         #
-        # None of them is a constant across the in-tree configs, and none of the ~50
-        # workload generators passes them, so the DEFAULT has to come from the generated
-        # occamy.h -- the header the RTL and the C runtime of this very build were made
-        # from. Hardcoding any of them is silent, not loud: a task list packed 64 bits
+        # They can differ between configs and most workload generators do not pass them,
+        # so the DEFAULT has to come from the generated occamy.h -- the header the RTL
+        # and the C runtime of this very build were made from. Hardcoding any of them is
+        # silent, not loud: a task list packed 64 bits
         # wide against a 128-bit RTL descriptor strides the array by one word instead of
         # two, so every descriptor after the first is fetched from the wrong address, and
         # a wrong tag or chiplet width shifts fields inside each descriptor instead.
@@ -238,7 +232,7 @@ class BingoDFG(
         `static_l1` is False by default: buffers keep their runtime `bingo_l1_alloc` handles
         and nothing about the emitted addresses changes. Pass True to let the compiler place
         them, or a StaticL1Options for the tuning knobs. A workload opts in explicitly --
-        see bingo_plan_static_l1 for why this is an argument and not an environment variable.
+        see StaticL1Options (bingo_l1_packer.py) for why this is an argument and not an environment variable.
 
         `desc_list_in_narrow_spm` defaults to True: the task-descriptor list goes in the
         narrow SPM, which keeps descriptor fetches off the wide path. Pass False for the
@@ -272,10 +266,8 @@ class BingoDFG(
         # that can never be live together (happens-before / same-core order), which
         # is the fewest tags THIS graph allows. When that is still more than the
         # hardware has, bingo_transform_fit_dep_tag_budget (below) changes the graph
-        # so it fits. The legacy serialize_shared_counter_consumers mitigation was
-        # removed -- per-edge tags supersede it. (Untagged mode has no counter-sharing
-        # mitigation.)
-        # Add Dummy Set/Check Nodes
+        # so it fits.
+        # Core sequencing edges, then the edge pruning passes
         self.bingo_transform_add_core_sequencing_edges()
         # On by default; a workload opts out with dfg.prune_fanout = False.
         if getattr(self, "prune_fanout", True):
@@ -292,6 +284,7 @@ class BingoDFG(
         # adds is lowered like any other.
         if self.enable_tagged_deps:
             self.bingo_transform_fit_dep_tag_budget(tag_width=self.dep_tag_width)
+        # Add Dummy Set/Check Nodes
         self.bingo_transform_dfg_add_dummy_set_nodes()
         self.bingo_transform_dfg_add_dummy_check_nodes()
         self.bingo_visualize_dfg(
@@ -327,10 +320,9 @@ class BingoDFG(
         # cross-die predicate racing its dep-set. This pushes the real descriptor
         # list through the cycle model instead.
         #
-        # It is on by default because it is cheap and the failure it catches is
-        # the expensive one: measured at +0.2-0.6 s on 4-15 s workload builds
-        # (~4%), against a hang that produces no error, no timeout and no
-        # corruption -- the machine simply stops. It also degrades rather than
+        # It is on by default because it is cheap next to the build and the failure
+        # it catches is the expensive one: a hang that produces no error, no timeout
+        # and no corruption -- the machine simply stops. It also degrades rather than
         # breaking: a missing model or a bridge problem is reported and skipped,
         # and only a genuine hang fails the build.
         #

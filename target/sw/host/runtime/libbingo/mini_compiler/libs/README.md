@@ -1,18 +1,18 @@
 # libs/ — reusable blocks, and the linker that assembles them
 
 A block is a sub-DFG with a declared interface. It states what it consumes and produces;
-the linker binds one block's outputs to the next block's inputs. The mini-compiler still
-sees ONE assembled graph and runs every pass on it exactly as before — this layer only does
-assembly.
+the linker binds one block's outputs to the next block's inputs. The mini-compiler sees
+one assembled graph and runs every pass on it; this layer only does assembly.
 
 It is a function call whose body happens to be a graph.
 
 | | |
 |---|---|
 | [`comm/`](comm/) | **Common** machinery: ports, ctx, the linker, and how an operand that does not match gets moved or reshaped. |
-| [`blocks/`](blocks/) | The blocks: FlashAttention, its fold, the MoE FFN. |
+| [`blocks/`](blocks/) | The blocks: projections, attention (FA, MLA), MoE, moves, collectives and the SIMD row operators — see [`blocks/README.md`](blocks/README.md). |
 | [`kernels/`](kernels/) | The kernel ABI the blocks build nodes from: one args class per kernel, matching the C structs. Imported flat (`from bingo_kernel_args import …`), not as `libs.kernels`. |
-| [`verify/`](verify/) | Host-side readbacks and comparisons, named by precision. |
+| [`verify/`](verify/) | Host-side comparisons, named by precision. |
+| [`crest.py`](crest.py) | CREST-compressed weight records for `WeightRings` (params `weight_crest`). |
 
 ## Every port carries four things
 
@@ -47,8 +47,8 @@ rather than against a flag that could disagree with what build() does.
 one right answer, and a buffer in the wrong memory only has to be moved, so a block may
 close either on its own. A precision change needs a *scale*, and there is no correct
 default — the right one depends on the range of the data, which the linker cannot see.
-Choosing one silently is how a tensor ends up 83% saturated and agreeing with its golden
-anyway. It is refused, by name.
+Choosing one silently can saturate a tensor while it still agrees with its golden. It is
+refused, by name.
 
 ## Using it
 
@@ -56,8 +56,11 @@ anyway. It is refused, by name.
 from libs import Ctx, Pipeline, Port
 from libs.blocks import FlashAttention, fa_gather
 
-blk = FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=4, decomp="kvsplit")
-r = Pipeline(ctx).add(blk, name="attn", bind={"q": ..., "k": ..., "v": ...}).result
+blk = FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=(0, 1, 2, 3), decomp="kvsplit")
+p = Pipeline(ctx)
+st = p.add(blk, "attn", bind={"q": ..., "k": ..., "v": ...})
+p.run()
+r = st.result
 fa_gather(ctx.scope("attn"), blk.cfg, r.extra["shards"])   # the fold is a choice
 ```
 

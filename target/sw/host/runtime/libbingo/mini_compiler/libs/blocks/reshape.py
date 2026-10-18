@@ -149,9 +149,9 @@ class Reshape(Block):
         eb = _ELEM_BYTES[c.dtype]
         nbytes = c.rows * c.cols * eb
         src, nodes = bound["x"].handle, []
-        # WALK THE PLAN. One step for a pure reshape -- the same single node, with the same
-        # name, this block has always emitted -- and two when an orientation change is in
-        # play, since the transposer has to run on the unblocked side.
+        # WALK THE PLAN. One step for a pure reshape -- a single xDMA node -- and two when an
+        # orientation change is in play, since the transposer has to run on the unblocked
+        # side.
         lay = c.src
         for st in self.steps:
             if st.kind == "transpose":

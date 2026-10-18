@@ -2,7 +2,7 @@
 
 | file | |
 |---|---|
-| `checks.py` | Builds the check NODE: places the kernel on the host core, orders it, and pairs it with the readback that must precede it. |
+| `checks.py` | Builds the check NODE: places the kernel on the host core and orders it. |
 
 The comparison itself is a property of the kernel ABI, so the args classes live in
 [`../kernels/kernel_host.py`](../kernels/kernel_host.py) — one per precision. This
@@ -26,17 +26,7 @@ checks.check_int32_rel(ctx, "Check_o_c0", golden=h["o"], got=l3_o,
                        elems=512, rtol=0.02, after=st_o, label="fa_o_c0")
 ```
 
-`check_out(dtype=…)` picks the comparison from the port's own dtype, so a block that
-changes precision cannot leave a stale checker behind.
-
-## Readback and check are two nodes on purpose
-
-The host cannot read L1, so every check is a store followed by a compare. They are returned
-separately because they order differently: downstream compute that overwrites the buffer
-must wait on the **store**, while anything that only needs the verdict waits on the
-**check**. Collapsing them would force the stricter of the two everywhere — and a check
-that owned a hidden store could not be ordered against the compute at all, which is exactly
-the RAW race that made FA's `Store_o` read the accumulator one PV too early.
+## The label
 
 `label` is what the UART prints on a mismatch and defaults to the node name. Keep them
 separate where they say different things: the node name locates the check in the graph

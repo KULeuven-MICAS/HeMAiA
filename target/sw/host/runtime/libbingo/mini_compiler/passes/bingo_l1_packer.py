@@ -16,7 +16,7 @@
 # both have to be wrong to get through.
 #
 # MiniMalloc solves the same formulation exactly and consumes the same (size, interference)
-# data. Worth adopting when `verify` reports a real gap between the achieved peak and the
+# data. Worth adopting when `report` shows a real gap between the achieved peak and the
 # interference lower bound.
 
 from dataclasses import dataclass
@@ -66,12 +66,9 @@ class StaticL1Options:
             raise ValueError(f"alignment must be a positive multiple of 64; got {self.alignment}")
 
 
-#: What a workload gets when it passes `static_l1=True`.
-STATIC_L1_ON = StaticL1Options(enable=True)
-
-# The old allocator also always left a gap: consecutive buffers were separated by the next
-# fragment's 128-byte header, so a kernel writing one row past its buffer corrupted nothing
-# anyone checks. StaticL1Options.guard_bytes restores that slack, to answer "does some kernel
+# The runtime allocator leaves a gap: consecutive buffers are separated by the next
+# fragment's 128-byte header, so a kernel writing one row past its buffer corrupts nothing
+# anyone checks. StaticL1Options.guard_bytes adds that slack, to answer "does some kernel
 # overrun?" in one run. A diagnostic, not a fix -- if it turns a failing arm green, the
 # overrunning kernel still has to be found.
 
@@ -122,7 +119,7 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
     Returns (placement, stats) where placement maps id(handle) -> (handle, offset) and stats
     maps (chip, cluster) -> {'peak', 'sum', 'lower_bound', 'count'}.
 
-    `no_share` declares every pair of buffers on a cluster to interfere, so the layout becomes
+    `opts.share=False` declares every pair of buffers on a cluster to interfere, so the layout becomes
     a plain concatenation at constant offsets. That is the bisect arm: it keeps the static
     addressing and drops the liveness argument, which is the only part of this file that can
     be wrong about the hardware rather than about arithmetic.
@@ -164,14 +161,14 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
 
     for key in sorted(groups):
         idxs = groups[key]
-        # BINGO_L1_PIN=<substr>[,<substr>...] places the named buffers FIRST, in the order
-        # given, and lets everything else follow the normal rule. It is the bisect instrument
+        # opts.pin_first places the buffers whose names contain a given substring FIRST, in
+        # the order given, and lets everything else follow the normal rule. It is the bisect instrument
         # for "which buffer's address is load-bearing": pin one candidate to the front of an
         # otherwise freely packed layout and see whether the workload comes back.
         pins = list(opts.pin_first)
-        # ...and BINGO_L1_PIN_LAST=<substr> sends them to the END instead. Together the two
+        # ...and opts.pin_last sends them to the END instead. Together the two
         # knobs move one buffer through an otherwise unchanged layout, which is how "this
-        # buffer's neighbour is what matters" gets tested in one run rather than fifteen.
+        # buffer's neighbour is what matters" gets tested in one run.
         pins_last = list(opts.pin_last)
         if pins_last:
             tail = [i for i in idxs if any(t in items[i][0].name for t in pins_last)]
@@ -194,7 +191,7 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             #
             # The emitter allocates handles alphabetically, so this reproduces the order the
             # runtime allocator used. Largest-first packs the small-buffer tail into the gaps
-            # the big ones leave and is worth a few percent, but a kernel that writes past the
+            # the big ones leave, but a kernel that writes past the
             # end of one buffer, or computes an address as `other_buffer - my_buffer`, depends
             # on the RELATIVE ORDER of two allocations and nothing declares that. Allocation
             # order preserves every "X before Y" relationship by construction while still
@@ -235,8 +232,7 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
         total = sum(_footprint(items[i][0].size, alignment, guard) for i in idxs)
         # A LOWER BOUND must be the weight of a set that is MUTUALLY interfering -- a clique.
         # Summing one buffer's neighbours is not that (they need not interfere with each
-        # other) and overstates it, which had this reporting "bound == sum" on a layout the
-        # packer then beat by 4.5%. Greedy max-weight clique instead: exact enough to tell
+        # other) and overstates it. Greedy max-weight clique instead: exact enough to tell
         # whether a better solver (MiniMalloc) has anything left to find.
         lb = 0
         for seed in sorted(idxs, key=lambda i: -items[i][0].size):
@@ -333,15 +329,13 @@ def report(stats, capacity: int = None) -> str:
 # every scratchpad is genuinely single-node -- but that is a property of the workload, not of
 # the compiler, and a packer that assumed it would corrupt the first workload that used one.
 #
-# SIZE. A scratchpad is exactly 64 B (heterogeneous_runtime.h:72-84: return_value,
-# num_return_values, then profiling words that are no-ops unless BINGO_SCRATCHPAD_PROFILING,
-# which nothing defines). So on FlashAttention -- 202 scratchpads -- this reclaims ~13 KB, not
-# the ~100 KB an earlier estimate assumed from a 512 B scratchpad. The mechanism matters far
-# more on node-heavy workloads: a 92-configuration sweep spent ~185 KiB of 504 KiB here.
+# SIZE. A scratchpad is BINGO_KERNEL_SCRATCHPAD_SIZE = 64 B (heterogeneous_runtime.h:
+# return_value, num_return_values, then profiling words used only with
+# BINGO_SCRATCHPAD_PROFILING).
 #
 # RESIDUAL RISK, not yet defended against. There is NO FENCE between a kernel's last store and
-# its done-write (bingo.h:352 is a bare `csrw 0x5ff`; the host path at bingo_api.c:726 is a
-# bare writew). A slot's next occupant could in principle be clobbered by a store from the
+# its done-write (write_bingo_hw_manager_done_queue in bingo.h is a bare `csrw 0x5ff`;
+# bingo_hw_scheduler_write_done_queue in bingo_api.c is a bare writew). A slot's next occupant could in principle be clobbered by a store from the
 # node that just retired. For SCRATCHPADS the exposure is small -- only the owning core writes
 # them, with ordinary in-order stores to its own TCDM -- but it is not zero, and for a buffer
 # whose last write is an outstanding DMA it would be real. If a packed workload ever shows
@@ -352,7 +346,7 @@ def report(stats, capacity: int = None) -> str:
 # not: the host populates every arg struct at init, BEFORE the scheduler starts, so an arg's
 # live range is [program start, its node fires] rather than [its node, its node]. Every arg
 # struct is therefore live simultaneously at init and none of them may share bytes. Modelling
-# them as single-node -- which an earlier draft of the plan proposed -- would let the packer
+# them as single-node would let the packer
 # overlap a late node's arguments with a buffer that dies during start-up, and that node would
 # then fire with whatever overwrote them.
 

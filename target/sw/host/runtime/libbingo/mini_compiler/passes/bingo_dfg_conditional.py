@@ -127,9 +127,9 @@ class BingoConditionalFork:
         """Declare where the branches reconverge.
 
         A skipped task still fires its dependency -- the manager pushes it to the
-        checkout queue retagged as a dummy (bingo_hw_manager_top.sv:1149-1155) --
-        so this is an ordinary fan-in, and the combine runs once with whichever
-        branches actually produced a value.
+        checkout queue retagged as a dummy (bingo_hw_manager_top.sv, checkout_queue_data_in
+        under cond_exec_skip) -- so this is an ordinary fan-in, and the combine runs once
+        with whichever branches actually produced a value.
 
         The declaration is what the validator checks against: an unconditional
         edge out of a guarded task is a potentially unguarded read unless it
@@ -218,9 +218,8 @@ class BingoDFGConditionalMixin:
     def _collect_conditional_declarations(self) -> dict:
         """Find every gating node and the targets it guards.
 
-        Also validates core assignments, because an unassigned node here means
-        ``bingo_auto_assign()`` was never called and everything downstream would
-        compute groups for nodes that have no core to skip on.
+        Also validates core assignments, because an unassigned node here has no core
+        to skip on and everything downstream would compute groups for it anyway.
 
         Returns a dict mapping each gating node to its set of conditional targets.
         Empty when the graph declares no conditional edges at all.
@@ -232,8 +231,7 @@ class BingoDFGConditionalMixin:
             raise ValueError(
                 f"{len(unassigned)} node(s) have no core assignment: "
                 f"{names}{suffix}. "
-                f"Call bingo_auto_assign() before compile, or provide "
-                f"explicit (chiplet, cluster, core) in BingoNode()."
+                f"Give every BingoNode an explicit (chiplet, cluster, core) before compile."
             )
 
         gating_to_targets: dict[BingoNode, set[BingoNode]] = {}
@@ -274,8 +272,7 @@ class BingoDFGConditionalMixin:
         edges out of one source share one, and the first found is the answer.
         Empty dict means the legacy promote-in-place path.
 
-        Refuses a `cond_dic` that disagrees with a fork on the same gate -- the
-        old code silently took whichever it processed first.
+        Refuses a `cond_dic` that disagrees with a fork on the same gate.
         """
         fork = self._fork_of(source_node)
         edge_dic = {}
@@ -689,9 +686,7 @@ class BingoDFGConditionalMixin:
         for gating_node, (source_node, cond_dic) in inserted.items():
             # The per-expert arrays are indexed by BRANCH, not by guarded task:
             # _cond_node_index is the component ordinal, and the router publishes
-            # one score per branch. Sizing them by the target count instead --
-            # four tasks per expert made it four times too long -- was harmless
-            # only because nothing read past the end.
+            # one score per branch.
             targets = gating_to_targets[gating_node]
             fork = self._fork_of(source_node)
             num_branches = (len(fork.branches) if fork is not None and fork.branches
@@ -703,52 +698,3 @@ class BingoDFGConditionalMixin:
 
         self._lower_combines()
         return node_to_group
-
-    def bingo_define_conditional_region(
-        self,
-        gating_node: BingoNode,
-        guarded_nodes: list,
-        group_per_node: bool = False,
-        invert: bool = False,
-    ) -> list[int]:
-        """Define a conditional execution region controlled by a gating task.
-
-        The gating_node is marked as type 'gating' (task_type=2 in RTL).
-        When it completes on a core, the hardware writes the assigned CERF
-        groups, causing guarded_nodes to either execute or be skipped.
-
-        Args:
-            gating_node:    The node whose completion activates the CERF groups.
-            guarded_nodes:  Nodes whose execution depends on the CERF state.
-            group_per_node: If True, each guarded node gets its own CERF group
-                            (MoE: each expert independently gated).
-                            If False, all guarded nodes share one CERF group
-                            (early exit: entire stage gated together).
-            invert:         If True, guarded nodes execute when group is INACTIVE.
-
-        Returns:
-            List of assigned CERF group IDs. Length equals len(guarded_nodes)
-            when group_per_node=True, or [single_id] when False.
-        """
-        gating_node.node_type = "gating"
-
-        if group_per_node:
-            group_ids = []
-            for node in guarded_nodes:
-                gid = self._alloc_cerf_group()
-                node.cond_exec_en = True
-                node.cond_exec_group_id = gid
-                node.cond_exec_invert = invert
-                group_ids.append(gid)
-        else:
-            gid = self._alloc_cerf_group()
-            for node in guarded_nodes:
-                node.cond_exec_en = True
-                node.cond_exec_group_id = gid
-                node.cond_exec_invert = invert
-            group_ids = [gid]
-
-        gating_node.cerf_write_groups = sorted(set(
-            gating_node.cerf_write_groups + group_ids
-        ))
-        return group_ids
