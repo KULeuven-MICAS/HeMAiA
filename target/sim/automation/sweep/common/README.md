@@ -1,6 +1,6 @@
 # sweep/common: one button per experiment
 
-The ISCA isolated experiments that simulate HeMAiA (`collective`) run through `hsweep.py`.
+The `sop_ubench` and `llm_blocks` experiments run through `hsweep.py`.
 It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
 
 | command | does |
@@ -30,12 +30,12 @@ It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
 **A points file:**
 
 ```yaml
-cfg: target/rtl/cfg/hemaia_16chiplet_split.hjson
+cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
 memchip: true          # with_macro / with_d2d for cfgs with a memory chiplet
 timeout_h: 3
 points:
-  - {name: allreduce_f16_decode, host_app_type: offload_bingo_hw, chip_type: multi_chip,
-     workload: collective/all_reduce, dev_app: snax-bingo-offload}
+  - {name: allreduce, host_app_type: offload_legacy, chip_type: multi_chip,
+     workload: None, dev_app: snax-coll-allreduce}
 ```
 
 ## The hang guard

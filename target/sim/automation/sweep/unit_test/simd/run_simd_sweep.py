@@ -13,11 +13,10 @@ Builds and runs ``task_simd.yaml`` (one task per SIMD workload) through the shar
 ``snax_split_cluster``: four engines on four harts, with the SIMD operator chain
 (EW0 -> Map -> Reduce -> EW1 -> Fp16ToInt8) on hart 1.
 
-That split is why this sweep is separate from the xDMA one. The operator chain used
-to hang off the xDMA's reader-extension socket, so one sweep measured both; now each
-engine has its own hart, its own CSR bank and its own trace markers
-(``BINGO_TRACE_SIMD_*`` vs ``BINGO_TRACE_XDMA_*``), and a run that mixed them would
-be attributing one engine's cycles to the other's cost model.
+That split is why this sweep is separate from the xDMA one: each engine has its own
+hart, its own CSR bank and its own trace markers (``BINGO_TRACE_SIMD_*`` vs
+``BINGO_TRACE_XDMA_*``), so the SIMD costs are swept separately from the xDMA ones, and
+a run that mixed them would be attributing one engine's cycles to the other's cost model.
 
 Defaults to the VCS engine with no waveform recording.
 

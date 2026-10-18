@@ -105,7 +105,7 @@ OP_SPEC = {
         ("simd_softmax",     "__snax_bingo_kernel_simd_softmax_f16_f16", 0, "rows_cols"),
     ],
     "simd_rmsnorm_1cluster": [
-        ("simd_rmsnorm",     "__snax_bingo_kernel_simd_rmsnorm_f16_f16", 0, "rows_cols"),
+        ("simd_rmsnorm",     "__snax_bingo_kernel_simd_rmsnorm", 0, "rows_cols"),
     ],
     "simd_rope_1cluster": [
         # The SIMD half only. RoPE is two nodes: the adjacent-pair swap runs on the DM

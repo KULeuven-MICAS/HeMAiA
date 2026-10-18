@@ -80,7 +80,7 @@ flags, the cfg/sim_cfg, and the workload knobs.
 
 | Script                              | RTL cfg                                | Sim cfg                  | Vendor repos pulled                                |
 | ----------------------------------- | -------------------------------------- | ------------------------ | -------------------------------------------------- |
-| `test/0_start_single_chiplet_sim.py`| `hemaia_singlechiplet_1cluster.hjson`  | `sim_rtl.hjson`          | none (open-source `tech_cells_generic` only)       |
+| `test/0_start_single_chiplet_sim.py`| `hemaia_singlechiplet_16MB_1cluster.hjson` | `sim_rtl.hjson`      | none (open-source `tech_cells_generic` only)       |
 | `test/1_start_multi_chiplet_sim.py` | `hemaia_tapeout_1c.hjson` (PLL off)    | `sim_rtl.hjson`          | `tech_cells_tsmc16`, `hemaia_d2d_link`             |
 | `test/2_start_tapeout_sim.py`       | `hemaia_tapeout_1c.hjson`              | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
 
@@ -89,16 +89,15 @@ The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
 
 * **`0` — single-chiplet, open-source.** No TSMC16 macros, no D2D link, no
   vendor PLL. Useful for fast iteration on cluster-level kernels.
-  Simulation time: ~5–10 min.
 * **`1` — multi-chiplet (no PLL).** 2×2 compute + 1 memory chip on the
   virtual interposer. Pulls the TSMC16 macros and the D2D link, but keeps
   the open-source clock/reset controller. It runs the *same*
   `hemaia_tapeout_1c.hjson` as flow `2`, so the PLL is the only delta — a good
-  intermediate stop before enabling it. Simulation time: ~15–40 min.
+  intermediate stop before enabling it.
 * **`2` — full tapeout.** Same multi-chiplet setup as flow `1` plus the
   vendor PLL controller (`use_vendor_pll: true` in `hemaia_tapeout_1c.hjson`,
   `sim_with_pll: true` in `sim_rtl_with_pll.hjson`). Pulls all three
-  private repos. Simulation time: >2 h.
+  private repos.
 
 Recommended ladder: validate the SW with flow `0`, promote to flow `1` to
 exercise the cross-chiplet path, and only run flow `2` for the final
@@ -118,20 +117,6 @@ passes that as `CFG_OVERRIDE`. A flow therefore names a tapeout cfg and states
 the PLL setting it wants. The sim cfg is *not* derived — `sim_with_pll` is
 chosen by picking `sim_rtl.hjson` vs `sim_rtl_with_pll.hjson`.
 
-### `spm_wide_size` (local CI only)
-
-The same mechanism sets `spm_wide.length` (the `WIDE_SPM` region in `host.ld`).
-Only the `ci/local_ci/*` runners use it, via `--spm-wide-size BYTES` (default
-16 MiB; `0` keeps the cfg's own value). They need it because the tapeout's
-**128 kiB** SPM is too small for one task in the suite —
-`gemm-msplit-4cluster-1chip` embeds a ~2 MiB `.devicebin` that overflows
-`WIDE_SPM` at *link* time.
-
-The three `test/` flows leave it unset and run whatever their cfg declares, so
-flow `2` exercises the real tapeout SPM. As a result the local CI and flow `1`
-resolve to different cfgs: an SPM-capacity failure in CI reproduces under flow
-`1` only if you pass a matching `spm_wide_size`.
-
 ## Local CI suites
 
 `ci/local_ci/` holds one subdirectory per tapeout RTL cfg. Each is self-contained
@@ -141,10 +126,10 @@ clobber one another:
 
 | Suite dir         | RTL cfg                        | Clusters / chiplet                    | Tasks |
 | ----------------- | ------------------------------ | ------------------------------------- | ----- |
-| `tapeout_1c/`     | `hemaia_tapeout_1c.hjson`      | 1x `snax_versacore_to_cluster`         | the full 36-task suite |
-| `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | 36 base tasks + 5 SIMD `xdma_*` tasks |
-| `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | the full 6-task 2-cluster suite |
-| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | 6 base tasks + `xdma_softmax_simd_2cluster` |
+| `tapeout_1c/`     | `hemaia_tapeout_1c.hjson`      | 1x `snax_versacore_to_cluster`         | every task valid for the cfg |
+| `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | the `tapeout_1c` tasks + the five `simd_*_1cluster` tasks |
+| `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | every 2-cluster task valid for the cfg |
+| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | the `tapeout_2c` tasks + further 2-cluster tasks, including `simd_softmax_2cluster` |
 
     cd ci/local_ci/tapeout_2c && python3 run_local_ci.py -j 8
 
@@ -204,13 +189,15 @@ python3 test/0_start_single_chiplet_sim.py \
 ```
 
 **2. Editing the defaults.** The defaults live as constants at the top of each
-entrypoint and feed `parse_workload_args` → `HeMAiASimRunner`:
+entrypoint and feed `parse_workload_args` → `HeMAiASimRunner`. The block below shows
+`0_start_single_chiplet_sim.py`; flows `1` and `2` default to `offload_bingo_hw` /
+`multi_chip` / `gemm_stacked_1cluster` / `snax-bingo-offload`:
 
 ```python
 HOST_APP_TYPE     = "offload_legacy"   # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
 CHIP_TYPE         = "single_chip"       # or "multi_chip"
 WORKLOAD          = "None"
-DEV_APP           = "snax-versacore-matmul-profile"
+DEV_APP           = "versacore-matmul-profile-1cluster-4chip"
 ENGINE            = "vsim"              # vsim | vcs | vlt
 SIM_WITH_WAVEFORM = 1                   # 0 | 1
 ```
@@ -245,7 +232,7 @@ manually cleaning the workspace in between.
 ## Iterating on SW only
 
 If a run fails inside the device app and you only need to tweak SW, you
-can skip steps 0–2 and rebuild apps in place:
+can skip steps 1–2 and rebuild apps in place:
 
 ```bash
 # 1. Edit the SW source.
@@ -291,7 +278,7 @@ FA), `llm_layer/` (a whole layer), `misc/`, and `common/` (hsweep, the watchdog,
   `ara_<kernel>` app (each a self-contained `src/main.c`; test data generated by
   `util/sim/ara/ara_lib.py`). Run via `make sweep-ara`.
 * `sweep/unit_test/gemm` — the VersaCore GEMM precision sweep (`run_gemm_sweep.py`,
-  `task_gemm.yaml` + `gather_gemm_luts.py` / `emit_gemm_lut.py`). One task per
+  `task_gemm.yaml` + `gather_gemm_luts.py`). One task per
   precision — the precision is baked into the binary, so it cannot be looped
   inside one sim, but the (M,K,N,array_shape) grid can. Run it directly:
   `make sweep-gemm` (or `cd sweep/unit_test/gemm && python3 run_gemm_sweep.py -j <JOBS>`).

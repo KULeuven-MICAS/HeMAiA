@@ -6,7 +6,7 @@
 # stages.sh <stage> [bound us]: one FFN prefill variant on the standing FGP simulator, ONE simulation at a
 # time, with its watchdog and hang guard.
 #   stage   full / poc = workloads/ffn/dsv2_l0_prefill{,_tiny}/all, the single-pass mapping at full size / on
-#           3,072 intermediate columns; bench_paired = dsv2_l0_prefill_tiny/gemm_bench_paired, GEMM shapes alone
+#           3,264 intermediate columns; bench_paired = dsv2_l0_prefill_tiny/gemm_bench_paired, GEMM shapes alone
 #           on one cluster (INT4 B in the B-layout and the paired layout, and INT8 B)
 # What it does: refuses to start while another simulator of this user runs; launches the run through
 # common/launch.sh (the runner's event log); arms common/sim_watchdog.py with the ffn_prefill profile (it

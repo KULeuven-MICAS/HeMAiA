@@ -69,8 +69,7 @@ runs:
     WORKLOAD: xdma_elementwise_add_1cluster
     DEV_APP: snax-bingo-offload
 
-# The fused SIMD kernels (softmax / rmsnorm / rope / silu / swiglu) used to live here,
-# back when the operator chain hung off the xDMA's reader-extension socket. On
-# snax_split_cluster the SIMD block is its own hart with its own CSR bank and its own
-# BINGO_TRACE_SIMD_* markers, so those workloads moved to
-# target/sim/automation/sweep/unit_test/simd/task_simd.yaml.
+# The fused SIMD kernels (softmax / rmsnorm / rope / silu / swiglu) are in
+# target/sim/automation/sweep/unit_test/simd/task_simd.yaml: on snax_split_cluster the SIMD
+# block is its own hart with its own CSR bank and its own BINGO_TRACE_SIMD_* markers, not
+# the xDMA's reader-extension socket.

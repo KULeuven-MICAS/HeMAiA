@@ -109,7 +109,7 @@ normalised output.
 The same layer as a prefill over the 8K cache (`workloads/fa/common/fa_prefill_mc.py` generates it): head parallel
 (chip = head, cluster = half of a chunk's tokens), K/V tiles of 256 keys. The ladder
 `dsv2_l1_prefill/{base,bcast,bcast_reduce,all}` is the design at 4 chunks of 64 tokens; it has not run at the real
-size (a 256-token image exceeds the 16-bit task id). What runs: `dsv2_l1_prefill/v5` (one 128-token chunk over all
+size. What runs: `dsv2_l1_prefill/v5` (one 128-token chunk over all
 8,192 keys, y byte for byte, 1,542.4 us = 78.7 % MAC) and `v6` (+ a gather per W_O block, not yet run); the PoC
 `dsv2_l1_prefill_tiny/{all, v17, v18, v19}` over the first 1,024 keys. Every run with its finding is in
 `results/prefill_stages.md`; the FA Prefill Tracker artifact has the figures.

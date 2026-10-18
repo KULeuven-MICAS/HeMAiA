@@ -1,7 +1,7 @@
 # L2 MoE: DeepSeek-V2-Lite's layer-1 MoE on 16 compute + 4 memory chiplets, with an ablation
 
 One button: `./run.sh all` runs every variant (the weights are `sweep/common/weights`' cache).
-- `./run.sh run dsv2_l1/full dsv2_l1/base` runs a subset.
+- `./run.sh run dsv2_l1/all dsv2_l1/base` runs a subset.
 - `./run.sh parse` re-parses into `results/moe.csv`; `../ffn/plot_l2.py` draws the figure.
 
 ## Question

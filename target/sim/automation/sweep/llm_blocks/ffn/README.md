@@ -151,3 +151,23 @@ Figure: `results/ffn_ablation.pdf` (`plot_l2.py`, all three workloads).
   - `common/ffn_data.py`: weights, pack, scales, golden.
   - `common/ffn.mk`: the build.
   - `dsv2_l0/<variant>/params.hjson`: one directory per variant.
+  - `common/ffn_prefill_mc.py`, `common/chiplet_mc.py`, `common/gemm_bench_mc.py`: the prefill driver, the
+    multi-chiplet base it shares with MoE and FA, and the GEMM bench driver.
+  - `dsv2_l0_prefill/<variant>/`: the 128-token prefill ladder (`base`, `bcast`, `bcast_reduce`, `all`).
+  - `dsv2_l0_prefill_tiny/<variant>/`: reduced-size prefill (`all`, `all_fi`, `gemm_bench_paired`).
+
+**Prefill** (the workloads above; their README is in the workload directory):
+- `stages.sh <stage>`: one prefill variant on the standing FGP simulator, one simulation at a time, with its
+  watchdog and `trim_live.py` (`full`: `dsv2_l0_prefill/all`; `poc`: `dsv2_l0_prefill_tiny/all`;
+  `bench_paired`: `dsv2_l0_prefill_tiny/gemm_bench_paired`).
+- `parse_pf.py`: the prefill runs -> `results/pf.csv` and `results/pf_summary.json`.
+- `plot_pf.py`: the ladder figure, `figs/pf_ladder.{png,pdf}`.
+- `estimate_pf.py`: the ladder estimated from the spans measured in its runs.
+- `pf_status.sh`: one status line per prefill run.
+- `trim_live.py`, `trim_traces.py`: keep a running simulation inside the disk quota (take every task's span
+  into `tasks.csv`, then truncate the traces).
+- `tools/`: `gen_one.sh` and `gen_check.sh` (the generator alone), `stage_tick.sh` and `multi_tick.sh` (one
+  waiter over stage runs), `stop_all.sh` (stop the helpers and the simulator of the stage runs),
+  `bench_report.py` (the GEMM bench's shapes), `sp_report.py` (where the time of a prefill run went),
+  `replay_pf.py` (replay the task graph with measured durations), `inflight.py` and `ready_not_run.py`
+  (which tasks of a live run are running, waiting or ready).

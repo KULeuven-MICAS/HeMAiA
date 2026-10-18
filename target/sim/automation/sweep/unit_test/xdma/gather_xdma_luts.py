@@ -100,9 +100,9 @@ OP_SPEC = {
         "xdma_elementwise_add", "__snax_bingo_kernel_xdma_elementwise_add",
         "linear", ["n"], 1,
         lambda c, m: {"n": c["per_op"]}),
-    # layout conversions. ONE DEVICE SYMBOL for all six directions -- the pair of layouts
-    # is an argument now -- so the symbol no longer separates them. It does not have to:
-    # each direction has its OWN WORKLOAD, and a workload's trace carries only its own.
+    # layout conversions. One device symbol (__snax_bingo_kernel_xdma_layout_convert) serves
+    # all six directions, so the symbol does not separate them. It does not have to: each
+    # direction has its OWN WORKLOAD, and a workload's trace carries only its own.
     "xdma_row_to_a_1cluster": (
         "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_a),

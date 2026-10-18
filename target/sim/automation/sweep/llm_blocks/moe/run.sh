@@ -10,7 +10,7 @@
 #                                    parse + prune for each
 #   ./run.sh parse [tag ...]         verdict, parse, prune
 #   ./run.sh all                     run
-# A variant is its path under workloads/moe/ (dsv2_l1/full, ...); its switches are its
+# A variant is its path under workloads/moe/ (dsv2_l1/all, ...); its switches are its
 # params.hjson. Runs land in runs/l2m_<variant with / as _>. The weights are sweep/common/weights' cache
 # (DeepSeek-V2-Lite layer 1).
 set -u

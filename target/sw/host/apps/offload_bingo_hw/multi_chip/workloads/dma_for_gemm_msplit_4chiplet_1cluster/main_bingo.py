@@ -245,9 +245,8 @@ def create_dfg(params, mem_handles, platform, eval_case):
         is_host_as_acc=True,
         chiplet_ids=platform["chiplet_ids"],
     )
-    # From the generated role map, not a constant. Core 1 was the DM core on the two-core
-    # cluster; on snax_split_cluster it is the SIMD core, and a node on the wrong hart does
-    # not fault -- it programs THAT hart's accelerator at the same CSR offsets.
+    # From the generated role map, not a constant: a node on the wrong hart does not
+    # fault -- it programs THAT hart's accelerator at the same CSR offsets.
     dma_core_id = _ROLES["dm"]
     xdma_core_id = _ROLES["xdma"]
     host_core_id = 2  # Core 2 for host-side checks
@@ -797,7 +796,7 @@ def create_dfg(params, mem_handles, platform, eval_case):
 
         # firstly load b then load a.
         bingo_dfg.add_edge(node_chiplet_00_load_B, node_chiplet_00_load_A1)
-        # then broadcast b after load a. to check if the idma and xdma can use the full axi bw (r/w channel)
+        # then broadcast b (after load b; it overlaps the load of a) to check if the idma and xdma can use the full axi bw (r/w channel)
         bingo_dfg.add_edge(node_chiplet_00_load_B, node_chiplet_00_broadcast_B)
         # check result
         bingo_dfg.add_edge(node_chiplet_00_load_A1, node_chiplet_00_check_A1)

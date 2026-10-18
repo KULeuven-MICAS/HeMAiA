@@ -2,24 +2,24 @@
 # Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-"""estimate_prefill.py: the MAC utilisation of the FA prefill (T = 256) ladder, estimated before the
-generator exists. NOTHING HERE IS MEASURED ON THE PREFILL: every figure it prints is an estimate, and the
+"""estimate_prefill.py: the MAC utilisation of the FA prefill (T = 256) ladder, estimated.
+NOTHING HERE IS MEASURED ON THE PREFILL: every figure it prints is an estimate, and the
 plan page shows measured cells as TBD until a run fills them.
 
 The workload (workloads/fa/common/fa_prefill_mc.py): DeepSeek-V2-Lite layer 1's MLA attention for T = 256
 tokens over the 8,192-token latent cache, head parallel (chip k = head k, cluster = token half), in chunks of
 C tokens (default 64 = 4 chunks), every chunk sweeping the whole cache in tiles of BC keys with the
 cluster's C / 2 rows as C / 32 query tiles of 16 (the SIMD beat). MAC utilisation is the plan page's:
-useful MACs / (window x 32 clusters x 1,024 MAC a cycle x clock); the FFN's 82.0 % is this quantity.
+useful MACs / (window x 32 clusters x 1,024 MAC a cycle x clock); the FFN's MAC utilisation is this quantity.
 
 The model, per chunk and cluster, is a max over three engines per K/V tile (the GEMM core, the SIMD core,
 the DM core's iDMA), plus the chunk's projections, a seam, and the arm's exchanges. Its inputs, set below:
 
-  taken from earlier runs (the value sits beside its name, the run in the comment there)
+  calibration constants (the value sits beside its name, its source in the comment there)
   CLK_NS, CPP        the cluster clock and the INT8 x INT8 cycles a pass
   SSW_US             a GEMM task's software set-up before the array starts
   FA_US              the array's own fixed cost a task
-  BLK_QK/BLK_PV      today's blocking gemm_fa_qk / gemm_fa_pv task time on the decode run
+  BLK_QK/BLK_PV      the blocking gemm_fa_qk / gemm_fa_pv task time on the decode run
   SM64_US            the FA softmax on a 64-key tile, 16 lanes
   DMA_GBPS           iDMA L3 -> L1
   LINK_GBPS          one D2D push
@@ -53,7 +53,7 @@ CACHE_B = KEYS * (D_QK + D_V)                   # K rows + V columns, INT8: 8.5 
 WEIGHT_B = HID * Q_HEAD + NOPE * D_V + D_V * NOPE + NOPE * HID   # one head: W_q, W_UK, W_UV, W_O
 CLUSTERS, MAC_CC, BR = 32, 1024, 16
 
-# ---- measured ---------------------------------------------------------------------------------------
+# ---- calibration constants --------------------------------------------------------------------------
 CLK_NS = 2.002
 PEAK_MAC_US = CLUSTERS * MAC_CC / (CLK_NS * 1e-3)
 BLK_QK_US, BLK_PV_US, BLK_QK_PASSES, BLK_PV_PASSES = 2.797, 2.967, 576, 512
@@ -75,11 +75,11 @@ class Scn:
     chunk: int = 64                  # tokens a chunk; each cluster takes chunk / 2 rows
     bc: int = 256                    # keys a K/V tile
     gemm_async: bool = True          # FA GEMMs as start / wait pairs (the next task's set-up under this one)
-    cpp: float = 1.0                 # cycles a pass: INT8 x INT8 measured 1.000
+    cpp: float = 1.0                 # cycles a pass
     fa_us: float = 0.35              # array fixed cost a task
     ssw_us: float = 2.55             # software set-up a task
-    blk_us: float = 1.8              # blocking task overhead: the decode run's 2.797 - 576 passes, 2.967 - 512
-    sm_scale: float = 1.0            # the softmax time vs 1.654 us a 64-key tile, linear in keys
+    blk_us: float = 1.8              # blocking task overhead, us
+    sm_scale: float = 1.0            # the softmax time vs SM64_US a 64-key tile, linear in keys
     dma_gbps: float = 23.0
     link_gbps: float = 25.0
 

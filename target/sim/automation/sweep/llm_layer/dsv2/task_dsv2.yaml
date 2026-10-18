@@ -1,5 +1,5 @@
 # DeepSeek-V2-Lite layer 1 on the two-chiplet platform: the full layer (every stage, 1-8), one
-# token, INT4, its tuned params -- about 45 minutes of simulation. Every check byte-exact
+# token, INT4, its tuned params. Every check byte-exact
 # against the snax golden. Stage by stage: -f task_dsv2_stages.yaml.
 #
 #     python3 run_dsv2_sweep.py [--sw-only]

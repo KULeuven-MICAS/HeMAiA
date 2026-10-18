@@ -6,8 +6,7 @@
 # stage_tick.sh <tag> [seconds]: ONE waiter on a stage run. Returns after <seconds> (default 3600) with a short
 # status, or at once on an EVENT: a watchdog stop or warning, a failed check, an assertion, an OOM, the run ending,
 # or STALE. STALE = the run's events file has not changed for 25 min while a simulator runs: the watchdog writes a
-# HEARTBEAT every ~10 min, so silence means the WATCHDOG itself died (the failure that went unseen for hours;
-# bring it back with common/watchdog.sh).
+# HEARTBEAT every ~10 min, so silence means the WATCHDOG itself died (bring it back with common/watchdog.sh).
 # Arm one waiter at a time (check `ps -u $USER -o pid=,args= | grep stage_tick` first), re-arm it only after it
 # returned, and do not report "still healthy" to the user between events.
 S=$(cd "$(dirname "$0")/.." && pwd); R=$S/runs

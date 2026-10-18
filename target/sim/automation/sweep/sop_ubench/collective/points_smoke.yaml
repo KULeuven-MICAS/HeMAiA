@@ -1,5 +1,5 @@
-cfg: target/rtl/cfg/hemaia_16chiplet_split.hjson
+cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
 memchip: true
 timeout_h: 2
 points:
-  - {name: reduce_smoke, host_app_type: offload_bingo_hw, chip_type: multi_chip, workload: collective/reduce/ew_f16, dev_app: snax-bingo-offload}
+  - {name: reduce_smoke, host_app_type: offload_legacy, chip_type: multi_chip, workload: None, dev_app: snax-coll-reduce}
