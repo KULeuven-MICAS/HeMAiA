@@ -29,11 +29,11 @@ runner's build and simulation steps and adds what a sweep needs around them:
 
 A points file is YAML:
 
-    cfg: target/rtl/cfg/hemaia_16chiplet_split.hjson
+    cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
     fgp_threads: 8          # optional: VCS FGP worker threads a simulation (N + 1 cores)
     points:
-      - {name: reduce_p16, host_app_type: offload_bingo_hw, chip_type: multi_chip,
-         workload: collective/reduce, dev_app: snax-bingo-offload}
+      - {name: reduce, host_app_type: offload_legacy, chip_type: multi_chip,
+         workload: None, dev_app: snax-coll-reduce}
 """
 
 import argparse
@@ -52,15 +52,42 @@ from pathlib import Path
 
 import yaml
 
-MAIN_TREE = Path("/users/micas/fkong/no_backup/HeMAiA")
-SNAX_TREE = Path("/users/micas/fkong/no_backup/snax_cluster")
-SNAX_LOCK = SNAX_TREE / ".hsweep_chisel.lock"
 STAMP = "target/sim/bin/.hsweep_stamp.json"
 SIM_SLOTS = int(os.environ.get("SIM_SLOTS", "3"))
 SLOT_LOCK = Path(__file__).resolve().parent / ".sim_slots.lock"
 # simulators of this session: their binaries sit in task dirs under these roots
 MINE = ("/target/sim/automation/sweep/",
         "/085aec8d-86ae-4bc5-9d98-708e5da2403c/scratchpad/")
+
+
+def repo_root() -> Path:
+    """The HeMAiA checkout this file sits in: the nearest parent holding Bender.yml."""
+    for p in Path(__file__).resolve().parents:
+        if (p / "Bender.yml").exists():
+            return p
+    sys.exit(f"[hsweep] no Bender.yml above {__file__}: cannot find the repo root; pass --tree")
+
+
+def snax_root(tree: Path) -> Path:
+    """The snax (snitch_cluster) checkout `tree` builds against: its bender checkout
+    (deps/snitch_cluster), else the path Bender.local overrides snitch_cluster to."""
+    dep = tree / "deps" / "snitch_cluster"
+    if dep.exists():
+        return dep.resolve()
+    local = tree / "Bender.local"
+    if local.exists():
+        override = (((yaml.safe_load(local.read_text()) or {}).get("overrides") or {})
+                    .get("snitch_cluster") or {})
+        if override.get("path"):
+            return (tree / override["path"]).resolve()
+    sys.exit(f"[hsweep] {tree} has no deps/snitch_cluster and no snitch_cluster path override "
+             f"in Bender.local: cannot find its snax checkout")
+
+
+def snax_lock(tree: Path) -> Path:
+    """The lock on every Chisel generation in `tree`'s snax checkout. It lives in the checkout
+    itself, so the trees that build against one shared checkout share one lock."""
+    return snax_root(tree) / ".hsweep_chisel.lock"
 
 
 @contextmanager
@@ -87,10 +114,7 @@ def cfg_sha(tree: Path, cfg: str) -> str:
 
 
 def snax_head(tree: Path) -> str:
-    # the snax the tree builds: its bender checkout (deps/snitch_cluster), or the shared clone
-    # when Bender.local overrides snitch_cluster to it
-    snax = tree / "deps" / "snitch_cluster"
-    snax = snax.resolve() if snax.exists() else SNAX_TREE
+    snax = snax_root(tree)
     r = subprocess.run(["git", "-C", str(snax), "rev-parse", "--short", "HEAD"],
                        capture_output=True, text=True)
     dirty = subprocess.run(["git", "-C", str(snax), "status", "--porcelain", "-uno"],
@@ -121,7 +145,7 @@ def cmd_build(a):
         # RTL first. Its Chisel generation writes into the shared snax tree, and the VCS
         # compile reads what it wrote, so the snax lock is held across both: another tree's
         # build regenerating those files mid-compile would hand this one a torn copy
-        with flocked(SNAX_LOCK):
+        with flocked(snax_lock(tree)):
             r.build_hw_sw()
             print(f"[hsweep build] rtl+bootrom done after {time.time() - t0:.0f} s", flush=True)
             r.prepare_simulation_inputs(["vcs"])
@@ -182,7 +206,7 @@ def cmd_run(a):
         # the apps only read the shared snax tree's generated headers and runtime, so app
         # builds in different trees may overlap; what writes there (sbt, an RTL build) takes
         # it exclusively and waits for every reader
-        with flocked(tree / ".hsweep_build.lock"), flocked(SNAX_LOCK, shared=True):
+        with flocked(tree / ".hsweep_build.lock"), flocked(snax_lock(tree), shared=True):
             info = build(t)
             # the generator's own tables (*.csv next to the workload: phase labels, point
             # metadata) belong to THIS build: a later regeneration must not relabel this run
@@ -288,10 +312,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build"); b.add_argument("--cfg", required=True)
-    b.add_argument("--tree", default=str(MAIN_TREE)); b.set_defaults(fn=cmd_build)
+    b.add_argument("--tree", default=str(repo_root())); b.set_defaults(fn=cmd_build)
     r = sub.add_parser("run"); r.add_argument("--exp", required=True)
     r.add_argument("--tag", required=True); r.add_argument("--points", required=True)
-    r.add_argument("--tree", default=str(MAIN_TREE)); r.add_argument("--out", default=None)
+    r.add_argument("--tree", default=str(repo_root())); r.add_argument("--out", default=None)
     r.add_argument("--jobs", type=int, default=1)
     r.add_argument("--fgp", dest="fgp_threads", type=int, nargs="?", const=8, default=None,
                    metavar="N", help="VCS Fine-Grained Parallelism, N worker threads a "
