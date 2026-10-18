@@ -216,6 +216,14 @@ def _real_predecessors(dfg):
     return out
 
 
+_SIM_ONE = None
+
+
+def _sim_one(scenario, seed):
+    """simulate_for_hangs' run of one seed in a forked worker (the closure is inherited, not pickled)."""
+    return _SIM_ONE(scenario, seed)
+
+
 def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
                        h2h_latency=10, h2h_latency_jitter=40,
                        max_cycles=4_000_000, verbose=True):
@@ -232,10 +240,9 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
     n_real = sum(1 for n in order if n.node_type != "dummy")
 
     scenarios = _cerf_scenarios(dfg)
-    for scenario, seed in [(sc, sd) for sc in scenarios for sd in range(seeds)]:
-        rng = random.Random(1000 + seed)
-        fixed = {n.node_id: (rng.randint(*work_delay_range)
-                             if n.node_type != "dummy" else 0) for n in order}
+    names = {n.node_id: n.node_name for n in order}
+
+    def config(seed):
         # ADAPT TO THE MODEL WE ACTUALLY GOT. bender hands us a PINNED checkout,
         # which may predate fields this bridge would like to set. Passing an
         # unknown keyword would crash the firmware build over a version skew, so
@@ -257,16 +264,14 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
             cerf_scope="carried",     # what the RTL does with the carried predicate
         )
         supported = {f.name for f in dataclasses.fields(SimConfig)}
-        dropped = sorted(set(want) - supported)
-        cfg = SimConfig(**{k: v for k, v in want.items() if k in supported})
-        if dropped and seed == 0 and scenario == scenarios[0] and verbose:
-            print(f"  NOTE: this model predates {', '.join(dropped)}; "
-                  f"those aspects are NOT checked.")
-            if "cerf_scope" in dropped:
-                print("  NOTE: without cerf_scope the model applies CERF writes to "
-                      "every chiplet instantly, which the hardware does not do -- "
-                      "cross-die conditional execution is NOT validated here.")
-        sim = BingoSimulator(cfg)
+        return SimConfig(**{k: v for k, v in want.items() if k in supported}), sorted(set(want) - supported)
+
+    def one(scenario, seed):
+        """One seed of one routing scenario: (None, the report line) or (the error, None)."""
+        rng = random.Random(1000 + seed)
+        fixed = {n.node_id: (rng.randint(*work_delay_range)
+                             if n.node_type != "dummy" else 0) for n in order}
+        sim = BingoSimulator(config(seed)[0])
         with contextlib.redirect_stdout(io.StringIO()):
             sim.load_tasks(_descriptors(dfg, TaskDescriptor, geo,
                                         lambda n: fixed[n.node_id],
@@ -275,19 +280,15 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
 
         if res.deadlock_detected:
             missing = sorted(sim._all_task_ids - res.completed_task_ids)
-            names = {n.node_id: n.node_name for n in order}
-            raise ValueError(
-                f"sim hang check: the compiled graph DEADLOCKED on the cycle "
-                f"model (seed {seed}, routing scenario '{scenario}'). "
-                f"{len(missing)} task(s) never completed, first few: "
-                + ", ".join(f"{i}:{names.get(i, '?')}" for i in missing[:6]))
+            return (f"sim hang check: the compiled graph DEADLOCKED on the cycle "
+                    f"model (seed {seed}, routing scenario '{scenario}'). "
+                    f"{len(missing)} task(s) never completed, first few: "
+                    + ", ".join(f"{i}:{names.get(i, '?')}" for i in missing[:6])), None
         missing = sim._all_task_ids - res.completed_task_ids
         if missing:
-            names = {n.node_id: n.node_name for n in order}
-            raise ValueError(
-                f"sim hang check: {len(missing)} task(s) never completed "
-                f"(seed {seed}, routing scenario '{scenario}'): "
-                + ", ".join(f"{i}:{names.get(i, '?')}" for i in sorted(missing)[:6]))
+            return (f"sim hang check: {len(missing)} task(s) never completed "
+                    f"(seed {seed}, routing scenario '{scenario}'): "
+                    + ", ".join(f"{i}:{names.get(i, '?')}" for i in sorted(missing)[:6])), None
 
         disp, done = {}, {}
         for e in res.trace.events:
@@ -295,20 +296,48 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
                 disp.setdefault(e.task_id, e.time)
             elif e.event_type == "TASK_DONE":
                 done.setdefault(e.task_id, e.time)
-        names = {n.node_id: n.node_name for n in order}
         for vid, pids in preds.items():
             if vid not in disp:
                 continue
             for pid in pids:
                 if pid in done and disp[vid] < done[pid]:
-                    raise ValueError(
-                        f"sim hang check: '{names.get(vid)}' dispatched at "
-                        f"{disp[vid]} before its producer '{names.get(pid)}' "
-                        f"finished at {done[pid]} (seed {seed}). The lowered "
-                        f"graph does not enforce its own dependencies.")
+                    return (f"sim hang check: '{names.get(vid)}' dispatched at "
+                            f"{disp[vid]} before its producer '{names.get(pid)}' "
+                            f"finished at {done[pid]} (seed {seed}). The lowered "
+                            f"graph does not enforce its own dependencies."), None
+        return None, (f"  sim seed {seed}: {res.total_latency} cycles, "
+                      f"{len(res.completed_task_ids)}/{n_real} tasks, deps OK")
+
+    dropped = config(0)[1]
+    if dropped and verbose:
+        print(f"  NOTE: this model predates {', '.join(dropped)}; "
+              f"those aspects are NOT checked.")
+        if "cerf_scope" in dropped:
+            print("  NOTE: without cerf_scope the model applies CERF writes to "
+                  "every chiplet instantly, which the hardware does not do -- "
+                  "cross-die conditional execution is NOT validated here.")
+    # The runs are independent: each in its own forked process (BINGO_SIM_CHECK_JOBS caps how many; 1 runs
+    # them here, one after the other). The results are reported in order and the first failure raised, as
+    # a sequential check would.
+    runs = [(sc, sd) for sc in scenarios for sd in range(seeds)]
+    jobs = min(len(runs), int(os.environ.get("BINGO_SIM_CHECK_JOBS", os.cpu_count() or 1)))
+    if jobs > 1:
+        import multiprocessing
+        global _SIM_ONE
+        _SIM_ONE = one
+        with multiprocessing.get_context("fork").Pool(jobs) as pool:
+            results = pool.starmap(_sim_one, runs)
+    else:
+        results = []
+        for run in runs:
+            results.append(one(*run))
+            if results[-1][0]:
+                break
+    for err, line in results:
+        if err:
+            raise ValueError(err)
         if verbose:
-            print(f"  sim seed {seed}: {res.total_latency} cycles, "
-                  f"{len(res.completed_task_ids)}/{n_real} tasks, deps OK")
+            print(line)
 
     return {"model": root, "seeds": seeds, "descriptors": len(order),
             "real_tasks": n_real, "dep_edges": sum(len(v) for v in preds.values()),

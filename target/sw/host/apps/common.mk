@@ -478,9 +478,27 @@ ifneq ($(wildcard $(DEP)),)
 -include $(DEP)
 endif
 
+# Per-chiplet host images (bingo workloads with params per_chip_image): the generator writes per_chip_ids
+# beside the offload header, and every host ELF of the app is then built as one image per chiplet --
+# <ELF stem>_chip<id>.elf/.bin, each holding the shared code and data and that chiplet's own tables -- by
+# per_chip_image.py, with the same host.ld (runtime/host.ld.tpl) as every other host image. The ELF itself is
+# the first chiplet's image (the device origin, the dumps); target/sim/apps stages every chiplet's own .bin.
+# The list is read by the sub-makes of partial-build and finalize-build, which run after the header (and
+# the list) are generated.
+PER_CHIP_IDS  := $(if $(OFFLOAD_H),$(wildcard $(dir $(OFFLOAD_H))per_chip_ids))
+PER_CHIP_TOOL  = $(abspath $(HOST_DIR)/apps/per_chip_image.py)
+PER_CHIP_IMAGE = python3 $(PER_CHIP_TOOL) --ids $(PER_CHIP_IDS) \
+                 --cc "$(RISCV_CC)" --cflags "$(RISCV_CFLAGS)" --ldflags "$(RISCV_LDFLAGS)" \
+                 --objcopy "$(RISCV_OBJCOPY)"
+
 # Partially linked object
+ifeq ($(PER_CHIP_IDS),)
 $(PARTIAL_ELF): $(DEP) $(LD_SRCS) | $(BUILDDIR)
 	$(RISCV_CC) $(RISCV_CFLAGS) $(SRCS) $(RISCV_LDFLAGS)  -o $@
+else
+$(PARTIAL_ELF): $(DEP) $(LD_SRCS) $(PER_CHIP_TOOL) $(PER_CHIP_IDS) | $(BUILDDIR)
+	$(PER_CHIP_IMAGE) --out $@ $(SRCS)
+endif
 
 $(PARTIAL_DUMP): $(PARTIAL_ELF) | $(BUILDDIR)
 	$(RISCV_OBJDUMP) -D $< > $@
@@ -488,10 +506,19 @@ $(PARTIAL_DUMP): $(PARTIAL_ELF) | $(BUILDDIR)
 ifneq (,$(filter $(INCL_DEVICE_BINARY),True true TRUE 1))
 # only the incldevicebinary option is enabled, we build the final host app with device binaries
 
+ifeq ($(PER_CHIP_IDS),)
+# (a per-chiplet .bin left by an earlier per-chiplet build of this app is removed: staging would load it)
 define elf_rule_template =
     $$(BUILDDIR)/$$(APP)_$(1).elf: $$(DEVICE_DIR)/apps/snax/$(1)/build/$$(APP)_$(1).bin $$(DEP) $$(LD_SRCS) | $$(BUILDDIR)
+		rm -f $$(BUILDDIR)/$$(APP)_$(1)_chip*.bin
 		$$(RISCV_CC) $$(RISCV_CFLAGS) $$(SRCS) -DDEVICEBIN=\"$$<\" $$(RISCV_LDFLAGS)  -o $$@
 endef
+else
+define elf_rule_template =
+    $$(BUILDDIR)/$$(APP)_$(1).elf: $$(DEVICE_DIR)/apps/snax/$(1)/build/$$(APP)_$(1).bin $$(DEP) $$(LD_SRCS) $$(PER_CHIP_TOOL) $$(PER_CHIP_IDS) | $$(BUILDDIR)
+		$$(PER_CHIP_IMAGE) --define 'DEVICEBIN="$$<"' --bin --out $$@ $$(SRCS)
+endef
+endif
 $(foreach f,$(DEVICE_APPS),$(eval $(call elf_rule_template,$(f))))
 
 $(BUILDDIR)/$(APP)_%.dump: $(BUILDDIR)/$(APP)_%.elf | $(BUILDDIR)

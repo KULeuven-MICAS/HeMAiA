@@ -1,5 +1,6 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+import os
 import re
 
 from bingo_mem_handle import BingoMemAlloc
@@ -1116,7 +1117,10 @@ class BingoDFGEmitMixin:
             for node, struct_t, _ in per_cl[cl]:
                 f.write(f"            {struct_t} a{node.node_id} __attribute__((aligned(64)));\n")
             f.write(f"        }} {img_t};\n")
-            f.write(f"        static {img_t} {img_var} __attribute__((aligned(64))) = {{\n")
+            # per_chip_image: the image is the chiplet's own writable data, so it leaves the shared data region
+            # (runtime/host.ld.tpl keeps that region at one address in every chiplet's image)
+            sec = ', section(".bingo_chip.data")' if getattr(self, "per_chip_image", False) else ""
+            f.write(f"        static {img_t} {img_var} __attribute__((aligned(64){sec})) = {{\n")
             l1_at = f"{l1_var}_at" if at_on else None
             for node, struct_t, fields in per_cl[cl]:
                 const, runtime = [], {}
@@ -1216,6 +1220,13 @@ class BingoDFGEmitMixin:
         # header behind, and the next build reports a C syntax error instead of the
         # actual problem.
         _validate_args_structs(sorted_nodes)
+        split = bool(getattr(self, "split_chip_functions", False))
+        # per_chip_image: each chiplet's block is compiled into a host image of its own (-DBINGO_ONLY_CHIP=<id>),
+        # so a chiplet's L3 holds its own tables only; target/sw/host/apps/per_chip_image.py builds the images from
+        # the chiplet list written next to the header and checks that every shared symbol has one address
+        per_chip = bool(getattr(self, "per_chip_image", False))
+        if per_chip and not split:
+            raise ValueError("per_chip_image needs split_chip_functions (one function per chiplet)")
 
         # 2. Start emitting C code
         with open(output_path, "w") as f:
@@ -1241,7 +1252,6 @@ class BingoDFGEmitMixin:
             # chiplet's block is its own function and kernel_execution only dispatches: the
             # compiler then optimises one chiplet's block at a time, where one function
             # holding every block grows its optimisation passes faster than its length.
-            split = bool(getattr(self, "split_chip_functions", False))
             if not split:
                 f.write("int kernel_execution(){\n")
                 f.write("    check_kernel_tab_ready();\n")
@@ -1251,6 +1261,8 @@ class BingoDFGEmitMixin:
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:
+                if per_chip:
+                    f.write(f"#if defined(BINGO_ONLY_CHIP) && BINGO_ONLY_CHIP == 0x{chiplet_id:02x}\n")
                 if split:
                     f.write(f"static int __attribute__((noinline)) "
                             f"kernel_execution_chip_{chiplet_id:02x}(void) {{\n")
@@ -1287,6 +1299,8 @@ class BingoDFGEmitMixin:
                 if split:
                     f.write("    return 0;\n")
                     f.write("}\n\n")
+                if per_chip:
+                    f.write("#endif\n\n")
 
             if split:
                 f.write("int kernel_execution(){\n")
@@ -1294,10 +1308,30 @@ class BingoDFGEmitMixin:
                 f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
                 f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
                 for chiplet_id in self.chiplet_ids:
+                    if per_chip:
+                        f.write(f"#if defined(BINGO_ONLY_CHIP) && BINGO_ONLY_CHIP == 0x{chiplet_id:02x}\n")
                     f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) "
                             f"return kernel_execution_chip_{chiplet_id:02x}();\n")
-            f.write("    return 0;\n")
+                    if per_chip:
+                        f.write("#endif\n")
+                if per_chip:
+                    # a per-chiplet image on another chiplet (or built without BINGO_ONLY_CHIP) fails at once
+                    f.write("    printf(\"Chip(%x, %x): [Host] this host image does not hold this chiplet's tasks "
+                            "(per-chiplet images, BINGO_ONLY_CHIP)\\r\\n\", get_current_chip_loc_x(), "
+                            "get_current_chip_loc_y());\n")
+                    f.write("    return 3;\n")
+            if not per_chip:
+                f.write("    return 0;\n")
             f.write("}\n")
+
+        # per_chip_image: the chiplets whose images the build makes, beside the header (a stale list from an
+        # earlier per-chiplet build of this workload is removed, so the build goes back to one image)
+        ids_path = os.path.join(os.path.dirname(os.path.abspath(output_path)), "per_chip_ids")
+        if per_chip:
+            with open(ids_path, "w") as idf:
+                idf.write(" ".join(f"0x{c:02x}" for c in self.chiplet_ids) + "\n")
+        elif os.path.exists(ids_path):
+            os.remove(ids_path)
 
         # AUDIT WHAT WAS ACTUALLY WRITTEN. The one failure this catches -- the device-argument
         # bump pointer starting inside the scratchpad slot block -- builds cleanly, passes

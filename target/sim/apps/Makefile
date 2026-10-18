@@ -45,6 +45,9 @@ APP_MEM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool.bin
 # A memory chip's own SRAM image, build/mempool_chip_<x>_<y>.bin (bingo_data_staging.py),
 # which that chip loads instead of mempool/ (load_binary.sv.tpl).
 APP_MEM_CHIPS = $(wildcard $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool_chip_*.bin)
+# A compute chip's own host image, build/<app>_chip<id>.bin (per-chiplet images, params per_chip_image),
+# which that chip loads instead of the shared copy of <app>.bin. Evaluated in the recipe, after the build.
+APP_CHIP_BINS = $(wildcard $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME)_chip*.bin)
 # The memchip HBM image: build/hbm/manifest.txt and the files it lists (see
 # hw/hemaia/hemaia_mem_system/hbm/README.md).
 APP_HBM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/hbm
@@ -79,6 +82,18 @@ apps: $(APP_ELF)
 	cp $(APP_DUMP) $(MKFILE_DIR)
 	python3 bin2hex.py -i $(APP_NAME).bin
 	python3 copy_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
+# Per-chiplet host images (params per_chip_image, target/sw/host/apps/per_chip_image.py): each compute chip
+# loads its own image, <app>_chip<id>.bin, over the copy above (chip 0x<x><y> -> app_chip_<x>_<y>).
+	for img in $(APP_CHIP_BINS); do \
+		name=$$(basename $$img .bin); id=$${name##*_chip}; \
+		dir=app_chip_$$(echo $$id | cut -c1)_$$(echo $$id | cut -c2); \
+		[ -d "$(BIN_DIR)/$$dir" ] || { echo "per-chip image $$name: no $(BIN_DIR)/$$dir"; exit 1; }; \
+		cp -f $$img $(MKFILE_DIR); \
+		python3 bin2hex.py -i $$name.bin; \
+		rm -rf $(BIN_DIR)/$$dir; \
+		cp -r $(MKFILE_DIR)/$$name $(BIN_DIR)/$$dir; \
+		echo "staged $$name into $(BIN_DIR)/$$dir"; \
+	done
 	if [ -f "$(APP_MEM)" ]; then \
 		cp -f "$(APP_MEM)" $(MKFILE_DIR); \
 		python3 bin2hex.py -i mempool.bin; \
