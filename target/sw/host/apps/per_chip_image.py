@@ -161,12 +161,14 @@ def main():
         if vs != v0:
             problems.append(f"chip {c}: varying region at {vs:#x}, chip {first}'s at {v0:#x}")
             continue
-        inside = lambda adr: vs <= adr < vs + size
+        # a .bss symbol at the region's very start is the end of .bss (__bss_end when .bss ends where the varying
+        # region begins), not inside it: it is checked like every other shared symbol
+        inside = lambda adr, t="": vs <= adr < vs + size and not (adr == vs and t in "Bb")
         cdata = {n for n in syms[c] if n.startswith("__bingo_args_image_chip")}
         for n, (adr, t) in syms[c].items():
             if n == "__bingo_var_end":           # where this image's own varying part ends
                 continue
-            if inside(adr):
+            if inside(adr, t):
                 if t in "DdBbGgSs" and n not in cdata:
                     problems.append(f"chip {c}: writable symbol {n} ({t}) is in the varying region")
                 continue
@@ -174,8 +176,8 @@ def main():
             if ref is None or ref[0] != adr:
                 problems.append(f"chip {c}: {n} at {adr:#x}, chip {first}: "
                                 + (f"{ref[0]:#x}" if ref else "absent"))
-        for n, (adr, _) in syms[first].items():
-            if not inside(adr) and n not in syms[c] and n != "__bingo_var_end":
+        for n, (adr, t0) in syms[first].items():
+            if not inside(adr, t0) and n not in syms[c] and n != "__bingo_var_end":
                 problems.append(f"chip {c}: {n} absent (chip {first}: {adr:#x})")
     if problems:
         for p in problems[:20]:
