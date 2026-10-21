@@ -18,14 +18,15 @@
     sram_depth = (
         netlist_sram_bank_depth
         if sim_with_netlist
-        else int(mem_size / 8 / mem_bank)
+        else mem_size // 8 // mem_bank
     )
     sram_width_bits = 64
-    # TSMC's 2048x64 macro uses M8; the other 64-bit macros used by tc_sram
-    # use M4.  The mapped tapeout SRAM is 1024x64 M4.
-    macro_column_count = 8 if sram_depth == 2048 else 4
-    finish_macro_row = (sram_depth - 1) // macro_column_count
-    finish_macro_column = (sram_depth - 1) % macro_column_count
+    # Match tc_sram_tsmc16: concatenate complete macros beyond the compiler limit.
+    max_macro_depth = 8192
+    depth_concatenated = sram_depth > max_macro_depth and sram_depth % max_macro_depth == 0
+    macro_depth = max_macro_depth if depth_concatenated else sram_depth
+    last_macro = (sram_depth - 1) // macro_depth
+    last_macro_word = (sram_depth - 1) % macro_depth
 %>
 
 task automatic check_finish();
@@ -59,27 +60,36 @@ task automatic check_finish();
     cx = compute_chip.coordinate[0]
     cy = compute_chip.coordinate[1]
     if sim_with_netlist:
-        sram_word = (
+        sram_path = (
             "i_dut.i_hemaia_%d_%d.\\i_occamy_chip/i_hemaia_mem_system/i_hemaia_mem "
             ".\\gen_banks_%d__i_data_mem/i_tc_sram/gen_mem_gen_%dx64_u_sram "
-            ".MEMORY[%d][%d][%d-:32]"
-            % (cx, cy, compute_bank_count - 1, sram_depth, finish_macro_row,
-               finish_macro_column, sram_width_bits - 1)
-        )
-    elif sim_with_mem_macro:
-        sram_word = (
-            "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem"
-            ".gen_banks[%d].i_data_mem.i_tc_sram.gen_mem.gen_%dx64.u_sram"
-            ".MEMORY[%d][%d][%d-:32]"
-            % (cx, cy, compute_bank_count - 1, sram_depth, finish_macro_row,
-               finish_macro_column, sram_width_bits - 1)
+            % (cx, cy, compute_bank_count - 1, sram_depth)
         )
     else:
-        sram_word = (
+        sram_path = (
             "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem"
-            ".gen_banks[%d].i_data_mem.i_tc_sram.sram[%d][%d-:32]"
-            % (cx, cy, compute_bank_count - 1, sram_depth - 1, sram_width_bits - 1)
+            ".gen_banks[%d].i_data_mem.i_tc_sram"
+            % (cx, cy, compute_bank_count - 1)
         )
+    if sim_with_netlist or sim_with_mem_macro:
+        if sim_with_netlist:
+            macro_path = sram_path
+        elif depth_concatenated:
+            macro_path = sram_path + f".gen_mem.gen_depth_concat.gen_depth[{last_macro}].u_sram"
+        elif sram_depth in (128, 256, 512, 1024, 2048, 4096, max_macro_depth):
+            macro_path = sram_path + f".gen_mem.gen_{sram_depth}x64.u_sram"
+        else:
+            macro_path = None
+        if macro_path:
+            # Use the last macro's own mux geometry to locate its final logical word.
+            shift = macro_path + ".numCMAddr"
+            sram_word = (f"{macro_path}.MEMORY[{last_macro_word} >> {shift}]"
+                         f"[{last_macro_word} & ((1 << {shift}) - 1)]")
+        else:
+            sram_word = sram_path + f".gen_mem.gen_no_sram_matched.mem_array[{sram_depth - 1}]"
+    else:
+        sram_word = sram_path + f".sram[{sram_depth - 1}]"
+    sram_word += f"[{sram_width_bits - 1}-:32]"
 %>
             chip_status_${cx}_${cy} = ${sram_word};
             if (chip_finish_${cx}_${cy} == 0 &&

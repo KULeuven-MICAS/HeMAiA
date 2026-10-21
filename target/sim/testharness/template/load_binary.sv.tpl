@@ -25,48 +25,94 @@
     sram_depth = (
         netlist_sram_bank_depth
         if sim_with_netlist
-        else int(mem_size / 8 / mem_bank)
+        else mem_size // 8 // mem_bank
     )
     mem_chip_bank_count = 16
+    memory_mode = "netlist" if sim_with_netlist else "macro" if sim_with_mem_macro else "rtl"
+
+    # Match tc_sram_tsmc16: larger 64-bit banks concatenate complete 8192-word macros.
+    # Each entry is (logical offset, depth, physical path, is_macro).
+    def memory_parts(depth, path, mode):
+        if mode == "rtl":
+            return [(0, depth, path + ".sram", False)]
+        if mode == "netlist":
+            return [(0, depth, path, True)]
+        macro_depth = 8192
+        if depth > macro_depth and depth % macro_depth == 0:
+            return [(i * macro_depth, macro_depth,
+                     path + f".gen_mem.gen_depth_concat.gen_depth[{i}].u_sram", True)
+                    for i in range(depth // macro_depth)]
+        if depth in (128, 256, 512, 1024, 2048, 4096, macro_depth):
+            return [(0, depth, path + f".gen_mem.gen_{depth}x64.u_sram", True)]
+        return [(0, depth, path + ".gen_mem.gen_no_sram_matched.mem_array", False)]
 %>
+
+<%def name="deposit_parts(parts, image)">\
+% for offset, depth, path, is_macro in parts:
+    for (int word_index = 0; word_index < ${depth}; word_index++) begin
+%   if is_macro:
+        ${path}.PRELOAD[word_index] = ${image}[${offset} + word_index];
+        ${path}.MEMORY[word_index >> ${path}.numCMAddr]
+            [word_index & ((1 << ${path}.numCMAddr) - 1)] = ${image}[${offset} + word_index];
+%   else:
+        ${path}[word_index] = ${image}[${offset} + word_index];
+%   endif
+    end
+% endfor
+</%def>\
+
+<%def name="clear_parts(parts)">\
+% for offset, depth, path, is_macro in parts:
+    for (int word_index = 0; word_index < ${depth}; word_index++) begin
+%   if is_macro:
+        ${path}.PRELOAD[word_index] = '0;
+        ${path}.MEMORY[word_index >> ${path}.numCMAddr]
+            [word_index & ((1 << ${path}.numCMAddr) - 1)] = '0;
+%   else:
+        ${path}[word_index] = '0;
+%   endif
+    end
+% endfor
+</%def>\
 
 // The memory chip remains a behavioral testbench component in every compute-chip
 // simulation mode.  Always clear every bank first: workloads without a mempool
 // image must not inherit data from a previous reload.  Each memory chip loads its own
 // image, mempool_chip_<x>_<y>/, when the workload staged one for it, and the shared
 // mempool/ otherwise -- so a workload that knows one memory chip loads the same data into
-// all of them, as it always has.  RTL uses tc_sram.sram;
-// macro/netlist simulation selects TSMC tc_sram's gen_no_sram_matched.mem_array
-// because the 64 MiB memory-chip configuration does not match a physical macro.
+// all of them, as it always has. Use the same physical layout as compute-chip
+// banks, including any depth concatenation. Memory-chip hierarchy is unflattened.
 task automatic load_mem_chip;
     $display("-- Loading Bin to Mem Chip @%0g ns ---", $realtime);
     #10ns;
 % for mem_chip_index, mem_chip in enumerate(mem_chips):
 <%
-    mem_chip_depth = int(mem_chip.size / 8 / mem_chip_bank_count)
+    mem_chip_depth = mem_chip.size // 8 // mem_chip_bank_count
     mem_chip_prefix = (
         "i_hemaia_mem_chip_%d_%d.i_hemaia_mem_system.i_hemaia_mem"
         % (mem_chip.coordinate[0], mem_chip.coordinate[1])
     )
-    if sim_with_netlist or sim_with_mem_macro:
-        mem_chip_array = (
-            mem_chip_prefix +
-            ".gen_banks[%d].i_data_mem.i_tc_sram.gen_mem.gen_no_sram_matched.mem_array"
-        )
-    else:
-        mem_chip_array = (
-            mem_chip_prefix + ".gen_banks[%d].i_data_mem.i_tc_sram.sram"
-        )
+    mem_chip_mode = "macro" if sim_with_netlist or sim_with_mem_macro else "rtl"
 %>
 %   for k in range(mem_chip_bank_count):
+<%
+    mem_chip_path = mem_chip_prefix + f".gen_banks[{k}].i_data_mem.i_tc_sram"
+    mem_chip_parts = memory_parts(mem_chip_depth, mem_chip_path, mem_chip_mode)
+%>
     begin : preload_mem_chip_${mem_chip_index}_bank_${k}
         integer mempool_fd;
         integer mempool_word;
         string  mempool_filename;
+%   if mem_chip_parts[0][3]:
+        logic [63:0] mempool_data [0:${mem_chip_depth - 1}];
+<% mempool_array = "mempool_data" %>
+%   else:
+<% mempool_array = mem_chip_parts[0][2] %>
+%   endif
 
         mempool_filename = "mempool_chip_${mem_chip.coordinate[0]}_${mem_chip.coordinate[1]}/bank_${k}.hex";
         for (mempool_word = 0; mempool_word < ${mem_chip_depth}; mempool_word++) begin
-            ${mem_chip_array % k}[mempool_word] = '0;
+            ${mempool_array}[mempool_word] = '0;
         end
 
         mempool_fd = $fopen(mempool_filename, "r");
@@ -77,11 +123,14 @@ task automatic load_mem_chip;
         if (mempool_fd != 0) begin
             $fclose(mempool_fd);
             $readmemh(mempool_filename,
-                ${mem_chip_array % k});
+                ${mempool_array});
             $display("Loaded data from %s into memory-chip (${mem_chip.coordinate[0]}, ${mem_chip.coordinate[1]}) bank ${k}", mempool_filename);
         end else begin
             $display("No %s; memory-chip (${mem_chip.coordinate[0]}, ${mem_chip.coordinate[1]}) bank ${k} remains zero initialized", mempool_filename);
         end
+%   if mem_chip_parts[0][3]:
+${deposit_parts(mem_chip_parts, mempool_array)}\
+%   endif
     end
 %   endfor
 % endfor
@@ -124,35 +173,30 @@ task automatic load_main_mem;
     cx = compute_chip.coordinate[0]
     cy = compute_chip.coordinate[1]
     if sim_with_netlist:
-        macro_path = (
+        sram_path = (
             "i_dut.i_hemaia_%d_%d.\\i_occamy_chip/i_hemaia_mem_system/i_hemaia_mem "
             ".\\gen_banks_%d__i_data_mem/i_tc_sram/gen_mem_gen_%dx64_u_sram "
             % (cx, cy, k, sram_depth)
         )
     else:
-        macro_path = (
+        sram_path = (
             "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem"
-            ".gen_banks[%d].i_data_mem.i_tc_sram.gen_mem.gen_%dx64.u_sram"
-            % (cx, cy, k, sram_depth)
+            ".gen_banks[%d].i_data_mem.i_tc_sram"
+            % (cx, cy, k)
         )
+    bank_parts = memory_parts(sram_depth, sram_path, memory_mode)
 %>
     begin : preload_chip_${cx}_${cy}_bank_${k}
         integer preload_word;
-        integer preload_row;
-        integer preload_column;
+        logic [63:0] preload_data [0:${sram_depth - 1}];
 
-        // Zero PRELOAD so a short hex file also deterministically clears the
-        // unused tail, then reproduce the macro's logical-address mapping.
+        // Load the complete logical bank, then distribute it over its macros.
+        // Clearing first also initializes the unused tail of short hex files.
         for (preload_word = 0; preload_word < ${sram_depth}; preload_word++) begin
-            ${macro_path}.PRELOAD[preload_word] = '0;
+            preload_data[preload_word] = '0;
         end
-        $readmemh("app_chip_${cx}_${cy}/bank_${k}.hex", ${macro_path}.PRELOAD);
-        for (preload_word = 0; preload_word < ${sram_depth}; preload_word++) begin
-            preload_row = preload_word >> ${macro_path}.numCMAddr;
-            preload_column = preload_word & ((1 << ${macro_path}.numCMAddr) - 1);
-            ${macro_path}.MEMORY[preload_row][preload_column] =
-                ${macro_path}.PRELOAD[preload_word];
-        end
+        $readmemh("app_chip_${cx}_${cy}/bank_${k}.hex", preload_data);
+${deposit_parts(bank_parts, "preload_data")}\
         $display("Loaded app_chip_${cx}_${cy}/bank_${k}.hex into compute-chip bank ${k}");
     end
 %     endfor
@@ -168,18 +212,22 @@ task automatic load_main_mem;
 endtask
 
 // Zero every compute chip's narrow SPM (L2) at time zero, before the boot ROM runs: the simulation
-// boot ROM does not clear it (target/rtl/bootrom/bootrom_sim/bootrom.c). With memory macros the
-// narrow SPM matches no macro and is tc_sram's register array; the netlist has no such path.
+// boot ROM does not clear it (target/rtl/bootrom/bootrom_sim/bootrom.c). Clear every
+// physical part of the configured bank. The netlist has no such path.
 task automatic clear_narrow_spm;
 % if sim_with_netlist:
     $warning("clear_narrow_spm: no path to the narrow SPM in the netlist, it starts uncleared");
 % else:
-<%
-    spm_array = "i_tc_sram.gen_mem.gen_no_sram_matched.mem_array" if sim_with_mem_macro else "i_tc_sram.sram"
-%>\
 %   for compute_chip in compute_chips:
-    for (int i = 0; i < $size(i_dut.i_hemaia_${compute_chip.coordinate[0]}_${compute_chip.coordinate[1]}.i_occamy_chip.i_occamy.i_occamy_soc.i_spm_narrow_cut.i_mem.i_mem.${spm_array}); i++)
-        i_dut.i_hemaia_${compute_chip.coordinate[0]}_${compute_chip.coordinate[1]}.i_occamy_chip.i_occamy.i_occamy_soc.i_spm_narrow_cut.i_mem.i_mem.${spm_array}[i] = '0;
+<%
+    narrow_path = (
+        "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_occamy.i_occamy_soc"
+        ".i_spm_narrow_cut.i_mem.i_mem.i_tc_sram"
+        % (compute_chip.coordinate[0], compute_chip.coordinate[1])
+    )
+    narrow_parts = memory_parts(occamy_cfg["spm_narrow"]["length"] // 8, narrow_path, memory_mode)
+%>
+${clear_parts(narrow_parts)}\
 %   endfor
     $display("-- Cleared the narrow SPM of ${len(compute_chips)} compute chip(s) @%0g ns ---", $realtime);
 % endif
