@@ -35,8 +35,8 @@ cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
 memchip: true          # with_macro / with_d2d for cfgs with a memory chiplet
 timeout_h: 3
 points:
-  - {name: allreduce, host_app_type: offload_legacy, chip_type: multi_chip,
-     workload: None, dev_app: snax-coll-allreduce}
+  - {name: reduce, host_app_type: offload_legacy, chip_type: multi_chip,
+     workload: None, dev_app: snax-coll-reduce}
 ```
 
 ## The hang guard

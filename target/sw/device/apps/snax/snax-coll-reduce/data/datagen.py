@@ -4,17 +4,16 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""Inputs and goldens for the collective apps (snax-coll-*).
+"""Inputs and goldens for the E2 reduce app (snax-coll-reduce).
 
 coll_in[i] is the partial of the chip at snake position i (the app builds the snake from the
 platform), nbytes of FP16 small integers in [-16, 16], so every sum over at most 16 chips is
 exact in FP16 whatever the order of the fold.
 
-The checks compare SAMPLES, not whole buffers: one 32-bit word every `stride` bytes, with
+The check compares SAMPLES, not the whole buffer: one 32-bit word every `stride` bytes, with
 stride = 64 * ceil(span / 128 KiB) + 4, so the word inside the 64 B beat rotates from sample
-to sample and every word position is hit. An all-gather or a broadcast compares against coll_in
-sampled the same way on the device; a sum compares against coll_gold_sum, the sampled sum
-over the first P partials for every P of the sweep.
+to sample and every word position is hit. The root's sum is compared against coll_gold_sum,
+the sampled sum over the first P partials for every P of the sweep.
 """
 
 import argparse
@@ -66,19 +65,14 @@ def emit(p):
     out.append(f"#define COLL_REPEATS {int(p.get('repeats', 2))}u")
     out.append(f"#define COLL_EMPTY_REPEATS {int(p.get('empty_repeats', 2))}u")
     out.append(f"#define COLL_CHAIN_CHUNKS {int(p.get('chain_chunks', 4))}u")
+    out.append(f"#define COLL_GROUP {int(p.get('group', 4))}u")
     out.append(f"#define COLL_SUM_SAMPLES {ns}u")
-    # optional: run only these implementations (by name), e.g. to complete a run that stopped
-    ids = {"d2d": 1, "xdma": 2, "pull": 3, "chain": 5, "tree": 6, "ring": 7, "rd": 8, "a2a": 9,
-           "xtree": 10, "d2dn": 11}
+    # optional: run only these implementations (by name), e.g. to complete a run that stopped;
+    # the ids are the app's I_* (the bits of the filter)
+    ids = {"xdma": 2, "pull": 3, "chain": 5, "tree": 6, "xtree": 10, "x2l": 12}
     only = p.get("impls")
-    # d2dn (every producer's multicast at once) deadlocks the D2D router from P = 4: it runs only
-    # when named
-    mask = (0xFFFFFFFF & ~(1 << ids["d2dn"])) if not only else sum(1 << ids[x] for x in only)
+    mask = sum(1 << ids[x] for x in only) if only else 0xFFFFFFFF
     out.append(f"#define COLL_IMPL_FILTER 0x{mask:08x}u")
-    # the ring arms' cycle: "short" (single hops where the platform allows) or "snake"
-    ring = p.get("ring", "short")
-    assert ring in ("short", "snake"), ring
-    out.append(f"#define COLL_RING_SNAKE {int(ring == 'snake')}")
     out.append("static const uint32_t coll_ps[COLL_NP] = {" + ", ".join(map(str, ps)) + "};")
     out.append("// coll_in[snake position][FP16 element], as 32-bit words")
     out.append(f"uint32_t coll_in[COLL_NCHIPS][COLL_NBYTES / 4] "

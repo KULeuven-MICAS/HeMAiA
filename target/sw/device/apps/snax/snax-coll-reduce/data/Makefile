@@ -11,7 +11,7 @@ DATA_CFG ?= $(COLL_DATA_DIR)/params.hjson
 DATA_H = $(COLL_DATA_DIR)/data.h
 
 $(DATA_H): $(COLL_DATA_DIR)/datagen.py $(DATA_CFG)
-	@# Broadcast, reduce and allreduce can generate this shared header concurrently.
+	@# Concurrent builds of the reduce app can generate this header at the same time.
 	@set -e; temporary=$$(mktemp "$@.XXXXXX"); \
 	 trap 'rm -f "$$temporary"' EXIT; \
 	 python3 "$<" -c "$(DATA_CFG)" > "$$temporary"; \

@@ -3,21 +3,20 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# E2 collectives: the one button.
-#   ./run.sh run   [primitive ...]   simulate the primitives (default: all three), one runner each
-#                                    through common/launch.sh (watchdog, sim slots), at most
-#                                    $COLL_PAR runners in flight; then verdict + parse + prune
+# E2 reduce: the one button.
+#   ./run.sh run                     simulate the reduce through common/launch.sh (watchdog, sim
+#                                    slots); then verdict + parse + prune
 #   ./run.sh parse [tag ...]         verdict, parse, prune
 #   ./run.sh plot                    the figures from results/collective.csv
 #   ./run.sh all                     run + plot
-# A primitive is broadcast, reduce or allreduce: the device app
-# snax-coll-<primitive> under offload_legacy/multi_chip (software sync only). Its points
-# (P, implementations, repeats, payload) are compiled in from
-# target/sw/device/apps/snax/snax-coll/data/params.hjson. Runs land in runs/$COLL_TAG_<primitive>.
+# The device app is snax-coll-reduce under offload_legacy/multi_chip (software sync only). Its
+# points (P, implementations, repeats, payload) are compiled in from
+# target/sw/device/apps/snax/snax-coll-reduce/data/params.hjson. The run lands in
+# runs/$COLL_TAG_reduce.
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 SW=${D%/sweep/*}/sweep; EXP=${D#"$SW"/}   # the sweep dir, and this experiment: its path under it
-ALL="broadcast reduce allreduce"
+ALL="reduce"   # the primitives: the device app is snax-coll-<primitive>
 COLL_PAR=${COLL_PAR:-5}
 # the platform of the layer experiments: 16 compute chiplets (2 split clusters each) and 4
 # memory chiplets in one column, 5 x 4
@@ -79,5 +78,5 @@ case $cmd in
     python3 "$D/plot_coll.py" ;;
   all)
     "$0" run && "$0" plot ;;
-  *) echo "usage: run.sh run [primitive ...] | parse [tag ...] | plot | all"; exit 1 ;;
+  *) echo "usage: run.sh run | parse [tag ...] | plot | all"; exit 1 ;;
 esac

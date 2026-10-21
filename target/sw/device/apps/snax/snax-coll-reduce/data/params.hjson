@@ -1,0 +1,21 @@
+// The E2 reduce app (snax-coll-reduce).
+//   nbytes         each chip's partial, FP16
+//   num_chiplets   the compute chips on the snake; must match the platform
+//   P              participant counts, a prefix of the snake each
+//   repeats        timed repeats per (implementation, P)
+//   empty_repeats  empty points per P (GO -> READY round trip, subtracted)
+//   chain_chunks   chunks the software chain reduce pipelines its partial in
+//   group          optional: chips per first-level group of the two-level xDMA tree (x2l),
+//                  default 4 (one compute column)
+//   impls          optional: only these implementations, of xdma, xtree, x2l, pull, chain,
+//                  tree (to complete a run that stopped, or to run one arm, e.g. P [8, 16]
+//                  and impls ["x2l"]). Without it every implementation runs
+{
+  nbytes: 131072
+  num_chiplets: 16
+  P: [2, 4, 8, 16]
+  repeats: 2
+  empty_repeats: 2
+  chain_chunks: 4
+  seed: 1
+}

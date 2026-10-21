@@ -4,20 +4,16 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# The reduce collective of E2 (offload_legacy, multi_chip): ../snax-coll/src/snax-coll.c built
-# with COLL_PRIM=2; the inputs and goldens are ../snax-coll/data.
+# The E2 reduce (offload_legacy, multi_chip): the in-fabric xDMA chains against software
+# reductions; the inputs and goldens are generated from data/params.hjson.
 
 APP     = snax-coll-reduce
 
-INCDIRS += ../snax-coll/data
+INCDIRS += data
 
-SRCS    = ../snax-coll/src/snax-coll.c
+SRCS    = src/snax-coll-reduce.c
 
-# before common.mk: its per-host-app rules expand the flags when it is included
-RISCV_CFLAGS += -DCOLL_PRIM=2
-
-include ../snax-coll/data/Makefile
+include ./data/Makefile
 include ../../common.mk
-
 
 $(DEP): $(DATA_H)

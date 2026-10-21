@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# sim_staged.sh <primitive> [timeout]: simulate the already-staged task of runs/$COLL_TAG_<primitive>
-# (built and staged by a run.sh runner), then verdict + parse + prune, as run.sh would. For when
-# a runner has staged its task but cannot get a simulation slot. Appends "RUN EXIT <code>" to
-# runs/e2l_<primitive>.log.
+# sim_staged.sh reduce [timeout]: simulate the already-staged task of runs/$COLL_TAG_reduce (built
+# and staged by a run.sh runner), then verdict + parse + prune, as run.sh would. For when a runner
+# has staged its task but cannot get a simulation slot. Appends "RUN EXIT <code>" to
+# runs/$COLL_TAG_reduce.log.
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 SW=${D%/sweep/*}/sweep

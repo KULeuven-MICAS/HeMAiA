@@ -2,7 +2,7 @@
 # Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-"""parse_coll.py <run dir> [...]: the collective runs into results/collective.csv.
+"""parse_coll.py <run dir> [...]: the E2 reduce runs into results/collective.csv.
 
 Latency. The root (chip 0x00) prints one line per point on its UART, after the point:
     [COLL] <primitive> <impl> P=<P> r=<repeat> k=<point> rt=<cycles> s=<first mark slot>

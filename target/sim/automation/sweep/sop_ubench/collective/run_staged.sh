@@ -3,17 +3,17 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# run_staged.sh [primitive ...]: build and stage each primitive through a common/launch.sh runner
+# run_staged.sh: build and stage the reduce (snax-coll-reduce) through a common/launch.sh runner
 # (app builds serialised by the tree lock), then simulate it with sim_staged.sh without waiting
 # for a slot in the shared queue: once the runner has staged its task, the runner is stopped and
-# sim_staged.sh runs the simulation, verdict, parse and prune. The tag is $COLL_TAG_<primitive>
+# sim_staged.sh runs the simulation, verdict, parse and prune. The tag is $COLL_TAG_reduce
 # (default e2d). Runs detached; progress in runs/$COLL_TAG_staged.log.
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 SW=${D%/sweep/*}/sweep; EXP=${D#"$SW"/}   # the sweep dir, and this experiment: its path under it
 TAG=${COLL_TAG:-e2d}
 CFG=${COLL_CFG:-target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson}
-ps_=${*:-broadcast reduce allreduce}
+ps_=${*:-reduce}
 LOG=$D/runs/${TAG}_staged.log
 mkdir -p "$D/runs"
 log() { echo "$(date +%H:%M) $*" >> "$LOG"; }

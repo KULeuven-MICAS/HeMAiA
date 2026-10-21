@@ -2,16 +2,18 @@
 # Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-"""E2 figure and summary table, from results/collective.csv only.
+"""E2 reduce figure and summary table, from results/collective.csv only.
 
     plot_coll.py [--results results] [--figs figs] [--all-verdicts] [--log]
 
-  fig_e2_collectives  latency (cycles) on top, SRAM accesses below:
-                      1.1 broadcast, 1.2 reduce, 1.3 all-reduce against P, every
-                      implementation; 1.4 the three side by side at the largest P
+  fig_e2_collectives  latency (cycles) on top, SRAM accesses below: 1.1 the reduce against P,
+                      every implementation; 1.2 every implementation at the largest P
   results/collective_summary.csv
                       net latency and SRAM accesses per (primitive, implementation, P), and each
-                      implementation over the reference one (the in-fabric one) for both
+                      implementation over the reference one (the xDMA chain) for both
+
+Only the reduce is plotted: rows of other primitives (earlier rounds of broadcast, all-gather and
+all-reduce) stay in results/collective.csv but are skipped.
 
 A point's value is its fastest repeat in the latest run that measured it (the first repeat of an implementation pays a cold
 instruction cache), latency and SRAM accesses both from that repeat. SRAM accesses are 64-bit
@@ -37,27 +39,18 @@ HERE = Path(__file__).resolve().parent
 # the reference categorical palette, light mode, in its fixed order
 SLOT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-# one colour and marker per implementation family, the same in every panel
-FAMILY = {"d2d": (SLOT[0], "o"), "xdma": (SLOT[0], "o"), "pull": (SLOT[1], "s"),
-          "chain": (SLOT[2], "^"), "ring": (SLOT[2], "^"), "tree": (SLOT[3], "D"),
-          "rd": (SLOT[3], "D"), "a2a": (SLOT[1], "s"), "xtree": (SLOT[4], "v"),
-          "d2dn": (SLOT[0], "P", "--")}
+# one colour and marker per implementation, the same in every panel; a third entry is the
+# line style (and hatches its bars)
+FAMILY = {"xdma": (SLOT[0], "o"), "pull": (SLOT[1], "s"), "chain": (SLOT[2], "^"),
+          "tree": (SLOT[3], "D"), "xtree": (SLOT[4], "v"), "x2l": (SLOT[4], "P", "--")}
 # primitive -> (title, [(impl, legend label)] in drawing order, reference impl)
 PRIM = {
-    "broadcast": ("broadcast", [("d2d", "D2D router broadcast"), ("pull", "iDMA")], "d2d"),
     "reduce": ("reduce", [("xdma", "xDMA in-transit chain"), ("xtree", "xDMA tree + SW sync"),
+                          ("x2l", "xDMA two-level tree + SW sync"),
                           ("pull", "iDMA load all + local fold"),
                           ("chain", "iDMA chain + SW sync"), ("tree", "iDMA tree + SW sync")],
                "xdma"),
-    "all_reduce": ("all-reduce", [("xdma", "xDMA chain + D2D broadcast"),
-                                  ("xtree", "xDMA tree + SW sync + D2D broadcast"),
-                                  ("a2a", "iDMA all-to-all push + local fold"),
-                                  ("pull", "iDMA load all + local fold"),
-                                  ("ring", "iDMA ring + SW sync"),
-                                  ("rd", "iDMA recursive doubling + SW sync")], "xdma"),
 }
-SHORT = {"d2d": "D2D", "xdma": "xDMA", "pull": "load all", "a2a": "all-to-all", "chain": "chain",
-         "ring": "ring", "tree": "tree", "rd": "rec. dbl.", "xtree": "xDMA tree", "d2dn": "D2D at once"}
 
 
 def kfmt(v, _pos=None):
@@ -209,14 +202,14 @@ def side_by_side(ax_t, ax_b, med):
         ax.margins(y=0.25)
     P = groups[0][1] if groups else 16
     ax_t.set_title(f"side by side, P = {P}", fontsize=9, color=INK)
-    # one legend for the families
+    # one legend for the implementations, as the panels against P label them
     from matplotlib.patches import Patch
-    fam = [("D2D / xDMA (in fabric)", SLOT[0]), ("iDMA load all / all-to-all push", SLOT[1]),
-           ("iDMA chain / ring + SW sync", SLOT[2]), ("iDMA tree / rec. dbl. + SW sync", SLOT[3]),
-           ("xDMA tree + SW sync", SLOT[4])]
-    ax_b.figure.legend([Patch(color=c) for _, c in fam], [l for l, _ in fam], fontsize=7,
-                       frameon=False, loc="lower center", ncol=len(fam),
-                       bbox_to_anchor=(0.5, -0.04))
+    arms = [(lab, FAMILY[impl]) for prim in PRIM for impl, lab in PRIM[prim][1]]
+    ax_b.figure.legend([Patch(facecolor=f[0], edgecolor="white",
+                              hatch="///" if len(f) > 2 else None)
+                        for _, f in arms], [lab for lab, _ in arms], fontsize=7,
+                       frameon=False, loc="lower center", ncol=3,
+                       bbox_to_anchor=(0.5, -0.08))
 
 
 def fig_collectives(med, figs, log, suffix=""):
