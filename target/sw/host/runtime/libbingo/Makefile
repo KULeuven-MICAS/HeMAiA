@@ -15,6 +15,7 @@ include ../common.mk
 INCDIRS      += include/
 INCDIRS      += $(SW_DIR)/host/runtime/
 INCDIRS      += $(SW_DIR)/shared/vendor/bingo_alloc/bingo_alloc
+INCDIRS      += $(SW_DIR)/shared/vendor
 INCDIRS      += $(SW_DIR)/shared/runtime # for print/mailbox/chipid
 INCDIRS      += $(SW_DIR)/shared/platform/generated # for occamy_memory_map
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))

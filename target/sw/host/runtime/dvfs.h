@@ -1,122 +1,121 @@
 // Copyright 2025 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Host-side DVFS runtime.
-//
-// In DVFS mode the bingo hw manager PM only monitors chip-wide idle/busy and, on
-// a transition, publishes the requested action in the quad_periph DVFS_REQUEST
-// register and rings a doorbell by setting the host's dedicated CLINT MSIP bit.
-// The host takes a machine software interrupt, reads DVFS_REQUEST, drives the
-// PMIC (voltage) and the clk/rst controller (frequency) in the safe order,
-// acknowledges the PM, and clears the doorbell. The PM re-arm handshake converges
-// on the latest desired state.
-//
-// SAFETY CONTRACT. The chip must never
-// clock fast at low Vdd, so the actuation order is not optional:
-//   RAISE (busy):  pmic_set_voltage(hi)  -- BLOCKS until Vdd confirmed settled --
-//                  then raise frequency.
-//   LOWER (idle):  lower frequency (ensure applied), then pmic_set_voltage(lo).
-// The RTL has no voltage feedback, so this ordering + the settle/confirm wait
-// (pmic_set_voltage() does not return until Vdd has reached target) are enforced
-// ONLY here in software. Write DVFS_ACK only after the full V+F transition is
-// applied. The actuation below is mimicked (records + prints); the real PMIC-over
-// -I2C + clk/rst writes, keeping this order, are the deferred SW effort.
-//
-// This header depends on helpers defined earlier in host.h (interrupt/CLINT/clk
-// helpers, chip-id + quad_ctrl address helpers), so it is included at the end of
-// host.h.
 #pragma once
 
 #include <stdint.h>
-#include "pmic.h"
+#include "tps6287x.h"
 
-// Dedicated host DVFS doorbell bit inside the packed CLINT MSIP word: the HW-manager
-// IPI target occamy.py appends after the harts, routed into the host's ipi_i in
-// occamy_soc.sv.tpl. Sourced from the generated occamy.h (via host.h) so it is never
-// hardcoded and tracks the hart count automatically. Must match HOST_DVFS_MSIP_BIT in
-// bingo_hw_manager_pm.sv.
+// Include after host.h. Defaults match the PLL testbench; validate for the board.
+#define DVFS_PMIC_ADDR  0x41u     // Unshifted 7-bit address: 0x40 through 0x43.
+#define DVFS_PERIPH_HZ  32000000u // I2C peripheral clock in Hz, independent of CPU DVFS.
+#define DVFS_NORMAL_MV  1000      // Normal voltage in mV: 400 through 1200.
+#define DVFS_IDLE_MV    800       // Idle voltage in mV: 400 through DVFS_NORMAL_MV.
+#define DVFS_SETTLE_US  50u       // Settling after boot/RAISE, in us.
+#define DVFS_MASTER_HZ  UINT64_C(4000000000) // PLL output before per-domain division.
+
 #define HOST_DVFS_MSIP_BIT HW_MANAGER_DVFS_MSIP_BIT
 
-// DVFS_REQUEST field layout (must match occamy_quad_periph DVFS_REQUEST register).
 #define DVFS_REQ_PENDING_MASK (1u << 0)
 #define DVFS_REQ_DIR_MASK     (1u << 1)  // 1 = raise (chip busy), 0 = lower (idle)
 #define DVFS_REQ_LEVEL_SHIFT  8
 #define DVFS_REQ_LEVEL_MASK   0xFFu
 
-// Set by dvfs_init(): the local chip id and how many clock domains scale together
-// (DVFS is chiplet-level, so all active domains take the same division).
+typedef struct {
+    uint8_t pmic_address;
+    uint8_t normal_level; // PM levels are clock divisors, not voltage codes.
+    uint8_t idle_level;
+    uint32_t peripheral_clock_hz;
+    int normal_mv;
+    int idle_mv;
+    uint32_t settle_us;
+} dvfs_config_t;
+
 static uint8_t _dvfs_chip_id;
 static uint8_t _dvfs_num_domains;
+static dvfs_config_t _dvfs_config;
+static uint8_t _dvfs_ready;
 
-// -------------------------------------------------------------------------
-// DVFS event log
-// -------------------------------------------------------------------------
-// The trap handler must stay reentrant-safe: it can fire while the host is
-// mid-printf (printf is not reentrant / holds a UART lock), so it must NOT print.
-// Instead it records each serviced DVFS_REQUEST here; main() narrates the
-// (mimicked) voltage/frequency control sequence afterwards via dvfs_dump_log().
+static inline uint8_t dvfs_host_divisor(void) {
+    uintptr_t address = (uintptr_t)get_current_chip_baseaddress() |
+                        HEMAIA_CLK_RST_CONTROLLER_BASE_ADDR;
+    uint8_t divisor = (uint8_t)readw(address +
+        HEMAIA_CLK_RST_CONTROLLER_CLOCK_DIVISION_REGISTER_C0_C3_REG_OFFSET);
+    // Channel 0 is the host. Zero at reset falls back to a conservative /1 wait.
+    return divisor ? divisor : 1;
+}
+
+static inline void dvfs_wait_cycles(uint64_t start, uint64_t cycles) {
+    // Unsigned elapsed time handles counter wrap; mcycle must remain enabled.
+    while ((uint64_t)(mcycle() - start) < cycles) {}
+}
+
+static inline void dvfs_wait_settle(void) {
+    uint64_t start = mcycle();
+    uint64_t denominator = (uint64_t)dvfs_host_divisor() * 1000000u;
+    uint64_t cycles = (DVFS_MASTER_HZ * _dvfs_config.settle_us +
+                       denominator - 1u) / denominator;
+    // Round up to CPU cycles; the wait includes the read/calculation overhead.
+    dvfs_wait_cycles(start, cycles);
+}
+
+static inline void dvfs_set_clock_level(uint8_t level) {
+    for (uint8_t domain = 0; domain < _dvfs_num_domains; ++domain)
+        enable_clk_domain(domain, level);
+    fence();
+    // On LOWER/boot, the following I2C transaction covers divider/CDC latency.
+}
+
+static inline int dvfs_apply_request(uint32_t req) {
+    if (!_dvfs_ready) return TPS6287X_ERR_NOT_INITIALIZED;
+    uint8_t level = (uint8_t)((req >> DVFS_REQ_LEVEL_SHIFT) & DVFS_REQ_LEVEL_MASK);
+    int raise = (req & DVFS_REQ_DIR_MASK) != 0;
+    if (level != (raise ? _dvfs_config.normal_level : _dvfs_config.idle_level))
+        return TPS6287X_ERR_CONFIG;
+
+    // LOWER: F first, then V. RAISE: V first, settle, then F.
+    if (!raise) dvfs_set_clock_level(level);
+    int actual_mv = tps6287x_set_voltage(_dvfs_config.pmic_address,
+        raise ? _dvfs_config.normal_mv : _dvfs_config.idle_mv);
+    if (actual_mv < 0) return actual_mv;
+    if (raise) {
+        dvfs_wait_settle();
+        dvfs_set_clock_level(level);
+    }
+    // LOWER needs no analog wait: the reduced frequency is safe during ramp-down.
+    return actual_mv;
+}
+
 #define DVFS_LOG_MAX 64
+// Keep UART outside the ISR; print this bounded log after the workload.
 static volatile uint32_t _dvfs_log[DVFS_LOG_MAX];
+static volatile int _dvfs_log_result[DVFS_LOG_MAX];
 static volatile uint32_t _dvfs_log_count;
 
-// How many doorbells to print live from inside the ISR (each line proves the host
-// actually took + serviced the interrupt). Capped so a burst of transitions during
-// scheduler startup does not flood the UART / slow the sim; the rest are counted
-// and summarized by dvfs_dump_log().
-#define DVFS_ISR_PRINT_MAX 24
-
-// Reentrant-safe UART writes for use INSIDE the trap handler. print_char() (from
-// uart.c, pulled in via host.h) only polls the UART TX-empty flag and writes THR --
-// no lock and no static format buffer -- so it is safe to call while the host may be
-// mid-printf. (base_address is uart.c's UART base, set by init_uart().)
-static inline void dvfs_isr_puts(const char *s) {
-    while (*s) print_char(base_address, *s++);
-}
-static inline void dvfs_isr_putdec(uint32_t v) {
-    char buf[12];
-    int i = 0;
-    if (v == 0) { print_char(base_address, '0'); return; }
-    while (v) { buf[i++] = (char)('0' + (v % 10)); v /= 10; }
-    while (i) print_char(base_address, buf[--i]);
-}
-
-// Service one DVFS request published by the PM: read it, print a live "handled"
-// line (reentrant-safe), record it, acknowledge the applied level so the PM updates
-// its shadow and re-arms, then clear the doorbell.
-static inline void dvfs_service_request(void) {
+static inline int dvfs_service_request(void) {
+    // Clear before ACK so a re-armed doorbell is not lost.
+    clear_sw_interrupt_unsafe(_dvfs_chip_id, HOST_DVFS_MSIP_BIT);
+    int result = TPS6287X_OK;
     uint32_t req = readw(
         (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_request_addr()));
 
     if (req & DVFS_REQ_PENDING_MASK) {
         uint8_t level = (uint8_t)((req >> DVFS_REQ_LEVEL_SHIFT) & DVFS_REQ_LEVEL_MASK);
+        result = dvfs_apply_request(req);
+        if (result >= 0) {
+            writew(level,
+                   (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_ack_addr()));
+        }
         if (_dvfs_log_count < DVFS_LOG_MAX) {
             _dvfs_log[_dvfs_log_count] = req;
+            _dvfs_log_result[_dvfs_log_count] = result;
         }
         _dvfs_log_count++;
-        // Live proof that the host took + is servicing this interrupt.
-        if (_dvfs_log_count <= DVFS_ISR_PRINT_MAX) {
-            dvfs_isr_puts("[dvfs][isr] chip");
-            dvfs_isr_putdec(_dvfs_chip_id);
-            dvfs_isr_puts(" host handled DVFS doorbell #");
-            dvfs_isr_putdec(_dvfs_log_count);
-            dvfs_isr_puts((req & DVFS_REQ_DIR_MASK) ? ": RAISE (V up,F up) level="
-                                                    : ": LOWER (F down,V down) level=");
-            dvfs_isr_putdec(level);
-            dvfs_isr_puts("\r\n");
-        }
-        writew(level,
-               (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_ack_addr()));
     }
 
-    // Clear our dedicated doorbell bit (read-modify-write of the packed MSIP word).
-    clear_sw_interrupt_unsafe(_dvfs_chip_id, HOST_DVFS_MSIP_BIT);
+    return result < 0 ? result : TPS6287X_OK;
 }
 
-// Narrate the DVFS control sequence the ISR serviced. Call from main (NOT the ISR).
-// For each doorbell the host would drive the PMIC (voltage) and clk/rst controller
-// (frequency) in the safe order; the actuation is mimicked by these prints (the real
-// PMIC-over-I2C + enable_clk_domain() calls are the deferred SW effort).
 static inline void dvfs_dump_log(void) {
     uint32_t n = _dvfs_log_count;
     printf("[dvfs][chip%u] serviced %u DVFS doorbell event(s) across %u clk domain(s):\n",
@@ -124,45 +123,56 @@ static inline void dvfs_dump_log(void) {
     for (uint32_t i = 0; i < n && i < DVFS_LOG_MAX; i++) {
         uint32_t r = _dvfs_log[i];
         uint8_t level = (uint8_t)((r >> DVFS_REQ_LEVEL_SHIFT) & DVFS_REQ_LEVEL_MASK);
+        if (_dvfs_log_result[i] < 0) {
+            printf("  #%u FAILED level=%u error=%d; not acknowledged\n",
+                   (unsigned)i, (unsigned)level, _dvfs_log_result[i]);
+            continue;
+        }
         if (r & DVFS_REQ_DIR_MASK) {
-            printf("  #%u RAISE (chip busy) level=%u -> [mimic] PMIC Vdd up, then clk freq up; acked %u\n",
-                   (unsigned)i, (unsigned)level, (unsigned)level);
+            printf("  #%u RAISE level=%u -> PMIC %d mV + settle wait, then clk freq up; acked\n",
+                   (unsigned)i, (unsigned)level, _dvfs_log_result[i]);
         } else {
-            printf("  #%u LOWER (chip idle) level=%u -> [mimic] clk freq down, then PMIC Vdd down; acked %u\n",
-                   (unsigned)i, (unsigned)level, (unsigned)level);
+            printf("  #%u LOWER level=%u -> clk freq down, then PMIC %d mV; acked\n",
+                   (unsigned)i, (unsigned)level, _dvfs_log_result[i]);
         }
     }
 }
 
-// Machine-mode trap vector. The interrupt attribute makes GCC emit the context
-// save/restore and mret. Only the machine software interrupt (mcause low bits
-// == 3, i.e. MSIP -> ipi_i) is expected here.
+#ifdef __riscv
 __attribute__((interrupt("machine"), aligned(4)))
 void dvfs_trap_handler(void) {
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
-    if ((mcause & 0xff) == 3) {  // machine software interrupt
-        dvfs_service_request();
-        // The DVFS doorbell (HOST_DVFS_MSIP_BIT) and the host's own IPI share the
-        // machine-software-interrupt cause. dvfs_service_request() already cleared the
-        // doorbell bit; the device also sets the host IPI on cluster start/exit but the
-        // host never blocks on it (offload sync is via the mailbox queues), so clear the
-        // host IPI here via the shared helper -- no hardcoded bit index -- to stop it
-        // re-trapping.
+    if (mcause == ((UINT64_C(1) << 63) | 3u)) {
         clear_host_sw_interrupt_unsafe(_dvfs_chip_id);
-    }
+        int rc = dvfs_service_request();
+        if (rc < 0) host_abort((uint64_t)-rc);
+    } else host_abort((mcause & 0xffu) + 1u);
 }
+#endif
 
-// Enable DVFS mode. `num_domains` is the number of clock domains to scale together;
-// `boot_level` is the power level the chip is at when armed (= the normal level) — it
-// seeds DVFS_ACK so the PM's `pending = (desired != acked)` starts consistent. Passing
-// it explicitly (rather than reading NORM_POWER_LEVEL) means this can be called before
-// the PM registers are written, and avoids a spurious initial RAISE from a stale 0 ack.
-static inline void dvfs_init(uint8_t num_domains, uint8_t boot_level) {
+// Call before EN_IDLE_PM/workload start. Domains include host + clusters, not D2D.
+static inline int dvfs_init(uint8_t num_domains, const dvfs_config_t *config) {
+    if (config == 0 || num_domains == 0 || num_domains > N_CLUSTERS_PER_CHIPLET + 1 ||
+        config->normal_level == 0 || config->normal_level >= config->idle_level ||
+        config->normal_mv < TPS6287X_MIN_MV || config->normal_mv > TPS6287X_MAX_MV ||
+        config->idle_mv < TPS6287X_MIN_MV || config->idle_mv > config->normal_mv ||
+        config->settle_us == 0 || config->settle_us > 1000000u)
+        return TPS6287X_ERR_CONFIG;
     _dvfs_chip_id     = get_current_chip_id();
     _dvfs_num_domains = num_domains;
+    _dvfs_config = *config;
+    _dvfs_ready = 0;
+    _dvfs_log_count = 0;
+    int rc = tps6287x_init(config->pmic_address, config->peripheral_clock_hz);
+    if (rc < 0) return rc;
+    // Start at idle; the first busy request raises voltage before frequency.
+    dvfs_set_clock_level(config->idle_level);
+    rc = tps6287x_set_voltage(config->pmic_address, config->idle_mv);
+    if (rc < 0) return rc;
+    dvfs_wait_settle();
+    _dvfs_ready = 1;
 
-    // Tell the PM where this chiplet's CLINT MSIP word lives (doorbell target).
     uint64_t clint_msip_word =
         (uintptr_t)get_current_chip_baseaddress() | clint_msip_base;
     writew((uint32_t)(clint_msip_word >> 32),
@@ -170,19 +180,17 @@ static inline void dvfs_init(uint8_t num_domains, uint8_t boot_level) {
     writew((uint32_t)(clint_msip_word),
            (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_clint_msip_lo_addr()));
 
-    // Seed DVFS_ACK with the boot (= normal) level so the PM starts at "normal" and does
-    // not report a spurious RAISE before any real work: while the chip is busy at startup
-    // desired==acked==boot_level, so it only rings once it actually goes idle (LOWER).
-    writew(boot_level,
+    // Seed the applied level before enabling the hardware PM and its interrupt.
+    writew(config->idle_level,
            (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_ack_addr()));
 
-    // Select DVFS mode (0 = DFS, 1 = DVFS). Done before EN_IDLE_PM is set (in
-    // bingo_hw_scheduler_init_pm) so the PM never briefly runs autonomous DFS.
     writew(1, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_pm_mode_addr()));
 
-    // Install the trap vector (direct mode) and unmask the software interrupt.
+#ifdef __riscv
     uint64_t tvec = (uint64_t)(uintptr_t)&dvfs_trap_handler;
     asm volatile("csrw mtvec, %0" : : "r"(tvec));
     enable_sw_interrupts();      // mie.MSIE
     enable_global_interrupts();  // mstatus.MIE
+#endif
+    return TPS6287X_OK;
 }
