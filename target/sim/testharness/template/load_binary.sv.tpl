@@ -15,18 +15,9 @@
 // generated vendor model pristine; no load_data task has to be appended to it.
 
 <%
-    # The mapped tapeout netlist has a fixed 128 KiB compute-chip SPM:
-    # 16 banks x 1024 64-bit words.  Configuration-file memory overrides are
-    # meaningful for RTL/macro simulation only and must not change this
-    # physical hierarchy.
-    netlist_sram_bank_count = 16
-    netlist_sram_bank_depth = 1024
-    compute_bank_count = netlist_sram_bank_count if sim_with_netlist else mem_bank
-    sram_depth = (
-        netlist_sram_bank_depth
-        if sim_with_netlist
-        else mem_size // 8 // mem_bank
-    )
+    # Netlist CI validates this cfg against the synthesized hardware profile.
+    compute_bank_count = mem_bank
+    sram_depth = mem_size // 8 // mem_bank
     mem_chip_bank_count = 16
     memory_mode = "netlist" if sim_with_netlist else "macro" if sim_with_mem_macro else "rtl"
 
@@ -35,9 +26,13 @@
     def memory_parts(depth, path, mode):
         if mode == "rtl":
             return [(0, depth, path + ".sram", False)]
-        if mode == "netlist":
-            return [(0, depth, path, True)]
         macro_depth = 8192
+        if mode == "netlist":
+            if depth > macro_depth and depth % macro_depth == 0:
+                return [(i * macro_depth, macro_depth,
+                         path + f"gen_mem_gen_depth_concat_gen_depth_{i}__u_sram ", True)
+                        for i in range(depth // macro_depth)]
+            return [(0, depth, path + f"gen_mem_gen_{depth}x64_u_sram ", True)]
         if depth > macro_depth and depth % macro_depth == 0:
             return [(i * macro_depth, macro_depth,
                      path + f".gen_mem.gen_depth_concat.gen_depth[{i}].u_sram", True)
@@ -175,8 +170,8 @@ task automatic load_main_mem;
     if sim_with_netlist:
         sram_path = (
             "i_dut.i_hemaia_%d_%d.\\i_occamy_chip/i_hemaia_mem_system/i_hemaia_mem "
-            ".\\gen_banks_%d__i_data_mem/i_tc_sram/gen_mem_gen_%dx64_u_sram "
-            % (cx, cy, k, sram_depth)
+            ".\\gen_banks_%d__i_data_mem/i_tc_sram/"
+            % (cx, cy, k)
         )
     else:
         sram_path = (

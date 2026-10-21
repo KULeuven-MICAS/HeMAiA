@@ -1280,7 +1280,11 @@ class HeMAiASimRunner:
 
     def build_hw_sw(self) -> None:
         """Build the requested shared SW fleet, bootrom, and RTL in-container."""
-        targets = ("sw", "bootrom", "rtl") if self.build_sw_fleet else ("bootrom", "rtl")
+        active_cfg = self.repo_root / "target/rtl/cfg/lru.hjson"
+        self._container(["make", str(active_cfg), f"CFG_OVERRIDE={self.effective_cfg}"])
+        self._container(["make", "-C", "target/sw", "debug-platform-headers", f"CFG={active_cfg}"])
+        # RTL emits the HeMAiA XDMA headers consumed by every host application.
+        targets = ("rtl", "bootrom", "sw") if self.build_sw_fleet else ("rtl", "bootrom")
         for target in targets:
             cmd = ["make", target, f"CFG_OVERRIDE={self.effective_cfg}"]
             if self.build_jobs and target == "sw":
@@ -2334,13 +2338,10 @@ class HeMAiASimRunner:
             print("[Step 3] Building apps and staging per-task directories")
             tasks_info = self.build_apps_and_stage(tasks)
         else:
-            # A clean bootrom build consumes generated platform headers.  The
-            # strict selected app builds create those headers, so netlist CI
-            # deliberately performs software/binary generation first.
-            print("[Step 2] Building selected apps and staging task directories")
-            tasks_info = self.build_apps_and_stage(tasks)
-            print("[Step 3] Building bootrom/RTL for the selected hardware")
+            print("[Step 2] Building platform headers, RTL and bootrom")
             self.build_hw_sw()
+            print("[Step 3] Building selected apps and staging task directories")
+            tasks_info = self.build_apps_and_stage(tasks)
 
         if phase == "prepare":
             engines = list(dict.fromkeys(prepare_engines))

@@ -9,17 +9,9 @@
 // are ignored until the memory has reached a stable, software-written state.
 
 <%
-    # The mapped tapeout netlist has a fixed 128 KiB compute-chip SPM:
-    # 16 banks x 1024 64-bit words.  Do not derive its physical hierarchy
-    # from a simulation configuration override.
-    netlist_sram_bank_count = 16
-    netlist_sram_bank_depth = 1024
-    compute_bank_count = netlist_sram_bank_count if sim_with_netlist else mem_bank
-    sram_depth = (
-        netlist_sram_bank_depth
-        if sim_with_netlist
-        else mem_size // 8 // mem_bank
-    )
+    # Netlist CI validates this cfg against the synthesized hardware profile.
+    compute_bank_count = mem_bank
+    sram_depth = mem_size // 8 // mem_bank
     sram_width_bits = 64
     # Match tc_sram_tsmc16: concatenate complete macros beyond the compiler limit.
     max_macro_depth = 8192
@@ -62,8 +54,8 @@ task automatic check_finish();
     if sim_with_netlist:
         sram_path = (
             "i_dut.i_hemaia_%d_%d.\\i_occamy_chip/i_hemaia_mem_system/i_hemaia_mem "
-            ".\\gen_banks_%d__i_data_mem/i_tc_sram/gen_mem_gen_%dx64_u_sram "
-            % (cx, cy, compute_bank_count - 1, sram_depth)
+            ".\\gen_banks_%d__i_data_mem/i_tc_sram/"
+            % (cx, cy, compute_bank_count - 1)
         )
     else:
         sram_path = (
@@ -73,7 +65,10 @@ task automatic check_finish();
         )
     if sim_with_netlist or sim_with_mem_macro:
         if sim_with_netlist:
-            macro_path = sram_path
+            if depth_concatenated:
+                macro_path = sram_path + f"gen_mem_gen_depth_concat_gen_depth_{last_macro}__u_sram "
+            else:
+                macro_path = sram_path + f"gen_mem_gen_{sram_depth}x64_u_sram "
         elif depth_concatenated:
             macro_path = sram_path + f".gen_mem.gen_depth_concat.gen_depth[{last_macro}].u_sram"
         elif sram_depth in (128, 256, 512, 1024, 2048, 4096, max_macro_depth):
