@@ -149,7 +149,7 @@ sources:
       - target/tapeout/HeMAiAv2_tapeout/outputs/hemaia_mapped_bootrom_commented.v
 
   # HeMAiA Mem Chip
-  - target: hemaia_mem_chip
+  - target: all(hemaia_mem_chip, not(synthesis))
     files:
       # Simulated HBM behind the memchip (simulation only, like the memchip itself)
       - hw/hemaia/hemaia_mem_system/hbm/hemaia_hbm_pkg.sv
