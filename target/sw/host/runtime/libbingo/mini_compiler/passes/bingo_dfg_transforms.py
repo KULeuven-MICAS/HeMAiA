@@ -188,8 +188,11 @@ class BingoDFGTransformsMixin:
                     # platform's routers do not (a fenced memory chip in C-M-C rows), the
                     # chips behind it never see it: dfg.remote_broadcast = False then sends
                     # one targeted dummy set per chip instead.
+                    # A broadcast set is one presence bit per chip, which releases ONE check
+                    # there: a group with two consumers on one chip takes targeted sets.
                     if (getattr(self, "remote_broadcast", True) and self.num_chiplets > 2
-                            and len(chiplets_in_group) == (self.num_chiplets - 1)):
+                            and len(chiplets_in_group) == (self.num_chiplets - 1)
+                            and len(group) == len(chiplets_in_group)):
                         # Broadcast: one dummy_set blocks cur_node's core and sets the bit on all chiplets
                         print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets for core {core_id}.")
                         dummy_set_node = BingoNode(

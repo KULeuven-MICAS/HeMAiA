@@ -114,6 +114,9 @@ class GemmQueue:
         st = g.node(name, g.gemm, sa.KERNEL_NAME, sa, after)
         wt = g.node(f"{name}_w", g.gemm, "__snax_bingo_kernel_gemm_wait",
                     SnaxBingoKernelGemmWaitArgs(seq), [st])
+        # the array streams the start's operands until the wait: liveness counts the wait as their user
+        # (bingo_liveness RULE 1), or the static L1 planner frees them when the start returns
+        st.operands_held_by = wt
         self.start_phase[st] = self.wait_phase[wt] = phase
         return wt
 

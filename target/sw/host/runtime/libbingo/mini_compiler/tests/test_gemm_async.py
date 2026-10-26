@@ -235,6 +235,42 @@ check("with gemm_async off the same sweep makes the blocking kernels",
 refuses("a one-tile sweep cannot fill the two-deep pipeline",
         lambda: FaSweepCfg(bc=256, nt=1, k_s=0, k_o=0, a_exp=1.0, a_n_f32bits=0), "tiles")
 
+print("\na queued dispatch's operands live until its wait (static L1)")
+# The shape of a fresh prompt's keys with two tiles a chip (fa_prefill_mc.py stage_kv): two dispatches
+# read their own A, and tile 0's post-processing follows tile 0's wait only. The program order puts
+# tile 1's start before tile 0's wait, so the post-processing follows tile 1's start; the array still
+# streams tile 1's A until tile 1's wait, and the post-processing's buffer must not take its bytes.
+from bingo_liveness import can_share, collect_handle_users, reachability   # noqa: E402
+from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs                  # noqa: E402
+ctx = new_ctx()
+q = GemmQueue.of(ctx.dfg)
+g = ctx.at(0)
+a0, a1, bw, d0, d1 = (g.l1(n, 4096) for n in ("a0", "a1", "b", "d0", "d1"))
+post_buf = g.l1("post", 4096)
+
+
+def full(a, d):
+    return SnaxBingoKernelGemmFullArgs(input_A_addr=a, input_B_addr=bw, input_C_addr=0, output_D_addr=d, M=1, K=4,
+                                       N=1, array_shape_idx=0, transpose_A=0, transpose_B=0, accumPrevC=0,
+                                       int32tofp16_enable=1)
+
+
+w0 = q.dispatch(g, "gkv_t0", full(a0, d0))
+w1 = q.dispatch(g, "gkv_t1", full(a1, d1))
+post = g.node("post_t0", g.xdma, "__snax_bingo_kernel_idma_1d_copy", SnaxBingoKernelIdma1dCopyArgs(d0, post_buf, 4096),
+              [w0])
+q.program_order(ctx.dfg, ROLES.values(), verbose=False)
+s1 = next(ctx.dfg.predecessors(w1))
+nodes = sorted(ctx.dfg.node_list, key=lambda t: t.node_id)
+reach = reachability(ctx.dfg, nodes)
+hu = collect_handle_users(nodes)
+check("the program order puts tile 1's start before tile 0's post-processing", post in reach[s1])
+check("tile 1's wait is a user of the A its start reads", w1 in hu[id(a1)][1])
+check("tile 1's A and the post-processing's buffer may not share bytes",
+      not can_share(hu[id(a1)][1], hu[id(post_buf)][1], reach))
+check("tile 0's A, its wait before the post-processing, still may",
+      can_share(hu[id(a0)][1], hu[id(post_buf)][1], reach))
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILED: {FAILED}")

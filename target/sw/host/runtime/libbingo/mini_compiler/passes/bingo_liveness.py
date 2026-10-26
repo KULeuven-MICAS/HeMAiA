@@ -10,7 +10,9 @@
 # 1. EVERY REFERENCE IS A USE. No kernel-argument class declares read/write direction and the
 #    field names are not uniform, so a buffer is live from the first node that mentions it to
 #    the last. Costs a little packing; needs no per-kernel knowledge, so a new kernel cannot
-#    break it by forgetting an annotation.
+#    break it by forgetting an annotation. A task whose engine keeps reading after it returns
+#    names the task that waits for the engine (`operands_held_by`: a queued GEMM's start, whose
+#    array streams the operands until the wait); that task is a user of everything it names.
 #
 # 2. ORDERING COMES FROM THE GRAPH, NOT A SCHEDULE. BINGO has no linear time axis -- the
 #    manager fires a task as soon as its edges are satisfied -- so ASAP/ALAP levels do not
@@ -55,8 +57,11 @@ def collect_handle_users(nodes) -> Dict[int, Tuple[BingoMemAlloc, Set]]:
     for node in nodes:
         if getattr(node, "kernel_args", None) is None:
             continue
+        held_by = getattr(node, "operands_held_by", None)
         for _attr, value in node.kernel_args.__dict__.items():
             visit(value, node)
+            if held_by is not None:
+                visit(value, held_by)
     return {h: (handles[h], users[h]) for h in handles}
 
 

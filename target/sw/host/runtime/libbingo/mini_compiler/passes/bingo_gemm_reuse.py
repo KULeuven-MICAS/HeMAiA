@@ -8,13 +8,15 @@
 A gemm_full task whose configuration equals the previous gemm_full's on the same core (every field
 but the four operand addresses) becomes gemm_minimal, which rewrites the addresses and starts. The
 previous GEMM on a core is the one created before it, so the core's tasks must run in creation order
-(GemmQueue.program_order).
+(GemmQueue.program_order). Any other GEMM that configures the array in between (a queued start, a
+FlashAttention matmul) ends the run: the gemm_full after it keeps its full configuration.
 """
 
 from bingo_kernel_args import SnaxBingoKernelGemmMinimalArgs
 
 GEMM_FULL = "__snax_bingo_kernel_gemm_full"
 GEMM_MINIMAL = "__snax_bingo_kernel_gemm_minimal"
+GEMM_WAIT = "__snax_bingo_kernel_gemm_wait"
 OPERAND_ADDRS = ("input_A_addr", "input_B_addr", "input_C_addr", "output_D_addr")
 
 
@@ -23,9 +25,11 @@ def reuse_gemm_config(dfg) -> int:
     gemm_minimal. Returns the number converted."""
     prev, n = {}, 0
     for t in sorted(dfg.node_list, key=lambda t: t.node_id):
-        if t.kernel_name != GEMM_FULL:
-            continue
         key = (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
+        if t.kernel_name != GEMM_FULL:
+            if "gemm" in t.kernel_name and t.kernel_name not in (GEMM_MINIMAL, GEMM_WAIT):
+                prev.pop(key, None)
+            continue
         sig = tuple(sorted((k, v) for k, v in vars(t.kernel_args).items()
                            if k not in OPERAND_ADDRS and not k.startswith("_")))
         if prev.get(key) == sig:
