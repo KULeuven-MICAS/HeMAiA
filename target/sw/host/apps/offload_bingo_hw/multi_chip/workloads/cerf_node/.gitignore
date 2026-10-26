@@ -1,0 +1,6 @@
+*.png
+offload_bingo_hw.h
+cerf_node_data.h
+*.csv
+build/
+__pycache__/

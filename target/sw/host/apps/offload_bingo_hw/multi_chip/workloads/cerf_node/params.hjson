@@ -1,0 +1,14 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Fanchen Kong <fanchen.kong@kuleuven.be>
+{
+    // Repeats of every measurement.
+    rounds: 20
+    num_clusters: 2
+    // The cross-die CERF arm's node chiplet (0x43: 7 hops from 0x00 on the 16c4m array).
+    far_chip: 0x43
+    // The host arm's node chiplet.
+    node_chip: 0x00
+}
