@@ -72,6 +72,8 @@ DEFAULT_DOCKER_IMAGE = "ghcr.io/kuleuven-micas/hemaia:main"
 SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
 DEFAULT_MAX_SIM_JOBS = 16
 FGP_DEFAULT_THREADS = 8  # VCS FGP worker threads a bare --fgp asks for
+FGP_CORE_WAIT_S = 6 * 3600  # how long a simulation retries a start refused for want of free cores
+FGP_RETRY_S = 60  # the wait between those starts
 ASSERT_MAXFAIL_DEFAULT = 1  # vcs: SystemVerilog assertion failures after which simv stops
 PREPARATION_MANIFEST = "netlist_ci_preparation_manifest.json"
 PREPARATION_MANIFEST_VERSION = 6
@@ -1672,33 +1674,43 @@ class HeMAiASimRunner:
             pgid = None
             start = time.monotonic()
             try:
-                # start_new_session=True makes the child a session/group leader,
-                # so all descendants share that group and can be killed as a unit.
-                proc = subprocess.Popen(
-                    [str(sim_binary), *run_args],
-                    cwd=task_dir / "bin",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                pgid = proc.pid
-                _register_pgid(pgid)
-                try:
-                    out_bytes, _ = proc.communicate(timeout=self.timeout_seconds)
-                    elapsed = time.monotonic() - start
-                    out = out_bytes.decode(errors="replace") if out_bytes else ""
-                    return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
-                except subprocess.TimeoutExpired:
-                    _kill_pgid(pgid)
-                    out_bytes, _ = proc.communicate()
-                    elapsed = time.monotonic() - start
-                    partial = out_bytes.decode(errors="replace") if out_bytes else ""
-                    msg = (
-                        f"TIMEOUT: simulation exceeded {self.timeout_seconds}s "
-                        f"({_format_duration(self.timeout_seconds)}) and was killed.\n"
-                        + partial
+                while True:
+                    # start_new_session=True makes the child a session/group leader,
+                    # so all descendants share that group and can be killed as a unit.
+                    proc = subprocess.Popen(
+                        [str(sim_binary), *run_args],
+                        cwd=task_dir / "bin",
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
                     )
-                    return str(task_dir), ci_name, False, elapsed, msg
+                    pgid = proc.pid
+                    _register_pgid(pgid)
+                    try:
+                        out_bytes, _ = proc.communicate(timeout=self.timeout_seconds)
+                        elapsed = time.monotonic() - start
+                        out = out_bytes.decode(errors="replace") if out_bytes else ""
+                        # simv found no free core for its FGP threads (other jobs load every core, which
+                        # allow_less_cores does not cover) and left at once: wait for cores and start again
+                        if "FGP_AFFINITY_FAILED" in out and elapsed < FGP_CORE_WAIT_S:
+                            _unregister_pgid(pgid)
+                            pgid = None
+                            print(f"[fgp] {ci_name}: no free core for {self.fgp_threads} FGP threads; "
+                                  f"starting again in {FGP_RETRY_S} s", flush=True)
+                            time.sleep(FGP_RETRY_S)
+                            continue
+                        return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
+                    except subprocess.TimeoutExpired:
+                        _kill_pgid(pgid)
+                        out_bytes, _ = proc.communicate()
+                        elapsed = time.monotonic() - start
+                        partial = out_bytes.decode(errors="replace") if out_bytes else ""
+                        msg = (
+                            f"TIMEOUT: simulation exceeded {self.timeout_seconds}s "
+                            f"({_format_duration(self.timeout_seconds)}) and was killed.\n"
+                            + partial
+                        )
+                        return str(task_dir), ci_name, False, elapsed, msg
             except Exception:
                 elapsed = time.monotonic() - start
                 if pgid is not None:
