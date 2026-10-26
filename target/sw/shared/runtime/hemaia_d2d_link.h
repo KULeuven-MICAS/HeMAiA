@@ -42,13 +42,23 @@
 #define HEMAIA_SAME_MEMCHIP_SPEED 0
 #endif
 
-// The host / cluster divider the link bring-up programs. The link wants the core no faster
-// than 1/7 of the PHY; a platform whose cfg sets sim_clock.core_clk_div (occamy.h) uses that
-// ratio instead -- 8 on a 4 GHz master is the real chip's 500 MHz core and 4 GHz link.
+// The host divider the link bring-up programs (the host clock is the link's digital clock). A
+// link moves one flit per digital cycle while its PHY runs at least 7x the digital clock (a
+// 208-bit channel flit is 7 PHY cycles in DDR); slower, the PHY paces it. Both ends need the same
+// digital clock: a receiving PHY cannot hold the far end off. A platform whose cfg sets
+// sim_clock.core_clk_div (occamy.h) uses that ratio -- 8 on a 4 GHz master is the real chip's
+// 500 MHz core and 4 GHz link.
 #if defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
 #define HEMAIA_D2D_INIT_CORE_DIV HEMAIA_CORE_CLK_DIV
 #else
 #define HEMAIA_D2D_INIT_CORE_DIV 7
+#endif
+// The clusters' divider at link bring-up: the cfg's own (sim_clock.cluster_clk_div) when it gives
+// one, else the host's. Clusters sit behind their own clock crossings, apart from the link.
+#if defined(HEMAIA_CLUSTER_CLK_DIV) && HEMAIA_CLUSTER_CLK_DIV > 0
+#define HEMAIA_D2D_INIT_CLUSTER_DIV HEMAIA_CLUSTER_CLK_DIV
+#else
+#define HEMAIA_D2D_INIT_CLUSTER_DIV HEMAIA_D2D_INIT_CORE_DIV
 #endif
 
 typedef enum {
@@ -810,7 +820,7 @@ void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
         enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);   // host CPU
         for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV); // cluster i
+            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CLUSTER_DIV); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
@@ -936,11 +946,11 @@ static inline int hemaia_d2d_memchips_far_first(uint8_t chip_id, uint8_t* out) {
 // the rectangle as a hop, and in C-M-C rows the memory chips are hops between compute
 // chips. Every compute chip then gets each broadcast once, and no memory chip gets one.
 static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
-    // Same clock-domain setup as the fixed-topology routines: host and clusters at /7,
-    // all four D2D PHYs at /1, so the core:link ratio matches the RTL's 1/7.
+    // Same clock-domain setup as the fixed-topology routines: the host at the link's digital
+    // divider, the clusters at theirs, all four D2D PHYs at /1.
     enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);  // host CPU
     for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV);  // cluster i
+        enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CLUSTER_DIV);  // cluster i
     }
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
@@ -1062,7 +1072,7 @@ void hemaia_d2d_link_initialize_1c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
         enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);   // host CPU
         for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV); // cluster i
+            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CLUSTER_DIV); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 0);  // West  D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 0);  // North D2D PHY

@@ -390,6 +390,16 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
 #ifndef HEMAIA_MATCHED_CLK_DIV
 #define HEMAIA_MATCHED_CLK_DIV BINGO_PM_NORMAL_POWER_LEVEL
 #endif
+// A platform whose cfg gives the host its own divider (occamy.h HEMAIA_CORE_CLK_DIV next to
+// HEMAIA_CLUSTER_CLK_DIV) runs the host -- CVA6, SoC fabric, L3, D2D digital -- at that rate
+// and the clusters at the power manager's.
+#ifndef HEMAIA_HOST_CLK_DIV
+#if defined(HEMAIA_CLUSTER_CLK_DIV) && defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
+#define HEMAIA_HOST_CLK_DIV HEMAIA_CORE_CLK_DIV
+#else
+#define HEMAIA_HOST_CLK_DIV HEMAIA_MATCHED_CLK_DIV
+#endif
+#endif
 
 // Put the host and every cluster on one clock rate.
 //
@@ -406,7 +416,7 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
 // The power manager still drops an IDLE cluster to BINGO_PM_IDLE_POWER_LEVEL, so the
 // domains are matched while a cluster has work, not at every instant.
 static inline void init_clk_domains(void) {
-    enable_clk_domain(0, HEMAIA_MATCHED_CLK_DIV);  // host CPU + SoC fabric
+    enable_clk_domain(0, HEMAIA_HOST_CLK_DIV);  // host CPU + SoC fabric
     for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         enable_clk_domain(1 + i, HEMAIA_MATCHED_CLK_DIV);
     }

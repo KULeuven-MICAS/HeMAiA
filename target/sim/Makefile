@@ -239,10 +239,13 @@ endif
 # src/phy/sim/hemaia_d2d_link_phy_model.sv): the PHY and forwarded-clock cycles stepped in batches
 # on the digital clock, the same digital-side behaviour cycle for cycle as the PHY with
 # SIM_D2D_PHY_BEHAVIORAL=1, without a simulation time step per link clock edge. It assumes the
-# digital clock is 1/7 of the PHY clock, as sim_clock.core_clk_div = 7 sets.
+# PHY clock is SIM_D2D_PHY_MODEL_RATIO times the digital (host) clock: the cfg's
+# sim_clock.core_clk_div, as the PHY runs at the master clock.
 SIM_D2D_PHY_CORE_CLOCK ?= 0
+SIM_D2D_PHY_MODEL_RATIO ?= 7
 ifeq ($(SIM_D2D_PHY_CORE_CLOCK), 1)
 	VLOGAN_FLAGS += +define+HEMAIA_D2D_PHY_CORE_CLOCK
+	VLOGAN_FLAGS += +define+HEMAIA_D2D_PHY_MODEL_RATIO=$(SIM_D2D_PHY_MODEL_RATIO)
 endif
 # The models of a link pass their records as a signal the testharness wires (HEMAIA_D2D_PHY_MODEL_XMR):
 # each model can then run on its own FGP thread. SIM_D2D_PHY_MODEL_XMR=0: the shared record table.
@@ -273,6 +276,18 @@ endif
 SIM_LEAN_PROBES ?= 0
 ifeq ($(SIM_LEAN_PROBES), 1)
 	VLOGAN_FLAGS += +define+HEMAIA_SIM_LEAN_PROBES
+endif
+# SIM_STALL_PROBES=1 keeps the AXI stall probes (soc_probes.sv) in a lean build: each AXI link that has work
+# pending and does not move for a while prints one [AXI-STALL] line, which names where a hang stops.
+SIM_STALL_PROBES ?= 0
+ifeq ($(SIM_STALL_PROBES), 1)
+	VLOGAN_FLAGS += +define+HEMAIA_SIM_STALL_PROBES
+endif
+# SIM_CORE_PROBES=1 binds the core stall probe (soc_probes.sv) to every Snitch core: a data request that waits, or a
+# PC that stays in one small window, for a long time prints one [CORE-STALL] / [CORE-SPIN] line.
+SIM_CORE_PROBES ?= 0
+ifeq ($(SIM_CORE_PROBES), 1)
+	VLOGAN_FLAGS += +define+HEMAIA_SIM_CORE_PROBES
 endif
 
 # SIM_FAST_ARB=1 simulates every rr_arb_tree as common_cells' fast_sim model (bender target fast_sim:

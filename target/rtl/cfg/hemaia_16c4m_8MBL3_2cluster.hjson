@@ -20,12 +20,15 @@
       // Run the memory chip at the host clock, as the tapeout cfgs do. Without this it runs
       // at 1/20 of the main clock and the SW takes the slow-FPGA D2D path.
       same_memchip_speed: true,
-      // The clocks the dsv2 layer runs at: a 3.5 GHz master, the compute chips' host
-      // and clusters and the memory chip's logic at /7 = 500 MHz, every D2D PHY at 3.5 GHz.
+      // The clocks: a 5 GHz master; the compute chips' host -- CVA6, SoC fabric, L3 and the
+      // D2D link's digital side -- and the memory chips' logic at /5 = 1 GHz; the clusters at
+      // /10 = 500 MHz; every D2D PHY at 5 GHz (a link's PHY at 5x its digital clock: a flit,
+      // 7 PHY cycles, every 1.4 digital cycles).
       sim_clock: {
-        master_mhz: 3500,
-        core_clk_div: 7,
-        memchip_clk_div: 7
+        master_mhz: 5000,
+        core_clk_div: 5,
+        cluster_clk_div: 10,
+        memchip_clk_div: 5
       },
       testbench_cfg: {
         hemaia_compute_chip: [
@@ -232,10 +235,13 @@
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
       bingo_cfg: {
-        dep_tag_width: 4
+        dep_tag_width: 5
         task_id_width: 32
         task_desc_width: 128
         waiting_queue_depth: 128
+        // 128 CERF groups: 4 expert slots x 32 row tiles a chiplet for the prefill tile skip
+        // (docs/cerf_128bit_todo.md); cond_exec_group_id is 7 bits, the descriptor 86.
+        cerf_groups: 128
       },
     },
     clusters:[
