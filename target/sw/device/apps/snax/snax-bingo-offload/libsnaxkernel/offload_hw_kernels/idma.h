@@ -27,6 +27,51 @@
 #define BINGO_IDMA_SPLIT 1
 #endif
 
+// Wait for one iDMA transfer by its id. dmstat 0 is the id of the last transfer the ND midend
+// retired; transfer ids grow by one per issue (2, 3, ... wrapping to 2), so the transfer `tid` has
+// retired once the completed id has reached it. Unlike snrt_dma_wait_all, which polls the busy bit
+// (backend or ND midend busy), this cannot return while a just-issued transfer is still waiting in
+// the frontend's request FIFO or between the midend and the backend.
+//
+// This is not snrt_dma_wait. That one spins while `completed - tid <= 0`, so it returns only once
+// the completed id has passed `tid` (>). Here the wait ends once the completed id has reached
+// `tid` (>=); the two are not interchangeable.
+static inline void bingo_dma_wait_id(snrt_dma_txid_t tid) {
+    uint32_t done;
+    do {
+        register uint32_t r asm("t0");
+        asm volatile(".word (0b0000100 << 25) | (0b00000 << 20) | (0b000 << 12) | ((5) << 7) | (0b0101011 << 0)\n"
+                     : "=r"(r));
+        done = r;
+    } while ((int32_t)(done - (uint32_t)tid) < 0);
+}
+
+// Wait until every transfer given to this iDMA so far has retired (its write responses are back).
+// The BINGO iDMA kernels call it before their first transfer; they still end with snrt_dma_wait_all.
+//
+// dmstat 1 is the id the next transfer gets, but it counts a transfer only once the transfer
+// leaves the frontend's request FIFO for the ND midend: read right after a start it can still be
+// the started transfer's own id. At a kernel's start the previous task's last transfer left the
+// FIFO long ago, so dmstat 1 - 1 is the newest transfer.
+//
+// Why: snrt_dma_wait_all polls the busy bit, which falls once the backend has handed its last W
+// beat on, before the write responses are back: a write to another chip may still be inside this
+// chip (its D2D framer answers B once the burst has left). A next task whose transfer started
+// behind it would wait: its write to another port of the cluster's DMA crossbar waits for those
+// responses (one AXI ID), its read data fills the iDMA's buffer, and read data from another chip
+// that the iDMA refuses holds this chip's D2D receive stream -- the one stream that also carries
+// other chips' write bursts through this chip, possibly the one the stuck write waits behind.
+static inline void bingo_dma_drain(void) {
+    uint32_t next;
+    {
+        register uint32_t r asm("t0");
+        asm volatile(".word (0b0000100 << 25) | (0b00001 << 20) | (0b000 << 12) | ((5) << 7) | (0b0101011 << 0)\n"
+                     : "=r"(r));
+        next = r;
+    }
+    bingo_dma_wait_id((snrt_dma_txid_t)(next - 1u));
+}
+
 // The 1-D copy of __snax_bingo_kernel_idma_1d_copy and __snax_bingo_kernel_idma_broadcast,
 // after the SW guard and the role check (their args are one layout). Copy 1d data from src
 // to dst using the iDMA, or with `bcast` to the same address on every chip (a store to chip
@@ -46,6 +91,7 @@ static inline __attribute__((always_inline)) uint32_t _bingo_idma_1d(void *arg, 
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     // ISSUE THE COPY AS BINGO_IDMA_SPLIT CONCURRENT TRANSFERS, NOT ONE (a broadcast is one).
     //
     // A single large L3->L1 load runs at a fixed rate well under what the port can
@@ -111,6 +157,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     snrt_dma_start_1d_wideptr(dst, src, size);
     snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, dst), src, size);
     snrt_dma_start_1d_wideptr(flag, val, 4);
@@ -120,25 +167,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
-}
-
-// Wait for one iDMA transfer by its id. dmstat 0 is the id of the last transfer the ND midend
-// retired; transfer ids grow by one per issue (2, 3, ... wrapping to 2), so the transfer `tid` has
-// retired once the completed id has reached it. Unlike snrt_dma_wait_all, which polls the busy bit
-// (backend or ND midend busy), this cannot return while a just-issued transfer is still waiting in
-// the frontend's request FIFO or between the midend and the backend.
-//
-// This is not snrt_dma_wait. That one spins while `completed - tid <= 0`, so it returns only once
-// the completed id has passed `tid` (>). Here the wait ends once the completed id has reached
-// `tid` (>=); the two are not interchangeable.
-static inline void bingo_dma_wait_id(snrt_dma_txid_t tid) {
-    uint32_t done;
-    do {
-        register uint32_t r asm("t0");
-        asm volatile(".word (0b0000100 << 25) | (0b00000 << 20) | (0b000 << 12) | ((5) << 7) | (0b0101011 << 0)\n"
-                     : "=r"(r));
-        done = r;
-    } while ((int32_t)(done - (uint32_t)tid) < 0);
 }
 
 // A broadcast collective's destination: spin until each producer's landed flag (64 B apart,
@@ -158,6 +186,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_fetch_flagged_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     // The poll: ONE strided iDMA copy brings every flag word (each at the head of its 64 B
     // slot) into dst -- free until the data lands there -- and the core checks them in L1.
     // Reading the flags one by one from L3 cost a round trip each: the last
@@ -219,6 +248,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_put_flagged(void *arg)
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_put_flagged_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     if (bcast & 2u) {
         snrt_dma_start_1d_wideptr(dst, src, size);
         snrt_dma_start_1d_wideptr(flag, val, 4);
@@ -308,6 +338,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
     uint32_t pairs = num_elems / 2u;         // N/2 pairs
     uint32_t pair_bytes = 2u * elem_bytes;   // stride from one pair to the next
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     // dst[2k]   = src[2k+1]   (odd elements -> even slots)
     snrt_dma_start_2d_wideptr(dst_addr, src_addr + elem_bytes,
                               elem_bytes, pair_bytes, pair_bytes, pairs);
@@ -349,6 +380,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
         return BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     for (uint32_t o = 0; o < outer; o++)
         snrt_dma_start_2d_wideptr(dst + (uint64_t)o * a->dst_outer,
                                   src + (uint64_t)o * a->src_outer, a->size,
@@ -389,6 +421,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_ring_load_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     if (a->trailer) {
         // weight_ring.trailer: the record's own last beat says it has landed (the push writes
         // it last, one transfer, writes in order); the slots are zero at boot (.bss)
@@ -441,6 +474,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_copy_slot(void *arg)
         return BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     snrt_dma_start_1d_wideptr(dst, base + a->offset, a->size);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
