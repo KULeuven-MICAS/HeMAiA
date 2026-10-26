@@ -61,7 +61,8 @@ class BingoDFGDescriptorMixin:
         return [
             # DARTS Tier 1 conditional execution
             ("cond_exec_invert", 1),
-            ("cond_exec_group_id", 5),
+            # clog2 of the CERF group count (cfg s1_quadrant.bingo_cfg.cerf_groups)
+            ("cond_exec_group_id", self.cerf_group_id_width),
             ("cond_exec_en", 1),
             # 00 = normal, 01 = dummy, 10 = gating
             ("task_type", 2),
@@ -153,7 +154,8 @@ class BingoDFGDescriptorMixin:
             # Subtracted, not re-listed, so adding a field to the table cannot leave this
             # breakdown claiming numbers that no longer add up to the total.
             fixed = current_shift - (2 * cluster_id_width + core_id_width
-                                     + 2 * num_cores + 2 * self.dep_tag_width)
+                                     + 2 * num_cores + 2 * self.dep_tag_width
+                                     + self.cerf_group_id_width)
             raise ValueError(
                 f"Packed task descriptor exceeds {self.task_desc_width} bits: "
                 f"{current_shift} bits used.\n"
@@ -164,6 +166,8 @@ class BingoDFGDescriptorMixin:
                 f"  dep_check + dep_set code     {2 * num_cores}\n"
                 f"  dep_check + dep_set tag      {2 * self.dep_tag_width}  "
                 f"(dep_tag_width={self.dep_tag_width})\n"
+                f"  cond_exec_group_id           {self.cerf_group_id_width}  "
+                f"(cerf_groups={self.cerf_groups})\n"
                 f"Widen s1_quadrant.task_desc_width in the RTL cfg (SW picks the new "
                 f"value up from occamy.h's BINGO_TASK_DESC_WIDTH, and each extra 64 bits "
                 f"costs one more fetch beat), or lower s1_quadrant.dep_tag_width (each "

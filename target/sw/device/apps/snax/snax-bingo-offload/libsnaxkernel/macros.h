@@ -106,8 +106,9 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 //    signals so the graph stays consistent.
 //
 //  Tier 2 — SW guard (this macro):
-//    CERF only has 16 groups, so when the conditional fan-out exceeds
-//    that (e.g. >16 experts sharing a CERF group, MoE with 64 experts,
+//    CERF has BINGO_CERF_GROUPS groups (32 unless the cfg sets cerf_groups),
+//    so when the conditional fan-out exceeds that (e.g. experts sharing a
+//    CERF group, MoE with more experts than groups,
 //    fine-grained masked nodes) the HW can only fire the whole group.
 //    The SW guard then runs *inside* each dispatched task and decides
 //    per-node whether to do real work or return immediately. The HW

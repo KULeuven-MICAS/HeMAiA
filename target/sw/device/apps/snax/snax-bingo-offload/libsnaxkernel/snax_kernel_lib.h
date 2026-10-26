@@ -53,6 +53,7 @@
 #include "offload_hw_kernels/simd_row.h"
 #include "offload_hw_kernels/moe_route.h"
 #include "offload_hw_kernels/moe_prefill.h"
+#include "offload_hw_kernels/cerf.h"
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
@@ -97,6 +98,10 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // The MoE prefill (offload_hw_kernels/moe_prefill.h).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_topk_rows),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_dispatch),
+    // CERF gates on a device core, and their cost micro-benchmark (offload_hw_kernels/cerf.h).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_tiles),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_static),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_cost),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_gather_rows),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_mul_tiles),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_deq_swiglu),

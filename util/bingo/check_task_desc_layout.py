@@ -103,6 +103,7 @@ def rtl_layout(rtl_path, cfg):
         "bingo_hw_manager_dep_tag_t":             cfg["dep_tag_width"],
         "logic":                                  1,
         "logic [4:0]":                            5,
+        "logic [CerfGroupIdWidth-1:0]":           cfg["cerf_group_id_width"],
     }
     nested = {
         "bingo_hw_manager_dep_check_info_t": "bingo_hw_manager_dep_check_info_t",
@@ -129,7 +130,8 @@ def py_layout(cfg):
     n, tag = cfg["ncores_hw"], cfg["dep_tag_width"]
     cw = idx_width(cfg["nclusters"])
     return [
-        ("cond_exec_invert", 1), ("cond_exec_group_id", 5), ("cond_exec_en", 1),
+        ("cond_exec_invert", 1), ("cond_exec_group_id", cfg["cerf_group_id_width"]),
+        ("cond_exec_en", 1),
         ("task_type", 2), ("task_id", cfg["task_id_width"]),
         ("assigned_chiplet_id", cfg["chip_id_width"]),
         ("assigned_cluster_id", cw), ("assigned_core_id", idx_width(n)),
@@ -137,6 +139,7 @@ def py_layout(cfg):
         ("dep_set_en", 1), ("dep_set_all_chiplet", 1),
         ("dep_set_chiplet_id", cfg["chip_id_width"]),
         ("dep_set_cluster_id", cw), ("dep_set_code", n), ("dep_set_tag", tag),
+        ("cerf_carry", 1),
     ]
 
 
@@ -149,6 +152,7 @@ C_FIELDS = [
     ("dep_set_en", "DEP_SET_ENABLED"), ("dep_set_all_chiplet", "DEP_SET_ALL_CHIPLET"),
     ("dep_set_chiplet_id", "DEP_SET_CHIPLET_ID"), ("dep_set_cluster_id", "DEP_SET_CLUSTER_ID"),
     ("dep_set_code", "DEP_SET_CODE"), ("dep_set_tag", "DEP_SET_TAG"),
+    ("cerf_carry", "CERF_CARRY"),
 ]
 
 
@@ -198,7 +202,8 @@ def main():
         "nclusters": d.get("N_CLUSTERS_PER_CHIPLET", 1),
         "dep_tag_width": d.get("BINGO_DEP_TAG_WIDTH", 4),
         "chip_id_width": d.get("BINGO_CHIP_ID_WIDTH", 8),
-        "task_id_width": 12,
+        "task_id_width": d.get("BINGO_TASK_ID_WIDTH", 12),
+        "cerf_group_id_width": d.get("BINGO_COND_EXEC_GROUP_ID_WIDTH", 5),
     }
     container = d.get("BINGO_TASK_DESC_WIDTH", 128)
 

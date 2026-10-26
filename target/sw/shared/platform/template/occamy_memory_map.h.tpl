@@ -248,14 +248,24 @@ inline uintptr_t quad_ctrl_core_power_domain_addr(uint32_t reg_idx){
             (reg_idx / OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_CORE_POWER_DOMAIN_FIELDS_PER_REG) * 4;
 }
 
-inline uintptr_t quad_ctrl_cerf_state_addr(){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATE_REG_OFFSET;
+// The CERF is BINGO_CERF_WORDS 32-bit words; word w holds groups 32w..32w+31. regtool names a
+// one-word multireg without the _0 suffix, so the first word's offset is picked here.
+<% cerf_sfx = "_0" if cerf_words > 1 else "" %>\
+inline uintptr_t quad_ctrl_cerf_state_addr(uint32_t word){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATE${cerf_sfx}_REG_OFFSET + word * 4;
 }
 inline uintptr_t quad_ctrl_cerf_write_en_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_WRITE_EN_REG_OFFSET;
 }
-inline uintptr_t quad_ctrl_cerf_status_addr(){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATUS_REG_OFFSET;
+inline uintptr_t quad_ctrl_cerf_status_addr(uint32_t word){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATUS${cerf_sfx}_REG_OFFSET + word * 4;
+}
+// One store sets (or clears) the groups whose bits are 1 in it and leaves every other group.
+inline uintptr_t quad_ctrl_cerf_set_addr(uint32_t word){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_SET${cerf_sfx}_REG_OFFSET + word * 4;
+}
+inline uintptr_t quad_ctrl_cerf_clr_addr(uint32_t word){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_CLR${cerf_sfx}_REG_OFFSET + word * 4;
 }
 
 // DVFS: mode select + host<->PM doorbell handshake registers

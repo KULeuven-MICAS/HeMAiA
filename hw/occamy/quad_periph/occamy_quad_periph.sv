@@ -4,6 +4,8 @@
 module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   parameter BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER = 4,
   parameter BINGO_HW_MANAGER_NR_CLUSTER = 1,
+  // 32-bit words of the HW manager's CERF; must match the register file's NumCerfWords
+  parameter int unsigned CERF_WORDS = 1,
   parameter REG_WIDTH = 32,
   parameter type reg_req_t = logic,
   parameter type reg_rsp_t = logic,
@@ -28,10 +30,11 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   output reg_data_t bingo_hw_manager_idle_power_level_o,
   output reg_data_t bingo_hw_manager_norm_power_level_o,
   output reg_data_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][BINGO_HW_MANAGER_NR_CLUSTER-1:0] bingo_hw_manager_core_power_domain_o,
-  // DARTS CERF
-  output logic        cerf_write_en_o,
-  output logic [31:0] cerf_write_data_o,
-  input  logic [31:0] cerf_state_i,
+  // DARTS CERF: a masked write, state = (state & ~mask) | (data & mask) when en is high
+  output logic                       cerf_write_en_o,
+  output logic [CERF_WORDS*32-1:0]   cerf_write_mask_o,
+  output logic [CERF_WORDS*32-1:0]   cerf_write_data_o,
+  input  logic [CERF_WORDS*32-1:0]   cerf_state_i,
   // DVFS: mode select, CLINT doorbell address, host ack, published request
   output reg_data_t   bingo_hw_manager_pm_mode_o,
   output logic [47:0] bingo_hw_manager_dvfs_clint_msip_addr_o,
@@ -61,15 +64,38 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
       end
     end
   end
-  // DARTS CERF
-  assign cerf_write_data_o = reg2hw.cerf_state.q;
-  assign cerf_write_en_o   = reg2hw.cerf_write_en.q;
+  // DARTS CERF. Three ways to write it, merged into one masked write:
+  // - CERF_WRITE_EN latches every CERF_STATE word at once (mask all ones);
+  // - a CERF_SET word sets the groups whose bits are 1 in it, a CERF_CLR word clears them,
+  //   each in the cycle of its own store, leaving every other group as it is.
+  // An EN latch and a SET/CLR store in the same cycle apply in that order.
+  always_comb begin
+    cerf_write_mask_o = '0;
+    cerf_write_data_o = '0;
+    if (reg2hw.cerf_write_en.q) begin
+      cerf_write_mask_o = '1;
+      for (int w = 0; w < CERF_WORDS; w++) cerf_write_data_o[w*32 +: 32] = reg2hw.cerf_state[w].q;
+    end
+    for (int w = 0; w < CERF_WORDS; w++) begin
+      if (reg2hw.cerf_set[w].qe) begin
+        cerf_write_mask_o[w*32 +: 32] |= reg2hw.cerf_set[w].q;
+        cerf_write_data_o[w*32 +: 32] |= reg2hw.cerf_set[w].q;
+      end
+      if (reg2hw.cerf_clr[w].qe) begin
+        cerf_write_mask_o[w*32 +: 32] |= reg2hw.cerf_clr[w].q;
+        cerf_write_data_o[w*32 +: 32] &= ~reg2hw.cerf_clr[w].q;
+      end
+    end
+  end
+  assign cerf_write_en_o = |cerf_write_mask_o;
   // Auto-clear write_en: HW writes 0 back after latch takes effect
   assign hw2reg.cerf_write_en.d  = '0;
   assign hw2reg.cerf_write_en.de = reg2hw.cerf_write_en.q;
   // CERF_STATUS: HW writes actual controller state for SW read-back
-  assign hw2reg.cerf_status.d  = cerf_state_i;
-  assign hw2reg.cerf_status.de = 1'b1;  // always update
+  for (genvar w = 0; w < CERF_WORDS; w++) begin : gen_cerf_status
+    assign hw2reg.cerf_status[w].d  = cerf_state_i[w*32 +: 32];
+    assign hw2reg.cerf_status[w].de = 1'b1;  // always update
+  end
   // DVFS: SW->HW config
   assign bingo_hw_manager_pm_mode_o = reg2hw.pm_mode.q;
   assign bingo_hw_manager_dvfs_clint_msip_addr_o[31:0]  = reg2hw.dvfs_clint_msip_addr_lo.q;

@@ -47,15 +47,12 @@ class BingoDFGValidateMixin:
            edge) is, through dependencies and queue order, a predecessor of that producer.
         6. CROSS-DIE PREDICATE PATH -- a remote gated task that no cerf_carry set reaches.
 
-        KNOWN GAP: this reasons about the GRAPH, so it assumes every task runs.
-        A CERF-skipped task fires its dep_set immediately out of the checkout
-        queue, while a task that really runs fires only once its done arrives --
-        so skipping lets a producer's set overtake the drain of an earlier
-        consumer that shares the same reused tag, and case 3 above becomes
-        reachable on a graph this pass has already cleared. Observed on a core
-        carrying both gated and ungated tasks. What catches it is the routing
-        sweep in bingo_sim_check.simulate_for_hangs, which replays the descriptor
-        list once per plausible gate outcome.
+        This reasons about the GRAPH, as if every task runs. A CERF-skipped task
+        still waits for its own dep-check (and clears it), and its dep_set leaves
+        the core's checkout queue in order, only without waiting for a done -- so
+        every happens-before edge the tag reuse relies on still holds. The routing
+        sweep in bingo_sim_check.simulate_for_hangs replays the descriptor list
+        once per plausible gate outcome as a check on that.
         """
         if tag_width is None:
             tag_width = self.dep_tag_width
@@ -154,13 +151,27 @@ class BingoDFGValidateMixin:
         #    through a dummy on the gating task's core, and that proxy is what
         #    crosses. Without the carry bit the remote task reads a stale CERF
         #    and silently skips work the router selected.
+        #    And only the low global_cerf_groups ride that message
+        #    (bingo_hw_manager_top GlobalCerfGroups): a remote task gated on a group
+        #    above them reads its own die's bit, which nothing ever writes.
         gating_targets = getattr(self, "_gating_to_targets", {})
+        n_window = getattr(self, "global_cerf_groups", 8)
         cross_die = 0
         for g, targets in gating_targets.items():
             remote = {t.assigned_chiplet_id for t in targets
                       if t.assigned_chiplet_id != g.assigned_chiplet_id}
             if not remote:
                 continue
+            for t in sorted(targets, key=lambda n: n.node_id):
+                if (t.assigned_chiplet_id != g.assigned_chiplet_id
+                        and t.cond_exec_group_id >= n_window):
+                    raise ValueError(
+                        f"hang check: '{t.node_name}' on chiplet "
+                        f"0x{t.assigned_chiplet_id:02x} is gated by '{g.node_name}' on "
+                        f"0x{g.assigned_chiplet_id:02x} through CERF group "
+                        f"{t.cond_exec_group_id}, but only groups 0-{n_window - 1} cross "
+                        f"a die with the dep-set. It would read a bit nobody writes and "
+                        f"skip silently.")
             carriers = {n.dep_set_chiplet_id for n in ([g] + list(nx.descendants(self, g)))
                         if getattr(n, "cerf_carry", False) and n.dep_set_enable}
             for chip in sorted(remote):
@@ -172,6 +183,36 @@ class BingoDFGValidateMixin:
                         f"dep_set_chiplet_id={chip}). The remote task would read "
                         f"a stale CERF and skip silently.")
                 cross_die += 1
+
+        # 7. TILE ORDER (opt-in: dfg.cerf_tile_order_check = True). The stricter form of the
+        #    tile rule in docs/cerf_128bit_todo.md 3a: on a core carrying several groups of a
+        #    'tiles' fork, every slot's tasks are one run in tile order, so the tasks a gate
+        #    skips are the tail of that run. Off by default: the routing sweep on the cycle
+        #    model, with skips that are not a prefix too, finds no hazard in interleaved
+        #    tiles (see _validate_cerf_core_sharing).
+        node_to_group = getattr(self, "_node_to_cerf_group", {})
+        for (chip, cl, core), seq in (by_core.items()
+                                      if getattr(self, "cerf_tile_order_check", False) else ()):
+            gated = [n for n in seq if n in node_to_group]
+            if len({node_to_group[n] for n in gated}) < 2:
+                continue
+            brs = [self._branch_of(n) for n in gated]
+            if any(br is None or br.slot is None for br in brs):
+                continue
+            runs = []
+            for br in brs:
+                if not runs or runs[-1][0] != br.slot:
+                    runs.append((br.slot, []))
+                runs[-1][1].append(br.tile)
+            slots = [s for s, _ in runs]
+            bad = (len(slots) != len(set(slots))
+                   or any(ts != sorted(ts) for _, ts in runs))
+            if bad:
+                raise ValueError(
+                    f"hang check: chiplet 0x{chip:02x} cluster {cl} core {core} runs the "
+                    f"tiles of a tile fork out of order (slot, tiles in queue order: "
+                    f"{[(s, ts[:6]) for s, ts in runs][:6]}). Each slot's tiles must be one "
+                    f"run in tile order, so the ones a gate skips are the run's tail.")
 
         return {"edges": sum(len(e) for e in cells.values()),
                 "cells": len(cells),
@@ -339,6 +380,16 @@ class BingoDFGValidateMixin:
         So the rule is per core, not per graph: every CERF-gated task on one core must
         carry the SAME group. Ungated tasks are free -- they run in every routing, so
         they cannot be the ones racing.
+
+        The deadlock behind this rule was the cycle model's, not the RTL's: the model
+        fired a skipped task's dep_set in the same step as the clear of its own dep-check
+        (bingo_hw_manager tb_bingo_hw_manager_cerf_samecore passes on RTL, and the fixed
+        model passes the sweep). The rule stays as a conservative default.
+
+        One exception: the tiles of a 'tiles' fork. Its gate enables a prefix of every
+        slot's tiles, so with each slot's tiles in one run in tile order on a core (the
+        hang check's tile-order case) the skipped tasks of a slot are the tail of its
+        run and no running task of the slot follows a skipped one.
         """
         node_to_group = getattr(self, "_node_to_cerf_group", {})
         if not node_to_group:
@@ -351,6 +402,11 @@ class BingoDFGValidateMixin:
 
         for (chip, cl, core), groups in sorted(by_core.items()):
             if len(groups) < 2:
+                continue
+            forks = {getattr(self._branch_of(n), "fork", None)
+                     for ns in groups.values() for n in ns}
+            if (len(forks) == 1 and None not in forks
+                    and next(iter(forks)).select.get("mode") == "tiles"):
                 continue
             detail = "; ".join(
                 f"group {gid}: " + ", ".join(sorted(x.node_name for x in ns)[:3])
@@ -386,7 +442,10 @@ class BingoDFGValidateMixin:
               misses a branch drops it silently, which is its own refusal;
           (b) the consumer carries the SW guard for the same gate, so its kernel
               early-returns (BINGO_SW_GUARD_CHECK, libsnaxkernel/macros.h);
-          (c) the consumer is a compiler-inserted entry/exit/gating node.
+          (c) the consumer is a compiler-inserted entry/exit/gating node;
+          (d) both are tiles of one slot of a 'tiles' fork and the consumer's tile is
+              the later one: the gate enables a prefix of the slot's tiles, so the
+              consumer runs only if the producer did.
         """
         node_to_group = getattr(self, '_node_to_cerf_group', {})
         if not node_to_group:
@@ -412,6 +471,12 @@ class BingoDFGValidateMixin:
             if node_to_group.get(v) == src_grp:
                 continue
 
+            # (d) a later tile of the same slot of a tile fork
+            bu, bv = self._branch_of(u), self._branch_of(v)
+            if (bu is not None and bv is not None and bu.fork is bv.fork
+                    and bu.slot is not None and bu.slot == bv.slot and bu.tile < bv.tile):
+                continue
+
             # (a) a declared reconvergence of the fork that gates the producer
             fork = declared.get(v)
             if fork is not None:
@@ -428,10 +493,12 @@ class BingoDFGValidateMixin:
                             f"run and their results be dropped without a word.")
                     continue
 
-            # (b) the consumer guards itself against the same gate
+            # (b) the consumer guards itself against the same gate. Not a tile gate's: it
+            #     writes no per-branch activation array for a guard to read.
             if (getattr(v, '_gating_node', None) is not None
                     and v._gating_node is getattr(u, '_gating_node', None)
-                    and getattr(v, '_cond_node_index', None) is not None):
+                    and getattr(v, '_cond_node_index', None) is not None
+                    and not (bv is not None and bv.slot is not None)):
                 continue
 
             dst_grp = node_to_group.get(v)

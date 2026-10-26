@@ -196,6 +196,28 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_probe_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_sync_probe_args_t;
 
+// Tile gate args (__snax_bingo_kernel_cerf_tiles): slot s's tiles 0 .. ceil(counts[s] / rows)
+// - 1 run, the rest of its `tiles` are skipped. Slot s, tile t is CERF group
+// group_base + s * group_block + t (group_block a power of two <= 32, so a slot stays in one
+// CERF word). Written by the mini-compiler's 'tiles' fork.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_cerf_tiles_args {
+  uint32_t counts_addr;   // uint32_t[num_slots]: the rows each slot got, readable by this core
+  uint32_t num_slots;
+  uint32_t rows;          // rows a tile
+  uint32_t tiles;         // tiles a slot
+  uint32_t group_base;    // CERF group of slot 0, tile 0
+  uint32_t group_block;   // CERF groups from one slot to the next
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_cerf_tiles_args_t;
+
+// Static gate args on a device core (__snax_bingo_kernel_cerf_static): the groups this gate owns, bit
+// g % 32 of word g / 32, and the state it gives them. Written by the mini-compiler's 'static' fork.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_cerf_static_args {
+  uint32_t cerf_ctrl[BINGO_CERF_WORDS];
+  uint32_t cerf_state[BINGO_CERF_WORDS];
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_cerf_static_args_t;
+
 // Sync-mark kernel args: a sync probe that also stores BINGO_SYNC_MARK_MAGIC | slot to
 // mark_addr, a word in the task's own L1, which the testbench's SRAM probe recognises and
 // answers with a snapshot of every bank array's access counters. The magic's low 16 bits

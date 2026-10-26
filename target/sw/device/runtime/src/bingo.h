@@ -270,6 +270,33 @@ inline void write_bingo_hw_manager_done_queue(uint32_t task_id){
     asm volatile("csrw 0x5ff, %0" : : "r"(task_id));
 }
 
+// The CERF from a device core: set the groups in `ctrl` of word `word` (groups 32 * word + i)
+// to their bits in `state`, leaving every other group alone. Two stores to the quadrant's
+// per-word clear and set registers, no read-modify-write, so a core and the host that own
+// disjoint groups never undo each other's bits. The done-queue write that releases the gated
+// tasks is a CSR, a different path into the manager than these stores, so this returns only
+// once the status word shows them.
+inline void bingo_dev_cerf_update_word(uint32_t word, uint32_t ctrl, uint32_t state){
+    if (ctrl & ~state) *(volatile uint32_t *)quad_ctrl_cerf_clr_addr(word) = ctrl & ~state;
+    if (ctrl & state) *(volatile uint32_t *)quad_ctrl_cerf_set_addr(word) = ctrl & state;
+    if (!ctrl) return;
+    while ((*(volatile uint32_t *)quad_ctrl_cerf_status_addr(word) & ctrl) != (state & ctrl)) {
+    }
+}
+
+// All BINGO_CERF_WORDS words: the stores of every word go out before the first wait.
+inline void bingo_dev_cerf_update(const uint32_t *ctrl, const uint32_t *state){
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++) {
+        if (ctrl[w] & ~state[w]) *(volatile uint32_t *)quad_ctrl_cerf_clr_addr(w) = ctrl[w] & ~state[w];
+        if (ctrl[w] & state[w]) *(volatile uint32_t *)quad_ctrl_cerf_set_addr(w) = ctrl[w] & state[w];
+    }
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++) {
+        if (!ctrl[w]) continue;
+        while ((*(volatile uint32_t *)quad_ctrl_cerf_status_addr(w) & ctrl[w]) != (state[w] & ctrl[w])) {
+        }
+    }
+}
+
 /**
  * @brief Initialize the bingo HW offload unit
  */
@@ -331,13 +358,19 @@ inline uint32_t bingo_hw_offload_get_arg_ptr(uint32_t dev_task_id){
 
 // The gid list format: this core's next task is the entry at its cursor `*cur`, as the list
 // holds its tasks in the order the manager dispatches them; an entry the manager dropped (a task
-// skipped by conditional execution) is stepped over. Returns the task's dev task id, or -1 when it
-// is not in this core's range [*cur, end).
-inline int32_t bingo_hw_offload_next_dev_task_id(const uint32_t *gids, uint32_t *cur, uint32_t end,
-                                                 uint32_t global_task_id){
+// skipped by conditional execution) is stepped over. A miss in [*cur, end) wraps to the core's
+// first entry `base` and searches [base, *cur): a list launched again
+// (bingo_hw_scheduler_launch) dispatches a task the cursor has passed. Returns the task's dev
+// task id, or -1 when it is not in this core's range [base, end).
+inline int32_t bingo_hw_offload_next_dev_task_id(const uint32_t *gids, uint32_t base, uint32_t *cur,
+                                                 uint32_t end, uint32_t global_task_id){
     uint32_t i = *cur;
     while (i < end && gids[i] != global_task_id) i++;
-    if (i == end) return -1;
+    if (i == end) {
+        for (i = base; i < *cur && gids[i] != global_task_id; i++) {
+        }
+        if (i == *cur) return -1;
+    }
     *cur = i + 1;
     return (int32_t)i;
 }
@@ -358,7 +391,8 @@ inline int32_t bingo_hw_offload_manager(){
     const uint32_t gl_ncores = gid_list ? gl_hdr[1] : 0u;
     const uint32_t *gl_ids = gl_hdr + 3u + gl_ncores;
     const uint32_t core = snrt_cluster_core_idx();
-    uint32_t gl_cur = (gid_list && core < gl_ncores) ? gl_hdr[2u + core] : 0u;
+    const uint32_t gl_base = (gid_list && core < gl_ncores) ? gl_hdr[2u + core] : 0u;
+    uint32_t gl_cur = gl_base;
     const uint32_t gl_end = (gid_list && core < gl_ncores) ? gl_hdr[3u + core] : 0u;
     while(1){
         // Step 2: Reading the Ready Queue to get the task id
@@ -371,7 +405,7 @@ inline int32_t bingo_hw_offload_manager(){
         BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_START);
         // 2. Then we get the dev task id from the global task id
         cur_dev_task_id = gid_list
-            ? bingo_hw_offload_next_dev_task_id(gl_ids, &gl_cur, gl_end, cur_global_task_id)
+            ? bingo_hw_offload_next_dev_task_id(gl_ids, gl_base, &gl_cur, gl_end, cur_global_task_id)
             : bingo_hw_offload_get_dev_task_id(cur_global_task_id);
         if (cur_dev_task_id == -1){
             BINGO_PRINTF(2, "[Cluster %d Core %d]: Error: Invalid dev task id for global task id %d\r\n",

@@ -36,6 +36,7 @@ from bingo_kernel_args import BingoKernelArgs
 
 # The task-list word size lives beside the descriptor measured in those words.
 from bingo_dfg_descriptor import BINGO_TASK_LIST_WORD_BITS
+from bingo_platform import DEFAULT_CERF_GROUPS, GLOBAL_CERF_GROUPS
 
 from bingo_dfg_transforms import BingoDFGTransformsMixin
 from bingo_dfg_conditional import BingoDFGConditionalMixin
@@ -67,7 +68,8 @@ class BingoDFG(
                  dep_tag_width: int = None,
                  task_desc_width: int = None,
                  chip_id_width: int = None,
-                 task_id_width: int = None) -> None:
+                 task_id_width: int = None,
+                 cerf_groups: int = None) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
@@ -93,6 +95,8 @@ class BingoDFG(
         #
         #   dep_tag_width    cfg s1_quadrant.bingo_cfg.dep_tag_width    -> BINGO_DEP_TAG_WIDTH
         #   task_id_width    cfg s1_quadrant.bingo_cfg.task_id_width    -> BINGO_TASK_ID_WIDTH
+        #   cerf_groups      cfg s1_quadrant.bingo_cfg.cerf_groups      -> BINGO_CERF_GROUPS
+        #                    (cond_exec_group_id is clog2 of it)
         #   task_desc_width  cfg s1_quadrant.bingo_cfg.task_desc_width  -> BINGO_TASK_DESC_WIDTH
         #                    (derived per config when the cfg does not pin it)
         #   chip_id_width    cfg hemaia_multichip.chip_id_width -> BINGO_CHIP_ID_WIDTH
@@ -107,7 +111,7 @@ class BingoDFG(
         # Passing a value explicitly overrides the header, for a caller that is
         # deliberately packing for a platform other than the one it parsed.
         if (dep_tag_width is None or task_desc_width is None or chip_id_width is None
-                or task_id_width is None):
+                or task_id_width is None or cerf_groups is None):
             from bingo_platform import platform_descriptor_geometry
             geometry, geometry_source = platform_descriptor_geometry()
         else:
@@ -124,6 +128,18 @@ class BingoDFG(
         # field, so a disagreement with the RTL shifts every field above it.
         self.task_id_width = (geometry["task_id_width"]
                               if task_id_width is None else task_id_width)
+        # CERF groups, from the same header: the conditional-group allocator's limit, and
+        # cond_exec_group_id (clog2 of it) is a descriptor field. Only the low
+        # global_cerf_groups ride a cross-chiplet dep-set (bingo_hw_manager_top
+        # GlobalCerfGroups), so a task gated from another chiplet must use one of those.
+        self.cerf_groups = (geometry.get("cerf_groups", DEFAULT_CERF_GROUPS)
+                            if cerf_groups is None else cerf_groups)
+        if self.cerf_groups < 2 or self.cerf_groups & (self.cerf_groups - 1):
+            raise ValueError(f"cerf_groups ({self.cerf_groups}) must be a power of two "
+                             f"(the RTL indexes it with a clog2-wide group id).")
+        self.cerf_group_id_width = (self.cerf_groups - 1).bit_length()
+        self.cerf_words = (self.cerf_groups + 31) // 32
+        self.global_cerf_groups = min(GLOBAL_CERF_GROUPS, self.cerf_groups)
         self.task_desc_width = (geometry["task_desc_width"]
                                 if task_desc_width is None else task_desc_width)
         self.task_desc_words = (self.task_desc_width + BINGO_TASK_LIST_WORD_BITS - 1) \
@@ -131,9 +147,10 @@ class BingoDFG(
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
-        self._next_cerf_group = 0
+        self._cerf_reset_pools()
         self._gating_cerf_mappings: dict = {}  # gating_node → {expert_idx: cerf_group_id}
         self._cond_forks: list = []            # declared BingoConditionalFork objects
+        self._branch_index: dict = {}          # node -> the fork branch that guards it
         self._declared_combines: dict = {}     # combine node → the fork it closes
         self._gating_to_targets: dict = {}     # gating node → its conditional targets
         # Ordering-only edges (producer, consumer), see bingo_add_order_edge.
@@ -226,7 +243,7 @@ class BingoDFG(
             self.add_edge(new_node_obj, succ, **succ_edge_data[succ])
 
     def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None, static_l1=False, desc_list_in_narrow_spm: bool = True,
-                         sim_check: bool = True) -> None:
+                         sim_check: bool = True, desc_list_in_image: bool = False) -> None:
         """Compile the DFG by assigning dep info and emitting C code.
 
         `static_l1` is False by default: buffers keep their runtime `bingo_l1_alloc` handles
@@ -238,8 +255,13 @@ class BingoDFG(
         narrow SPM, which keeps descriptor fetches off the wide path. Pass False for the
         wide SPM. It stays a knob because the narrow SPM is small and shared with the host
         stack, so a DFG large enough to overflow it must be able to opt out.
+
+        `desc_list_in_image` (default False): the scheduler fetches each chip's descriptors straight from
+        the packed list in the program image (in the chip's L3), with no copy -- for a DFG whose list
+        overflows the narrow SPM and whose L3 has no room for a second copy.
         """
         self.desc_list_in_narrow_spm = desc_list_in_narrow_spm
+        self.desc_list_in_image = desc_list_in_image
         # 0. The per-block pictures, of the graph exactly as the application built it:
         #    every pass below adds entry, exit or dummy nodes a block never stated.
         self.bingo_visualize_blocks(output_dir, app_name)

@@ -68,10 +68,11 @@ module ${name}_quad_ctrl
   logic [AddrWidth-1:0] bingo_hw_manager_dvfs_clint_msip_addr;
   cfg_t                 bingo_hw_manager_dvfs_ack;
   cfg_t                 bingo_hw_manager_dvfs_request;
-  //  DARTS CERF
-  logic        cerf_write_en;
-  logic [31:0] cerf_write_data;
-  logic [31:0] cerf_state;
+  //  DARTS CERF: ${cerf_groups} groups (s1_quadrant.bingo_cfg.cerf_groups)
+  logic                      cerf_write_en;
+  logic [${cerf_groups-1}:0] cerf_write_mask;
+  logic [${cerf_groups-1}:0] cerf_write_data;
+  logic [${cerf_groups-1}:0] cerf_state;
 
   // Quadrant Lite xbar
   // Here we have the host to cluster mailboxes
@@ -143,6 +144,7 @@ module ${name}_quad_ctrl
   occamy_quad_periph #(
     .BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER (BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER),
     .BINGO_HW_MANAGER_NR_CLUSTER          (NrClustersPerQuad),
+    .CERF_WORDS                           (${cerf_groups // 32}),
     .reg_req_t ( ${regbus_quad_ctrl.req_type()} ),
     .reg_rsp_t ( ${regbus_quad_ctrl.rsp_type()} )
   ) i_occamy_quad_periph_regs (
@@ -167,6 +169,7 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_dvfs_request_i        (bingo_hw_manager_dvfs_request       ),
     // DARTS CERF
     .cerf_write_en_o                        (cerf_write_en                       ),
+    .cerf_write_mask_o                      (cerf_write_mask                     ),
     .cerf_write_data_o                      (cerf_write_data                     ),
     .cerf_state_i                           (cerf_state                          )
   );
@@ -244,6 +247,10 @@ module ${name}_quad_ctrl
     // one id per task, so this is the hard cap on how many tasks a graph may contain.
     // Until this was passed, every instance took bingo_hw_manager_top's default of 12.
     .TaskIdWidth              (${task_id_width}                           ),
+    // CERF group count (s1_quadrant.bingo_cfg.cerf_groups). Sets the descriptor's
+    // cond_exec_group_id width (clog2), so it must match BINGO_COND_EXEC_GROUP_ID_WIDTH
+    // (occamy.h), which is the same cfg key.
+    .NumCerfGroups            (${cerf_groups}                             ),
     .TaskQueueMaxOutstanding  (4                                          ),
     // The per-(core, cluster) waiting queue the in-order descriptor stream feeds
     // (s1_quadrant.bingo_cfg.waiting_queue_depth). One full queue stops the whole stream,
@@ -314,6 +321,7 @@ module ${name}_quad_ctrl
     .pm_axi_lite_resp_i                        (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.rsp_name()}),
     // DARTS CERF
     .cerf_write_en_i                           (cerf_write_en                       ),
+    .cerf_write_mask_i                         (cerf_write_mask                     ),
     .cerf_write_data_i                         (cerf_write_data                     ),
     .cerf_state_o                              (cerf_state                          ),
     // DARTS: Load Monitor (not connected yet)

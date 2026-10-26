@@ -32,6 +32,12 @@ DEFAULT_CHIP_ID_WIDTH = 8
 # BINGO_TASK_ID_WIDTH falls back to this RTL default.
 DEFAULT_TASK_ID_WIDTH = 12
 DEFAULT_WAITING_QUEUE_DEPTH = 8
+# NumCerfGroups default, matching bingo_hw_manager_top's parameter default; a header without
+# BINGO_CERF_GROUPS (generated before the group count was a cfg key) has 32.
+DEFAULT_CERF_GROUPS = 32
+# bingo_hw_manager_top GlobalCerfGroups: the low groups a cross-chiplet dep-set carries
+# (cerf_carry). Not a cfg key -- the cross-die message has room for exactly these.
+GLOBAL_CERF_GROUPS = 8
 
 
 def _task_desc_words(width):
@@ -78,6 +84,10 @@ def _descriptor_geometry(defines, source):
         # The id space is 2**width and the compiler assigns one id per task, so it caps the
         # graph size; it is also a descriptor field, so a mismatch shifts every field above it.
         "task_id_width": defines.get("BINGO_TASK_ID_WIDTH", DEFAULT_TASK_ID_WIDTH),
+        # NumCerfGroups as the RTL was generated with (cfg s1_quadrant.bingo_cfg.cerf_groups).
+        # cond_exec_group_id is clog2 of it, the lowest descriptor field but one, so a mismatch
+        # shifts every field above it; it also bounds the conditional-group allocator.
+        "cerf_groups": defines.get("BINGO_CERF_GROUPS", DEFAULT_CERF_GROUPS),
         # WaitingDepCheckQueueDepth (cfg s1_quadrant.bingo_cfg.waiting_queue_depth): not a
         # descriptor field, but the hang check models the queues the stream fills.
         "waiting_queue_depth": defines.get("BINGO_WAITING_QUEUE_DEPTH",
@@ -165,7 +175,7 @@ def parse_platform_cfg(occamy_h_path):
         # order. Empty for a header from before they were listed (then only
         # mem_chip_loc_x/y and the HBM above describe the one there is).
         "mem_chips": _mem_chips(defines, occamy_h_path),
-        # dep_tag_width / chip_id_width / task_id_width / waiting_queue_depth /
+        # dep_tag_width / chip_id_width / task_id_width / cerf_groups / waiting_queue_depth /
         # task_desc_width / task_desc_words. Each is defaulted inside _descriptor_geometry
         # so an older generated header still parses.
         **_descriptor_geometry(defines, occamy_h_path),
@@ -235,7 +245,7 @@ def platform_descriptor_geometry():
     if _LAST_PARSED_PLATFORM is not None:
         geometry = {key: _LAST_PARSED_PLATFORM[key]
                     for key in ("dep_tag_width", "chip_id_width", "task_id_width",
-                                "task_desc_width", "task_desc_words")}
+                                "cerf_groups", "task_desc_width", "task_desc_words")}
         return geometry, _LAST_PARSED_PLATFORM.get("platform_header", "parsed platform")
     try:
         defines = _parse_defines(_DEFAULT_PLATFORM_HEADER)
@@ -243,6 +253,7 @@ def platform_descriptor_geometry():
         return ({"dep_tag_width": DEFAULT_DEP_TAG_WIDTH,
                  "chip_id_width": DEFAULT_CHIP_ID_WIDTH,
                  "task_id_width": DEFAULT_TASK_ID_WIDTH,
+                 "cerf_groups": DEFAULT_CERF_GROUPS,
                  "task_desc_width": DEFAULT_TASK_DESC_WIDTH,
                  "task_desc_words": _task_desc_words(DEFAULT_TASK_DESC_WIDTH)},
                 f"bingo_platform.py schema defaults ({_DEFAULT_PLATFORM_HEADER} is not "

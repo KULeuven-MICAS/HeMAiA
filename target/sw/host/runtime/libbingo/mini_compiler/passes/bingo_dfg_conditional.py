@@ -27,6 +27,9 @@ class BingoConditionalBranch:
         self.invert = invert
         self.group_key = group_key
         self.index = index
+        # (slot, tile) of a 'tiles' fork's branch; None otherwise
+        self.slot = None
+        self.tile = None
 
     def __repr__(self):
         return (f"BingoConditionalBranch(#{self.index}, {len(self.nodes)} nodes, "
@@ -62,14 +65,31 @@ class BingoConditionalFork:
         self.combine_weights = None
         self._selection = None          # (weights_view, activation_view), lazy
 
-    def branch(self, nodes, invert: bool = False, group=None):
+    def branch(self, nodes, invert: bool = False, group=None, slot=None, tile=None):
         """Guard `nodes` on this fork's decision.
 
         Adds the conditional edge from the gating node to each of them, which is
         the representation the rest of the compiler already understands. Tasks
         joined by ordinary edges inside `nodes` end up in one CERF group anyway;
         `group=` another branch merges two arms that are NOT connected.
+
+        A 'tiles' fork names each branch by `slot=` and `tile=` instead: the gate
+        enables tiles 0 .. ceil(count[slot] / rows) - 1 of every slot, so the
+        compiler lays a slot's tiles out as consecutive CERF groups.
         """
+        tiles_mode = self.select.get("mode") == "tiles"
+        if tiles_mode != (slot is not None and tile is not None):
+            raise ValueError(
+                f"fork on '{self.source.node_name}': a 'tiles' fork names every branch "
+                f"with slot= and tile=, and no other fork does.")
+        if tiles_mode and (invert or group is not None):
+            raise ValueError(
+                f"fork on '{self.source.node_name}': a tile branch is enabled by its "
+                f"slot's count; invert= and group= do not apply.")
+        if tiles_mode and any((b.slot, b.tile) == (slot, tile) for b in self.branches):
+            raise ValueError(
+                f"fork on '{self.source.node_name}': slot {slot} tile {tile} is "
+                f"declared twice.")
         if isinstance(nodes, (list, tuple, set)):
             nodes = list(nodes)
         else:
@@ -88,8 +108,10 @@ class BingoConditionalFork:
             self, nodes, invert,
             group.group_key if group is not None else object(),
             len(self.branches))
+        br.slot, br.tile = slot, tile
         self.branches.append(br)
         for n in nodes:
+            self.dfg._branch_index[n] = br
             self.dfg.bingo_add_edge(self.source, n, cond=True)
         return br
 
@@ -195,21 +217,50 @@ class BingoDFGConditionalMixin:
 
     def _branch_of(self, node):
         """The branch that guards `node`, across every fork. None if untouched."""
-        for f in getattr(self, "_cond_forks", []):
-            for br in f.branches:
-                if node in br.nodes:
-                    return br
-        return None
+        return self._branch_index.get(node)
 
-    def _alloc_cerf_group(self, hint: str = "") -> int:
-        """Allocate the next CERF group ID. Raises on overflow (>31)."""
-        gid = self._next_cerf_group
-        self._next_cerf_group += 1
-        if gid >= 32:
-            raise ValueError(
-                f"CERF group overflow: need group {gid} but max is 31 "
-                f"(WF4 violated). {hint}")
-        return gid
+    def _cerf_reset_pools(self) -> None:
+        """Forget every allocated CERF group (a new allocation, or a sequential reuse)."""
+        self._cerf_used = {}             # chiplet -> groups taken on its CERF
+        self._cerf_window_used = set()   # window groups taken by any chiplet
+
+    def _alloc_cerf_block(self, chips: set, size: int, cross_die: bool,
+                          receivers: set, hint: str = "") -> int:
+        """First group of `size` free consecutive CERF groups, aligned to `size`.
+
+        Every chiplet has its own CERF, so a die-local branch only has to be unique on
+        its chiplet. The low `global_cerf_groups` are different: a cerf_carry dep-set
+        overwrites them on the receiving chiplet with the sender's, so a cross-die branch
+        takes one of those, unique across the graph, and a die-local branch takes one
+        only on a chiplet no carry reaches. When the graph has no cross-die branch at
+        all, the groups go out in plain order from 0.
+
+        Raises on overflow (WF4).
+        """
+        G, N = self.global_cerf_groups, self.cerf_groups
+        used = set().union(*(self._cerf_used.get(c, set()) for c in chips))
+        any_cross = getattr(self, "_cerf_any_cross_die", False)
+        # Aligned blocks in [0, N); a die-local one stays out of the window where it can.
+        bases = list(range(0, N - size + 1, size))
+        if any_cross and not cross_die:
+            bases.sort(key=lambda b: (b < G, b))
+        for base in bases:
+            block = set(range(base, base + size))
+            window = {g for g in block if g < G}
+            if cross_die and len(window) < size:
+                continue
+            if not cross_die and window and any_cross and chips & receivers:
+                continue
+            if not block & used and not window & self._cerf_window_used:
+                for c in chips:
+                    self._cerf_used.setdefault(c, set()).update(block)
+                self._cerf_window_used.update(window)
+                return base
+        what = (f"one of the {G} cross-die groups" if cross_die
+                else f"{size} consecutive group(s) of the {N}")
+        raise ValueError(
+            f"CERF group overflow: no free {what} on chiplet(s) "
+            f"{sorted(f'0x{c:02x}' for c in chips)} (WF4 violated). {hint}")
 
     # ------------------------------------------------------------------
     # Lowering, in the order bingo_compile_conditional_regions runs them
@@ -356,41 +407,27 @@ class BingoDFGConditionalMixin:
             nx.has_path(self, gating_ordered[i], gating_ordered[i + 1])
             for i in range(len(gating_ordered) - 1)
         )
-        pool_start = self._next_cerf_group
+        # The chiplets a cerf_carry dep-set can reach: their window groups are overwritten
+        # by the sender's, so no die-local branch there may use one.
+        receivers = {t.assigned_chiplet_id for g, ts in gating_to_targets.items()
+                     for t in ts if t.assigned_chiplet_id != g.assigned_chiplet_id}
+        self._cerf_any_cross_die = bool(receivers)
+        self._cerf_reset_pools()
 
         for gating_node in gating_ordered:
             targets = gating_to_targets[gating_node]
             gating_node.node_type = "gating"
 
             if reuse_groups:
-                self._next_cerf_group = pool_start
+                self._cerf_reset_pools()
 
             components = self._cond_components(gating_node, targets)
-
-            # If more components than the 32 CERF groups allow, share groups:
-            # the HW skips at group level and the SW guard filters within an
-            # active group.
-            num_components = len(components)
-            max_cerf = 32 - self._next_cerf_group
-            if max_cerf <= 0:
-                max_cerf = 32  # will overflow, _alloc_cerf_group raises
-
-            if num_components <= max_cerf:
-                hint = ("Sequential gating reuse is active — "
-                        "too many experts per layer."
-                        if reuse_groups else
-                        "Consider reducing experts or making "
-                        "gating nodes sequential for reuse.")
-                gids = [self._alloc_cerf_group(hint) for _ in components]
+            fork = self._fork_of(gating_node)
+            if fork is not None and fork.select.get("mode") == "tiles":
+                gids = self._alloc_tile_groups(gating_node, fork, components, receivers)
             else:
-                n_groups = min(max_cerf, 32)
-                allocated = [self._alloc_cerf_group(
-                    f"Sharing mode: {num_components} components across {n_groups} groups"
-                ) for _ in range(n_groups)]
-                gids = [allocated[i % n_groups] for i in range(num_components)]
-                print(f"CERF group sharing: {num_components} components "
-                      f"mapped to {n_groups} groups "
-                      f"({num_components/n_groups:.1f} components/group)")
+                gids = self._alloc_branch_groups(gating_node, components, receivers,
+                                                 reuse_groups)
 
             group_ids = []
             for idx, (component, gid) in enumerate(zip(components, gids)):
@@ -419,6 +456,87 @@ class BingoDFGConditionalMixin:
         self._gating_to_targets = gating_to_targets
         self._node_to_cerf_group = node_to_group
         return node_to_group
+
+    def _alloc_branch_groups(self, gating_node, components, receivers, reuse_groups) -> list:
+        """One CERF group per component, from the pools of the chiplets it touches.
+
+        If a gate has more components than groups, the rest share the ones it already
+        got (round robin, per chiplet set): the HW skips at group level and the SW guard
+        filters within an active group.
+        """
+        hint = ("Sequential gating reuse is active - too many experts per layer."
+                if reuse_groups else
+                "Consider reducing experts or making gating nodes sequential for reuse.")
+        gchip = gating_node.assigned_chiplet_id
+        gids, got = [], {}
+        shared = 0
+        for comp in components:
+            chips = {gchip} | {n.assigned_chiplet_id for n in comp}
+            cross = len(chips) > 1
+            key = (frozenset(chips), cross)
+            try:
+                gid = self._alloc_cerf_block(chips, 1, cross, receivers, hint)
+                got.setdefault(key, []).append(gid)
+            except ValueError:
+                if not got.get(key):
+                    raise
+                gid = got[key][shared % len(got[key])]
+                shared += 1
+            gids.append(gid)
+        if shared:
+            n_groups = len(set(gids))
+            print(f"CERF group sharing: {len(components)} components "
+                  f"mapped to {n_groups} groups "
+                  f"({len(components)/n_groups:.1f} components/group)")
+        return gids
+
+    def _alloc_tile_groups(self, gating_node, fork, components, receivers) -> list:
+        """CERF groups of a 'tiles' fork: slot s, tile t -> base + s * block + t.
+
+        The gate enables a prefix of each slot's tiles, so a slot's tiles sit in one
+        aligned block of `block` consecutive groups (a power of two, at most one 32-bit
+        word, so the gate updates each slot with one masked store) and the slots follow
+        one another. Every tile must be on the gate's chiplet: the gate writes only its
+        own CERF.
+        """
+        gchip = gating_node.assigned_chiplet_id
+        slot_of = {}
+        for comp in components:
+            brs = {self._branch_of(n) for n in comp}
+            if len(brs) != 1:
+                raise ValueError(
+                    f"Tile fork on '{fork.source.node_name}': tile branches "
+                    f"{sorted((b.slot, b.tile) for b in brs)} are joined by an edge, so "
+                    f"they would share one CERF group. Each tile is its own group.")
+            br = brs.pop()
+            off = [n for n in comp if n.assigned_chiplet_id != gchip]
+            if off:
+                raise ValueError(
+                    f"Tile fork on '{fork.source.node_name}': slot {br.slot} tile "
+                    f"{br.tile} has '{off[0].node_name}' on chiplet "
+                    f"0x{off[0].assigned_chiplet_id:02x}, but the gate is on "
+                    f"0x{gchip:02x} and writes only its own CERF. Give each chiplet its "
+                    f"own gate.")
+            slot_of[id(comp)] = (br.slot, br.tile)
+        slots = sorted({s for s, _ in slot_of.values()})
+        tiles = sorted({t for _, t in slot_of.values()})
+        if slots != list(range(len(slots))) or tiles != list(range(len(tiles))):
+            raise ValueError(
+                f"Tile fork on '{fork.source.node_name}': slots {slots} and tiles "
+                f"{tiles} must each be numbered 0, 1, 2, ... without gaps.")
+        block = 1 << (len(tiles) - 1).bit_length()
+        if block > 32:
+            raise ValueError(
+                f"Tile fork on '{fork.source.node_name}': {len(tiles)} tiles a slot, "
+                f"more than the 32 groups of one CERF word.")
+        base = self._alloc_cerf_block(
+            {gchip}, block * len(slots), False, receivers,
+            f"Tile fork on '{fork.source.node_name}': {len(slots)} slot(s) x {block} "
+            f"groups.")
+        fork._tile_layout = {"base": base, "block": block, "slots": len(slots),
+                             "tiles": len(tiles)}
+        return [base + s * block + t
+                for s, t in (slot_of[id(c)] for c in components)]
 
     def _cond_components(self, gating_node, targets: set) -> list:
         """Group a gate's targets into branches, one CERF group each.
@@ -494,6 +612,21 @@ class BingoDFGConditionalMixin:
         cerf_controlled_mask = sum(1 << g for g in gating_node.cerf_write_groups)
         mode_str = cond_dic.get('mode', 'static')
 
+        if mode_str == 'tiles':
+            # A device kernel on the source's core: the source wrote the slot counts.
+            fork = self._fork_of(source_node)
+            lay = fork._tile_layout
+            from bingo_kernel_args import SnaxBingoKernelCerfTilesArgs
+            if 'counts' not in cond_dic or 'rows' not in cond_dic:
+                raise ValueError(
+                    f"Tile fork on '{source_node.node_name}': select= needs 'rows' (rows a "
+                    f"tile) and 'counts' (the uint32_t[slots] buffer the source writes).")
+            gating_node.kernel_name = "__snax_bingo_kernel_cerf_tiles"
+            gating_node.kernel_args = SnaxBingoKernelCerfTilesArgs(
+                counts=cond_dic['counts'], num_slots=lay["slots"], rows=cond_dic['rows'],
+                tiles=lay["tiles"], group_base=lay["base"], group_block=lay["block"])
+            return
+
         gating_node.kernel_name = "__host_bingo_kernel_cerf_gating"
 
         if mode_str == 'top_k':
@@ -521,6 +654,7 @@ class BingoDFGConditionalMixin:
                 cerf_group_ids_addr=cerf_gids_alloc,
                 cond_activation_addr=activation,
                 cond_weight_addr=weights,
+                cerf_words=self.cerf_words,
             )
             gating_node._pred_source_node = source_node
 
@@ -529,15 +663,34 @@ class BingoDFGConditionalMixin:
                 mode=BINGO_GATING_MODE_THRESHOLD,
                 cerf_controlled_mask=cerf_controlled_mask,
                 top_k_or_threshold=cond_dic['threshold'],
+                cerf_words=self.cerf_words,
             )
             gating_node._pred_source_node = source_node
 
         elif mode_str == 'static':
-            write_mask = cond_dic.get('write_mask', cerf_controlled_mask)
+            # write_mask is over BRANCHES (bit b = branch b runs), like the router's scores:
+            # the group numbers are the compiler's, not the workload's.
+            gids = self._branch_groups(source_node, gating_node)
+            if 'write_mask' in cond_dic:
+                write_mask = 0
+                for b, gid in gids.items():
+                    if (cond_dic['write_mask'] >> b) & 1:
+                        write_mask |= 1 << gid
+            else:
+                write_mask = cerf_controlled_mask
+            host_core = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
+            if (gating_node.assigned_cluster_id, gating_node.assigned_core_id) != (0, host_core):
+                # the gate sits on its source's core: a device core writes the CERF itself
+                from bingo_kernel_args import SnaxBingoKernelCerfStaticArgs
+                gating_node.kernel_name = "__snax_bingo_kernel_cerf_static"
+                gating_node.kernel_args = SnaxBingoKernelCerfStaticArgs(
+                    ctrl=cerf_controlled_mask, state=write_mask, cerf_words=self.cerf_words)
+                return
             gating_node.kernel_args = HostBingoKernelCerfGatingArgs(
                 mode=BINGO_GATING_MODE_STATIC,
                 cerf_controlled_mask=cerf_controlled_mask,
-                top_k_or_threshold=write_mask,
+                cerf_static_mask=write_mask,
+                cerf_words=self.cerf_words,
             )
 
         elif mode_str == 'custom':
@@ -555,6 +708,10 @@ class BingoDFGConditionalMixin:
         # gating kernel indexes this by the router's score index, so it is keyed
         # by BRANCH: with merged groups two experts legitimately map to one group,
         # and enumerate(sorted(groups)) would silently renumber them.
+        self._gating_cerf_mappings[gating_node] = self._branch_groups(source_node, gating_node)
+
+    def _branch_groups(self, source_node, gating_node) -> dict:
+        """{branch index: CERF group} of the gate on `source_node`."""
         fork = self._fork_of(source_node)
         if fork is not None and fork.branches:
             by_branch = {}
@@ -563,11 +720,19 @@ class BingoDFGConditionalMixin:
                             if n.cond_exec_en), None)
                 if gid is not None:
                     by_branch[br.index] = gid
-            self._gating_cerf_mappings[gating_node] = by_branch
-        else:
-            self._gating_cerf_mappings[gating_node] = {
-                i: gid for i, gid in enumerate(sorted(gating_node.cerf_write_groups))
-            }
+            return by_branch
+        return {i: gid for i, gid in enumerate(sorted(gating_node.cerf_write_groups))}
+
+    def _add_combine_edges(self) -> None:
+        """Rule 5 (missing edges): the workload names a combine's fan-in once, in inputs=.
+        Anything already connected is left alone."""
+        for fork in getattr(self, "_cond_forks", []):
+            node = fork.combine_node
+            if node is None:
+                continue
+            for producer in fork.combine_inputs:
+                if producer is not node and not nx.has_path(self, producer, node):
+                    self.bingo_add_edge(producer, node)
 
     def _lower_combines(self) -> None:
         """Wire and check every declared reconvergence.
@@ -599,13 +764,7 @@ class BingoDFGConditionalMixin:
                             f"reachable from it, so it would decide against a "
                             f"stale predicate.")
 
-            # Rule 5 (missing edges): the workload names the fan-in once, in
-            # inputs=. Anything already connected is left alone.
-            for producer in fork.combine_inputs:
-                if producer is node:
-                    continue
-                if not nx.has_path(self, producer, node):
-                    self.bingo_add_edge(producer, node)
+            # Rule 5 (missing edges): added by _add_combine_edges, before the groups.
 
             # Rule 1: every branch must actually reach the combine. A branch that
             # does not is silently dropped from the result.
@@ -680,6 +839,9 @@ class BingoDFGConditionalMixin:
             if fork is not None:
                 fork._gating_node = gating_node
 
+        # The combines' fan-in edges first: they are what orders one gate's region before the
+        # next gate, which the group allocator's sequential reuse looks for.
+        self._add_combine_edges()
         self._check_well_formed(gating_to_targets)
         node_to_group = self._assign_cerf_groups(gating_to_targets)
 

@@ -303,6 +303,12 @@
               "minimum": 1,
               "default": 12
             },
+            "cerf_groups": {
+              "type": "integer",
+              "description": "Number of conditional-execution groups in the bingo HW manager's CERF (NumCerfGroups), exported to SW as BINGO_CERF_GROUPS / BINGO_CERF_WORDS / BINGO_COND_EXEC_GROUP_ID_WIDTH. A power of two, at least 32: the quadrant exposes the CERF as cerf_groups / 32 registers of 32 bits. Each doubling widens cond_exec_group_id in the task descriptor by one bit. Defaults to 32 when absent, so configs that do not set it keep the 5-bit group id and their descriptor layout.",
+              "enum": [32, 64, 128, 256],
+              "default": 32
+            },
             "waiting_queue_depth": {
               "type": "integer",
               "description": "Depth of the bingo HW manager's per-(core, cluster) waiting-dep-check queue (WaitingDepCheckQueueDepth), exported to SW as BINGO_WAITING_QUEUE_DEPTH. The manager hands the one in-order descriptor stream to these queues, and a single full queue stops the whole stream: a cluster whose queue holds tasks still waiting for their weights holds back every other cluster's next task (HW-19). Deeper queues let the stream run further ahead of a lagging cluster. Costs depth x descriptor width flops per queue. Defaults to the RTL parameter's own 8.",
@@ -356,6 +362,7 @@
           "properties": {
             "master_mhz": {"type": "number", "default": 500, "description": "Testbench master clock, MHz (non-PLL simulation)."},
             "core_clk_div": {"type": "integer", "default": 0, "description": "Divider the runtime gives the compute chips' host and clusters (0: the runtime's own, /7 then /6)."},
+            "cluster_clk_div": {"type": "integer", "description": "Divider the runtime gives the compute chips' clusters when it differs from the host's (absent: core_clk_div)."},
             "memchip_clk_div": {"type": "integer", "default": 6, "description": "The memory chip's digital clock divider (its PHYs run at the master clock)."}
           },
           "additionalProperties": false

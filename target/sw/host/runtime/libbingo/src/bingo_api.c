@@ -882,17 +882,53 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
 }
 
-// The tail both inits share: the power manager, the descriptor list, start, and the release of
-// the clusters.
+int bingo_hw_scheduler_busy(void){
+    return readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr())) != 0;
+}
+
+// The fetch FSM clears START once it has read the last descriptor of the list it was started on,
+// so a new base and count are only written after that.
+void bingo_hw_scheduler_launch(uint64_t base, uint32_t n){
+    if (!n) return;
+    while (bingo_hw_scheduler_busy()) {
+    }
+    writew(base >> 32,     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
+    writew((uint32_t)base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
+    writew(n,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
+    writew(1,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
+}
+
+static uint64_t *bingo_compiled_list;
+static uint32_t bingo_compiled_n, bingo_compiled_n_held;
+
+void bingo_hw_scheduler_set_list(uint64_t *list, uint32_t n, uint32_t n_held){
+    bingo_compiled_list = list;
+    bingo_compiled_n = n;
+    bingo_compiled_n_held = n_held;
+}
+
+uint64_t *bingo_hw_scheduler_list(void){
+    return bingo_compiled_list;
+}
+
+uint32_t bingo_hw_scheduler_list_len(void){
+    return bingo_compiled_n;
+}
+
+void bingo_hw_scheduler_launch_held(void){
+    if (!bingo_compiled_n_held) return;
+    const uint32_t first = bingo_compiled_n - bingo_compiled_n_held;
+    bingo_hw_scheduler_launch((uint64_t)(uintptr_t)(bingo_compiled_list + (uint64_t)first * BINGO_TASK_DESC_WORDS),
+                              bingo_compiled_n_held);
+}
+
+// The tail both inits share: the power manager, the first launch, and the release of the
+// clusters. Only the launch is repeated afterwards (bingo_hw_scheduler_launch).
 static void bingo_hw_scheduler_start(uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
     // Init the power manager
     bingo_hw_scheduler_init_pm();
-    // Init the task desc list base and num tasks
-    writew(bingo_hw_scheduler_task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
-    writew((uint32_t)bingo_hw_scheduler_task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
-    writew(bingo_hw_scheduler_num_task_desc,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
-    // Start the HW scheduler to load the task list
-    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
+    // The task desc list base and num tasks, then start the HW scheduler to load the list
+    bingo_hw_scheduler_launch(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
     // Tell the device that the host init is done and make sure the write has landed.
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
     asm volatile("fence" ::: "memory");
@@ -1122,23 +1158,51 @@ uint32_t bingo_hw_scheduler_sparse(uint64_t *host_arg_list, uint64_t *host_kerne
 // BINGO CERF Runtime API  //
 /////////////////////////////
 
-void bingo_cerf_write_mask(uint32_t mask) {
-    uintptr_t state_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
-    uintptr_t en_addr    = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
-    writew(mask, state_addr);
-    writew(1, en_addr);
-    asm volatile("fence" ::: "memory");
+// No fence after the stores: on this CVA6 a fence also invalidates the whole D-cache. The wait on
+// the status word is what orders the write before the caller's next store (the done-queue write
+// that releases the gated tasks takes another path into the manager): it returns only once the
+// CERF holds the new bits.
+void bingo_cerf_write(const uint32_t state[BINGO_CERF_WORDS]) {
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++)
+        writew(state[w], (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr(w)));
+    writew(1, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr()));
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++) {
+        const uintptr_t st = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_status_addr(w));
+        while (readw(st) != state[w]) {
+        }
+    }
 }
 
-void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask) {
-    uintptr_t status_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_status_addr());
-    uintptr_t state_addr  = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
-    uintptr_t en_addr     = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
-    uint32_t current = readw(status_addr);  // read actual HW state
-    uint32_t updated = (current & ~controlled_mask) | (write_mask & controlled_mask);
-    writew(updated, state_addr);
-    writew(1, en_addr);
-    asm volatile("fence" ::: "memory");
+// Clear first, then set: the gated tasks wait for this gate, so they never see the word between
+// the two stores.
+static inline void bingo_cerf_store_word(uint32_t word, uint32_t ctrl, uint32_t state) {
+    if (ctrl & ~state)
+        writew(ctrl & ~state, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_clr_addr(word)));
+    if (ctrl & state)
+        writew(ctrl & state, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_set_addr(word)));
+}
+
+static inline void bingo_cerf_wait_word(uint32_t word, uint32_t ctrl, uint32_t state) {
+    const uintptr_t st = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_status_addr(word));
+    while ((readw(st) & ctrl) != (state & ctrl)) {
+    }
+}
+
+void bingo_cerf_update_word(uint32_t word, uint32_t ctrl, uint32_t state) {
+    bingo_cerf_store_word(word, ctrl, state);
+    if (ctrl) bingo_cerf_wait_word(word, ctrl, state);
+}
+
+void bingo_cerf_update(const uint32_t ctrl[BINGO_CERF_WORDS], const uint32_t state[BINGO_CERF_WORDS]) {
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++) bingo_cerf_store_word(w, ctrl[w], state[w]);
+    for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++)
+        if (ctrl[w]) bingo_cerf_wait_word(w, ctrl[w], state[w]);
+}
+
+void bingo_cerf_write_mask(uint32_t mask) {
+    uint32_t state[BINGO_CERF_WORDS] = {0};
+    state[0] = mask;
+    bingo_cerf_write(state);
 }
 
 void bingo_cerf_clear_all(void) {

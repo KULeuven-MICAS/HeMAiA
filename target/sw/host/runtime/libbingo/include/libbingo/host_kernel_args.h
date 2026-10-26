@@ -277,10 +277,12 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_requant_scale_args {
 // Supports multiple activation modes via the `mode` field.
 // Mode 0 (top_k):    Read logits from predecessor scratchpad, select top-k experts
 // Mode 1 (threshold): Read confidence from predecessor scratchpad, activate if below threshold
-// Mode 2 (static):   Use compile-time cerf_write_mask directly (no predecessor read)
+// Mode 2 (static):   Write the compile-time cerf_static_mask (no predecessor read)
 //
-// Two-level gating for >32 experts (CERF group sharing):
-//   Level 1 (HW): CERF groups (max 32) — inactive groups skip at zero cost
+// The masks are BINGO_CERF_WORDS 32-bit words: group g is bit g % 32 of word g / 32.
+//
+// Two-level gating for more experts than CERF groups (CERF group sharing):
+//   Level 1 (HW): CERF groups (BINGO_CERF_GROUPS) — inactive groups skip at zero cost
 //   Level 2 (SW): Per-expert activation array — experts in active groups check
 //                 their slot in cond_activation_addr before computing.
 //                 Written by this gating kernel, read by expert kernels.
@@ -291,9 +293,8 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_requant_scale_args {
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_gating_args {
     uint64_t mode;                    // BINGO_GATING_MODE_*
     uint64_t pred_scratchpad_addr;    // predecessor's scratchpad (unused for static)
-    uint64_t cerf_controlled_mask;    // 32-bit: groups this gating node owns
-    uint64_t top_k_or_threshold;      // top_k: k; threshold: FP32 bits; static: cerf_write_mask
-    uint64_t cerf_group_ids_addr;    // top_k: &cerf_group_ids[]; others: unused (0)
+    uint64_t top_k_or_threshold;      // top_k: k; threshold: FP32 bits; static: unused (0)
+    uint64_t cerf_group_ids_addr;    // top_k: &cerf_group_ids[] (uint8_t a branch); others: 0
     uint64_t cond_activation_addr;  // Per-expert activation array (uint8_t[num_experts])
                                       // Gating kernel writes 1 for selected experts, 0 for others.
                                       // Expert kernels read their slot before computing.
@@ -306,5 +307,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_gating_args {
                                       // loads a word and writes it to the SIMD StreamMap scale CSR. No
                                       // device core has an FPU, so the renormalising divide has to
                                       // happen here, on the CVA6, where the winner loop already is.
+    uint32_t cerf_controlled_mask[BINGO_CERF_WORDS];  // the groups this gating node owns
+    uint32_t cerf_static_mask[BINGO_CERF_WORDS];      // static: the state it gives them; else 0
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_cerf_gating_args_t;

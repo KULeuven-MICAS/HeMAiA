@@ -269,8 +269,9 @@ typedef struct hw_manager_task {
     uint8_t  dep_set_cluster_id;   // BINGO_IDX_WIDTH(N_CLUSTERS_PER_CHIPLET)
     // DARTS Tier 1: Conditional Execution
     bool     cond_exec_en;         // Conditional execution enabled
-    uint8_t  cond_exec_group_id;   // COND_EXEC_GROUP_ID_WIDTH: CERF group (0-31)
+    uint8_t  cond_exec_group_id;   // COND_EXEC_GROUP_ID_WIDTH: CERF group (0..BINGO_CERF_GROUPS-1)
     bool     cond_exec_invert;     // Skip when group ACTIVE (if true)
+    bool     cerf_carry;           // This task's chiplet dep-set carries the cross-die CERF window
 } bingo_hw_manager_task_desc_t;
 
 // One assert per field: the carrier must hold the field's OWN width, computed from the
@@ -294,6 +295,7 @@ BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_tag,         DEP
 BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_en,        COND_EXEC_EN_WIDTH);
 BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_group_id,  COND_EXEC_GROUP_ID_WIDTH);
 BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    COND_EXEC_INVERT_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cerf_carry,          CERF_CARRY_WIDTH);
 
 // The packed form the HW manager fetches. BINGO_TASK_DESC_WORDS 64-bit words, least
 // significant first; see bingo_utils.h for the container and the memory order.
@@ -306,11 +308,10 @@ BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    CON
 // (1) and (2) but not (3) makes every affected workload fail to build. The assert only
 // fires for a workload that is compiled.
 //
-// This encoder/decoder pair is a FOURTH copy and nothing checks it. It currently omits
-// `cerf_carry`, which is harmless only because it is unreferenced outside this header and
-// cerf_carry is always 0 on a single chiplet. If you add a field, add it here too -- or
-// delete this pair, since the descriptor list the hardware actually fetches is packed by
-// the mini-compiler, not by this code.
+// This encoder/decoder pair is a FOURTH copy, walking the same shift chain (3). If you add
+// a field, add it here too. The descriptor list the hardware fetches is packed by the
+// mini-compiler, not by this code; a host that patches a precompiled descriptor at run time
+// (bingo_task_desc_patch below) goes through these field macros as well.
 static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
     bingo_task_desc_t encoded = {{0}};
 
@@ -362,6 +363,9 @@ static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manag
     // widths it can straddle the 64-bit word boundary
     ENCODE_BITFIELD(encoded, desc.dep_set_tag, DEP_SET_TAG_WIDTH, DEP_SET_TAG_SHIFT);
 
+    // Cross-die CERF carry (1 bit) -- the MSB of the layout
+    ENCODE_BITFIELD(encoded, desc.cerf_carry, CERF_CARRY_WIDTH, CERF_CARRY_SHIFT);
+
     return encoded;
 }
 
@@ -388,6 +392,7 @@ static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(bin
     desc.dep_set_cluster_id  = (uint8_t) BINGO_EXTRACT_BITS(encoded, DEP_SET_CLUSTER_ID_SHIFT + DEP_SET_CLUSTER_ID_WIDTH - 1, DEP_SET_CLUSTER_ID_SHIFT);
     desc.dep_set_code        = (uint32_t)BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
     desc.dep_set_tag         = (uint8_t) BINGO_EXTRACT_BITS(encoded, DEP_SET_TAG_SHIFT + DEP_SET_TAG_WIDTH - 1, DEP_SET_TAG_SHIFT);
+    desc.cerf_carry          = (bool)    BINGO_EXTRACT_BITS(encoded, CERF_CARRY_SHIFT + CERF_CARRY_WIDTH - 1, CERF_CARRY_SHIFT);
     return desc;
 }
 
@@ -596,9 +601,13 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 // Exposed so DVFS can seed its ack with the correct boot (= normal) level instead of a
 // stale 0 (which would otherwise cause a spurious initial RAISE doorbell).
 
-// A platform with a simulated-clock cfg (occamy.h HEMAIA_CORE_CLK_DIV) runs its cores at that
-// one divider, busy or idle: 8 on a 4 GHz master is the real chip's 500 MHz.
-#if defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
+// A platform with a simulated-clock cfg (occamy.h HEMAIA_CLUSTER_CLK_DIV, else HEMAIA_CORE_CLK_DIV)
+// runs its clusters at that one divider, busy or idle: 8 on a 4 GHz master is the real chip's
+// 500 MHz. The power manager programs only the cluster domains.
+#if defined(HEMAIA_CLUSTER_CLK_DIV) && HEMAIA_CLUSTER_CLK_DIV > 0
+#define BINGO_PM_IDLE_POWER_LEVEL   HEMAIA_CLUSTER_CLK_DIV
+#define BINGO_PM_NORMAL_POWER_LEVEL HEMAIA_CLUSTER_CLK_DIV
+#elif defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
 #define BINGO_PM_IDLE_POWER_LEVEL   HEMAIA_CORE_CLK_DIV
 #define BINGO_PM_NORMAL_POWER_LEVEL HEMAIA_CORE_CLK_DIV
 #else
@@ -665,12 +674,70 @@ uint32_t bingo_hw_scheduler_sparse(uint64_t *host_arg_list, uint64_t *host_kerne
 /////////////////////////////
 // DARTS CERF Runtime API  //
 /////////////////////////////
-// Write full CERF bitmask and trigger latch (bit[i] = group i active)
-void bingo_cerf_write_mask(uint32_t mask);
+// The CERF is BINGO_CERF_WORDS 32-bit words; bit i of word w is group 32w + i.
 
-// Read-modify-write: update only controlled groups, then trigger latch.
-// Preserves other gating nodes' groups during pipelined execution.
-void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask);
+// Write the whole CERF: every word of `state`, latched at once.
+void bingo_cerf_write(const uint32_t state[BINGO_CERF_WORDS]);
+
+// Set the groups in `ctrl` to their bits in `state` and leave every other group alone. Plain
+// stores to the per-word set/clear registers, no read-back, so gates that own disjoint groups
+// never disturb one another. Returns once the stores have landed.
+void bingo_cerf_update(const uint32_t ctrl[BINGO_CERF_WORDS], const uint32_t state[BINGO_CERF_WORDS]);
+
+// One word of the above: groups 32 * word + i for the bits i of `ctrl`.
+void bingo_cerf_update_word(uint32_t word, uint32_t ctrl, uint32_t state);
 
 // Clear all CERF groups (full reset between inference batches)
 void bingo_cerf_clear_all(void);
+
+// 32-bit form, groups 0-31 only; the other words are cleared.
+void bingo_cerf_write_mask(uint32_t mask);
+
+/////////////////////////////////////
+// Relaunch and run-time task lists //
+/////////////////////////////////////
+// bingo_hw_scheduler_init_* launch a graph once. These start the HW manager on another list
+// afterwards, with the clusters already released and the power manager already set.
+
+// Wait until the manager has fetched the list it was last started on (its START register reads
+// 0 again), then point it at `n` descriptors at `base` and start it. Tasks of the previous list
+// may still be running; the new list's tasks queue behind them on each core. n == 0 launches
+// nothing (a started empty list would leave the fetch reading past it).
+// The dep matrix keeps one presence bit per (cell, tag), and the compiler keeps edges apart only
+// within one list: a new list must not set a (cell, tag) an earlier list still has live, or one
+// of the two sets is lost and its consumer waits forever. A list of tasks without dependencies,
+// or the held tail of the compiled list itself (bingo_hw_scheduler_launch_held), is safe.
+void bingo_hw_scheduler_launch(uint64_t base, uint32_t n);
+
+// Whether the manager is still fetching the list it was last started on.
+int bingo_hw_scheduler_busy(void);
+
+// This chiplet's compiled list: `n` descriptors at `list`, of which the last `n_held` were not
+// launched with the rest (a DFG compiled with hold_exits keeps its exit tasks back, so cores
+// stay in their loops for later launches). The emitted kernel_execution records them.
+void bingo_hw_scheduler_set_list(uint64_t *list, uint32_t n, uint32_t n_held);
+// The compiled list recorded above, and its length; slot i is at list + i * BINGO_TASK_DESC_WORDS.
+uint64_t *bingo_hw_scheduler_list(void);
+uint32_t bingo_hw_scheduler_list_len(void);
+// Launch the held tail of the compiled list (no-op when nothing was held).
+void bingo_hw_scheduler_launch_held(void);
+
+// Copy `n` packed descriptors from `src` to `dst` (task-list slots), precompiled, unchanged.
+static inline void bingo_task_list_copy(uint64_t *dst, const uint64_t *src, uint32_t n) {
+    for (uint32_t i = 0; i < n * BINGO_TASK_DESC_WORDS; ++i) dst[i] = src[i];
+}
+
+// Overwrite one field of the packed descriptor in slot `index`, through the layout in
+// bingo_utils.h: e.g. bingo_task_desc_patch(list, 0, DEP_CHECK_ENABLED_WIDTH,
+// DEP_CHECK_ENABLED_SHIFT, 0) drops a copied task's dependency check.
+static inline void bingo_task_desc_patch(uint64_t *task_list, uint32_t index, unsigned width,
+                                         unsigned shift, uint64_t value) {
+    uint64_t *w = task_list + (uint64_t)index * BINGO_TASK_DESC_WORDS;
+    const uint64_t mask = (width >= 64U) ? ~(uint64_t)0 : ((1ULL << width) - 1ULL);
+    const unsigned word = shift / 64U, off = shift % 64U;
+    w[word] = (w[word] & ~(mask << off)) | ((value & mask) << off);
+    if ((off + width) > 64U) {
+        const unsigned hi = off + width - 64U;
+        w[word + 1U] = (w[word + 1U] & ~((1ULL << hi) - 1ULL)) | ((value & mask) >> (64U - off));
+    }
+}

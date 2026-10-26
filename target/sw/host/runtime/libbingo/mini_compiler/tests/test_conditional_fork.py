@@ -310,6 +310,199 @@ except Exception as e:                      # noqa: BLE001
     _compiled, _why = False, f"{type(e).__name__}: {e}"
 check("a lane with no consumer outside it is fine", _compiled, _why)
 
+# ------------------------------------------------------------- 128 CERF groups
+print("CERF group count")
+
+def _wide(groups, experts, chips=(0x00,)):
+    d = BingoDFG(num_chiplets=len(chips), num_clusters_per_chiplet=4, num_cores_per_cluster=5,
+                 is_host_as_acc=True, chiplet_ids=list(chips), dep_tag_width=5,
+                 cerf_groups=groups)
+    _, fork, outs, _ = moe(d, experts=experts, kind="sum")
+    return d, compile_cond(d)
+
+d, g = _wide(128, 40)
+gids = {n.node_name: x for n, x in g.items()}
+check("128 groups: 40 experts get 40 groups, no sharing",
+      len({gids[f"e{e}_st"] for e in range(40)}) == 40, sorted(set(gids.values())))
+check("128 groups: groups past 31 are used", max(gids.values()) >= 32)
+check("128 groups: the descriptor field is 7 bits",
+      dict(d.bingo_task_desc_layout())["cond_exec_group_id"] == 7)
+gate = next(n for n in d.node_list if n.node_name == "__gating_router")
+check("the gating args carry 4 mask words",
+      "cerf_controlled_mask[3]" in gate.kernel_args.get_c_field_assignments({}))
+d, g = _wide(32, 40)
+check("32 groups: 40 experts share 32 groups", len(set(g.values())) == 32)
+check("32 groups: the descriptor field stays 5 bits",
+      dict(d.bingo_task_desc_layout())["cond_exec_group_id"] == 5)
+
+# A cross-die branch takes a window group; a die-local one stays out of the window.
+def _two_chip():
+    d = BingoDFG(num_chiplets=2, num_clusters_per_chiplet=2, num_cores_per_cluster=5,
+                 is_host_as_acc=True, chiplet_ids=[0x00, 0x01], dep_tag_width=5,
+                 cerf_groups=128)
+    r = BingoNode(0, 0, 4, node_name="router", kernel_name="__host_k")
+    d.bingo_add_node(r)
+    f = d.bingo_conditional_fork(r, {"mode": "static"})
+    far = BingoNode(0x01, 0, 0, node_name="far", kernel_name="__snax_k")
+    near = BingoNode(0x00, 1, 0, node_name="near", kernel_name="__snax_k")
+    for n in (far, near):
+        d.bingo_add_node(n)
+        f.branch([n])
+    comb = BingoNode(0, 0, 1, node_name="combine", kernel_name="__snax_k")
+    d.bingo_add_node(comb)
+    f.combine(comb, inputs=[far, near], kind="sum")
+    return d, far, near
+
+d, far, near = _two_chip()
+compile_cond(d)
+check("cross-die branch: a window group (< 8)", far.cond_exec_group_id < 8, far.cond_exec_group_id)
+check("die-local branch beside it: out of the window", near.cond_exec_group_id >= 8,
+      near.cond_exec_group_id)
+
+# ------------------------------------------------------------------ tile fork
+print("tile fork")
+
+def _tiles(slots=2, tiles=4, one_core=True, chip_of=None, extra_edge=None):
+    d = BingoDFG(num_chiplets=2, num_clusters_per_chiplet=2, num_cores_per_cluster=4,
+                 is_host_as_acc=True, chiplet_ids=[0x00, 0x01], dep_tag_width=4,
+                 cerf_groups=128)
+    disp = BingoNode(0, 0, 3, node_name="dispatch", kernel_name="__snax_k")
+    d.bingo_add_node(disp)
+    f = d.bingo_conditional_fork(disp, {"mode": "tiles", "rows": 8, "counts": 0x1000})
+    comb = BingoNode(0, 0, 2, node_name="combine", kernel_name="__snax_k")
+    d.bingo_add_node(comb)
+    ins, by = [], {}
+    for s in range(slots):
+        for t in range(tiles):
+            chip = chip_of(s, t) if chip_of else 0
+            g = BingoNode(chip, 0, 3, node_name=f"s{s}_t{t}_g", kernel_name="__snax_k")
+            m = BingoNode(chip, 0, 0 if one_core else s, node_name=f"s{s}_t{t}_m",
+                          kernel_name="__snax_k")
+            d.bingo_add_node(g); d.bingo_add_node(m); d.bingo_add_edge(g, m)
+            f.branch([g, m], slot=s, tile=t)
+            ins.append(m); by[(s, t)] = (g, m)
+    if extra_edge:
+        a, b = extra_edge
+        d.bingo_add_edge(by[a][1], by[b][0])
+    f.combine(comb, inputs=ins, kind="sum")
+    return d, f, by
+
+d, f, by = _tiles()
+compile_cond(d)
+lay = f._tile_layout
+check("tile layout: block 4, slots one after the other",
+      (lay["block"], lay["slots"], lay["tiles"]) == (4, 2, 4), lay)
+check("tile group = base + slot * block + tile",
+      all(by[(s, t)][0].cond_exec_group_id == lay["base"] + s * 4 + t
+          for s in range(2) for t in range(4)))
+gate = next(n for n in d.node_list if n.node_name == "__gating_dispatch")
+check("the tile gate is the device kernel on the source's core",
+      gate.kernel_name == "__snax_bingo_kernel_cerf_tiles"
+      and (gate.assigned_cluster_id, gate.assigned_core_id) == (0, 3))
+check("the tile gate's args carry the layout",
+      (gate.kernel_args.group_base, gate.kernel_args.group_block, gate.kernel_args.tiles,
+       gate.kernel_args.num_slots) == (lay["base"], 4, 4, 2))
+try:
+    d._validate_cerf_core_sharing()
+    _ok, _why = True, ""
+except ValueError as e:
+    _ok, _why = False, str(e)
+check("a core may carry several tiles of one tile fork", _ok, _why)
+
+def _later_tile_edge():
+    d, f, by = _tiles(extra_edge=((0, 0), (0, 2)))
+    compile_cond(d)
+    return True
+check("an edge from a tile to a later tile of its slot is allowed", _later_tile_edge())
+
+def _earlier_tile_edge():
+    d, f, by = _tiles(extra_edge=((0, 2), (0, 3)))
+    d.bingo_add_edge(by[(0, 3)][1], by[(1, 0)][0])     # slot 0 -> slot 1: not a prefix
+    compile_cond(d)
+refuses("an edge from one slot's tile into another slot", _earlier_tile_edge, "unguarded")
+
+def _dup_tile():
+    d = new_dfg()
+    disp = BingoNode(0, 0, 3, node_name="dispatch", kernel_name="__snax_k")
+    d.bingo_add_node(disp)
+    f = d.bingo_conditional_fork(disp, {"mode": "tiles", "rows": 8, "counts": 0})
+    for _ in range(2):
+        n = BingoNode(0, 1, 0, node_name=f"t{_}", kernel_name="__snax_k")
+        d.bingo_add_node(n)
+        f.branch([n], slot=0, tile=0)
+refuses("a tile declared twice", _dup_tile, "twice")
+
+def _tile_off_chip():
+    d, f, by = _tiles(chip_of=lambda s, t: 0x01 if (s, t) == (1, 1) else 0x00)
+    compile_cond(d)
+refuses("a tile on another chiplet than its gate", _tile_off_chip, "own gate")
+
+def _tile_branch_without_slot():
+    d = new_dfg()
+    disp = BingoNode(0, 0, 3, node_name="dispatch", kernel_name="__snax_k")
+    d.bingo_add_node(disp)
+    f = d.bingo_conditional_fork(disp, {"mode": "tiles", "rows": 8, "counts": 0})
+    n = BingoNode(0, 1, 0, node_name="t", kernel_name="__snax_k")
+    d.bingo_add_node(n)
+    f.branch([n])
+refuses("a tile branch without slot= and tile=", _tile_branch_without_slot, "slot=")
+
+
+def _lower(d):
+    """bingo_compile_dfg up to its hang checks, without emitting anything."""
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        d.bingo_transform_dfg_add_entry_node()
+        d.bingo_transform_dfg_add_exit_nodes()
+        d.bingo_compile_conditional_regions()
+        d._validate_cerf_cross_group_edges()
+        d._validate_cerf_core_sharing()
+        d.bingo_transform_add_core_sequencing_edges()
+        d.bingo_transform_prune_redundant_fanout()
+        d.bingo_transform_keep_local_dep_set()
+        d.bingo_transform_fit_dep_tag_budget(tag_width=d.dep_tag_width)
+        d.bingo_transform_dfg_add_dummy_set_nodes()
+        d.bingo_transform_dfg_add_dummy_check_nodes()
+        d.bingo_assign_normal_node_dep_set_info()
+        d.bingo_assign_normal_node_dep_check_info()
+        d.bingo_transform_dfg_allocate_dep_tags(tag_width=d.dep_tag_width)
+        return d.bingo_validate_no_hang(tag_width=d.dep_tag_width)
+
+# The hang check refuses a remote task gated past the cross-die window.
+d, far, near = _two_chip()
+_lower(d)
+far.cond_exec_group_id = 9
+refuses("a remote gated task on group >= 8", lambda: d.bingo_validate_no_hang(),
+        "cross a die")
+
+# The doc's small case, on the cycle model: 2 chiplets, 1 slot each... here 2 slots of 4 tiles
+# on shared cores, with the routing sweep (random prefixes, 0 and full included).
+def _model_has_wide_cerf():
+    try:
+        import dataclasses
+        from bingo_sim_check import _load_model
+        _, SimConfig, *_ = _load_model()
+        return "num_cerf_groups" in {f.name for f in dataclasses.fields(SimConfig)}
+    except Exception:                       # noqa: BLE001
+        return False
+
+if _model_has_wide_cerf():
+    from bingo_sim_check import simulate_for_hangs
+    for one_core in (True, False):
+        d, f, by = _tiles(slots=2, tiles=4, one_core=one_core)
+        _lower(d)
+        try:
+            r = simulate_for_hangs(d, seeds=4, verbose=False)
+            _ok, _why = "prefix0" in r["scenarios"], r["scenarios"]
+        except ValueError as e:
+            _ok, _why = False, str(e)[:300]
+        check(f"tile fork survives the routing sweep ({'shared' if one_core else 'own'} "
+              f"GEMM core)", _ok, _why)
+else:
+    print("  SKIP  tile routing sweep: the cycle model has no num_cerf_groups "
+          "(set BINGO_MODEL_PATH to a bingo_hw_manager with it)")
+
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)

@@ -213,13 +213,19 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 #define COND_EXEC_INVERT_WIDTH     1
 #define COND_EXEC_INVERT_SHIFT     0
 
-// RTL bingo_hw_manager_task_desc_t declares cond_exec_group_id as a hard `logic [4:0]`: it
-// indexes one of the 32 CERF group bits in the manager's 32-bit cerf_state register. Same
-// rule as BINGO_CHIP_ID_WIDTH - if the RTL ever parameterises the group count, occamy.py
-// emits BINGO_COND_EXEC_GROUP_ID_WIDTH into occamy.h and it wins here with no edit to this
-// file; the literal is the documented fallback for a standalone / pre-define build.
+// RTL bingo_hw_manager_task_desc_t sizes cond_exec_group_id as clog2(NumCerfGroups): it
+// indexes one group bit of the manager's cerf_state. Same rule as BINGO_CHIP_ID_WIDTH -
+// occamy.py emits BINGO_CERF_GROUPS, BINGO_CERF_WORDS and BINGO_COND_EXEC_GROUP_ID_WIDTH
+// into occamy.h from s1_quadrant.bingo_cfg.cerf_groups and they win here; the literals are
+// the documented fallback (the RTL default of 32 groups) for a standalone build.
+#ifndef BINGO_CERF_GROUPS
+#define BINGO_CERF_GROUPS 32
+#endif
+#ifndef BINGO_CERF_WORDS
+#define BINGO_CERF_WORDS (BINGO_CERF_GROUPS / 32)
+#endif
 #ifndef BINGO_COND_EXEC_GROUP_ID_WIDTH
-#define BINGO_COND_EXEC_GROUP_ID_WIDTH 5
+#define BINGO_COND_EXEC_GROUP_ID_WIDTH BINGO_CLOG2(BINGO_CERF_GROUPS)
 #endif
 #define COND_EXEC_GROUP_ID_WIDTH   BINGO_COND_EXEC_GROUP_ID_WIDTH
 #define COND_EXEC_GROUP_ID_SHIFT   NEXT_SHIFT(COND_EXEC_INVERT_SHIFT, COND_EXEC_INVERT_WIDTH)
@@ -304,15 +310,18 @@ BINGO_STATIC_ASSERT(BINGO_TASK_DESC_WIDTH % 64 == 0,
 BINGO_STATIC_ASSERT(BINGO_TASK_DESC_LAYOUT_BITS <= BINGO_TASK_DESC_WIDTH,
                     "Task descriptor layout overflows BINGO_TASK_DESC_WIDTH: raise it here "
                     "and TaskDescBusWidth in bingo_hw_manager_top, or shrink a field");
-// TASK_ID_WIDTH comes from the generated occamy.h (cfg s1_quadrant.bingo_cfg.task_id_width);
-// COND_EXEC_GROUP_ID_WIDTH mirrors an RTL literal. Both are range-checked against what the
+// TASK_ID_WIDTH and COND_EXEC_GROUP_ID_WIDTH come from the generated occamy.h (cfg
+// s1_quadrant.bingo_cfg.task_id_width / cerf_groups). Both are range-checked against what the
 // RTL they mirror can physically accept.
 BINGO_STATIC_ASSERT(TASK_ID_WIDTH >= 1 && TASK_ID_WIDTH <= 32,
                     "TASK_ID_WIDTH must match bingo_hw_manager_top TaskIdWidth and stay "
                     "inside the 32-bit task-id path SW uses to talk to it");
-BINGO_STATIC_ASSERT(COND_EXEC_GROUP_ID_WIDTH >= 1 && COND_EXEC_GROUP_ID_WIDTH <= 5,
-                    "cond_exec_group_id indexes the HW manager's 32-bit cerf_state, so it "
-                    "is at most 5 bits wide");
+BINGO_STATIC_ASSERT(COND_EXEC_GROUP_ID_WIDTH == BINGO_CLOG2(BINGO_CERF_GROUPS) &&
+                    (BINGO_CERF_GROUPS & (BINGO_CERF_GROUPS - 1)) == 0,
+                    "cond_exec_group_id indexes the HW manager's BINGO_CERF_GROUPS-bit "
+                    "cerf_state, a power of two, so it is clog2(BINGO_CERF_GROUPS) bits wide");
+BINGO_STATIC_ASSERT(BINGO_CERF_WORDS * 32 == BINGO_CERF_GROUPS,
+                    "the quadrant exposes the CERF as BINGO_CERF_GROUPS / 32 registers");
 // A zero-width field would both vanish from the encoding and stop advancing the cursor,
 // silently shifting the whole upper half of the descriptor.
 BINGO_STATIC_ASSERT(ASSIGNED_CLUSTER_ID_WIDTH >= 1 && ASSIGNED_CORE_ID_WIDTH >= 1 &&

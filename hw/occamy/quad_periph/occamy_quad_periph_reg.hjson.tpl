@@ -14,6 +14,11 @@
       type: "int",
       default: "${bingo_hw_manager_nr_cores_per_chiplet}"
     },    
+    { name: "NumCerfWords",
+      desc: "32-bit words of the HW manager's CERF (cerf_groups / 32).",
+      type: "int",
+      default: "${cerf_words}"
+    },
   ], 
   name: "occamy_quad_periph",
   clock_primary: "clk_i",
@@ -249,18 +254,22 @@
       }
     },
     // DARTS Tier 1: CERF (Conditional Execution Register File) CSRs
-    { name: "CERF_STATE",
-      desc: "DARTS CERF: 32-bit bitmask of active groups (bit[i] = group i)",
-      swaccess: "rw",
-      hwaccess: "hro",
-      fields: [
-        {
-          bits: "31:0",
-          resval: "0",
-          name: "CERF_STATE",
-          desc: '''Bit i = 1 means group i is active'''
-        }
-      ]
+    { multireg:
+      { name: "CERF_STATE",
+        desc: "DARTS CERF: the next full state, word w holds groups 32w..32w+31 (bit i = group 32w + i)",
+        swaccess: "rw",
+        hwaccess: "hro",
+        count: "NumCerfWords",
+        cname: "cerf_state",
+        fields: [
+          {
+            bits: "31:0",
+            resval: "0",
+            name: "CERF_STATE",
+            desc: '''Bit i = 1 means group 32w + i is active once CERF_WRITE_EN latches all words'''
+          }
+        ]
+      }
     },
     { name: "CERF_WRITE_EN",
       desc: "DARTS CERF: write enable (write 1 to latch CERF_STATE into HW, auto-clears)",
@@ -275,18 +284,22 @@
         }
       ]
     },
-    { name: "CERF_STATUS",
-      desc: "DARTS CERF: read-back of actual HW CERF state (read-only)",
-      swaccess: "ro",
-      hwaccess: "hwo",
-      fields: [
-        {
-          bits: "31:0",
-          resval: "0",
-          name: "CERF_STATUS",
-          desc: '''Actual CERF bitmask from HW controller (read-only). Use this for read-modify-write.'''
-        }
-      ]
+    { multireg:
+      { name: "CERF_STATUS",
+        desc: "DARTS CERF: read-back of the HW CERF state, word w = groups 32w..32w+31 (read-only)",
+        swaccess: "ro",
+        hwaccess: "hwo",
+        count: "NumCerfWords",
+        cname: "cerf_status",
+        fields: [
+          {
+            bits: "31:0",
+            resval: "0",
+            name: "CERF_STATUS",
+            desc: '''Actual CERF bits from the HW controller (read-only).'''
+          }
+        ]
+      }
     },
     // DVFS: mode select + host<->PM doorbell handshake registers
     { name: "PM_MODE",
@@ -353,6 +366,47 @@
           desc: '''Host writes the applied target level here after driving PMIC + clk/rst.'''
         }
       ]
+    },
+    // DARTS CERF masked updates. One store changes only the bits it names, at once, with no
+    // read-back: a writer that owns some groups updates them without disturbing groups other
+    // writers own. Placed after every other register so adding them moved no offset.
+    { multireg:
+      { name: "CERF_SET",
+        desc: "DARTS CERF: write 1s to set those groups of word w (groups 32w + i); 0 bits are left alone",
+        swaccess: "wo",
+        hwaccess: "hro",
+        hwext: "true",
+        hwqe: "true",
+        count: "NumCerfWords",
+        cname: "cerf_set",
+        fields: [
+          {
+            bits: "31:0",
+            resval: "0",
+            name: "CERF_SET",
+            desc: '''Bit i = 1 activates group 32w + i'''
+          }
+        ]
+      }
+    },
+    { multireg:
+      { name: "CERF_CLR",
+        desc: "DARTS CERF: write 1s to clear those groups of word w (groups 32w + i); 0 bits are left alone",
+        swaccess: "wo",
+        hwaccess: "hro",
+        hwext: "true",
+        hwqe: "true",
+        count: "NumCerfWords",
+        cname: "cerf_clr",
+        fields: [
+          {
+            bits: "31:0",
+            resval: "0",
+            name: "CERF_CLR",
+            desc: '''Bit i = 1 deactivates group 32w + i'''
+          }
+        ]
+      }
     },
   ]
 }

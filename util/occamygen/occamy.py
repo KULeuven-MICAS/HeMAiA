@@ -90,6 +90,10 @@ TASK_DESC_CHIP_ID_WIDTH = 8
 # worth of bits, which the derived container absorbs until it crosses a 64-bit boundary.
 DEFAULT_TASK_ID_WIDTH = 12
 DEFAULT_WAITING_QUEUE_DEPTH = 8
+# NumCerfGroups default, matching bingo_hw_manager_top's own parameter default. The quadrant
+# exposes the CERF as 32-bit registers, so a config's group count is a whole number of them.
+DEFAULT_CERF_GROUPS = 32
+CERF_WORD_BITS = 32
 
 
 def _idx_width(n):
@@ -129,8 +133,30 @@ def get_bingo_task_id_width(occamy_cfg):
     return int(bingo_cfg(occamy_cfg).get("task_id_width", DEFAULT_TASK_ID_WIDTH))
 
 
+def get_bingo_cerf_groups(occamy_cfg):
+    """NumCerfGroups for bingo_hw_manager_top, from s1_quadrant.bingo_cfg.cerf_groups.
+
+    Optional, defaulting to the RTL parameter's own 32 so the configs that do not set it keep
+    the 5-bit cond_exec_group_id and their descriptor layout. A power of two (the descriptor
+    holds a clog2-wide group id that must index every group and nothing past them) and a whole
+    number of 32-bit quadrant registers.
+    """
+    groups = int(bingo_cfg(occamy_cfg).get("cerf_groups", DEFAULT_CERF_GROUPS))
+    if groups < CERF_WORD_BITS or groups & (groups - 1):
+        raise ValueError(
+            f"s1_quadrant.bingo_cfg.cerf_groups ({groups}) must be a power of two and at "
+            f"least {CERF_WORD_BITS}.")
+    return groups
+
+
+def get_bingo_cerf_group_id_width(occamy_cfg):
+    """Width of the descriptor's cond_exec_group_id: clog2 of the CERF group count."""
+    return clog2(get_bingo_cerf_groups(occamy_cfg))
+
+
 def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag_width,
-                          task_id_width=DEFAULT_TASK_ID_WIDTH):
+                          task_id_width=DEFAULT_TASK_ID_WIDTH,
+                          cerf_group_id_width=clog2(DEFAULT_CERF_GROUPS)):
     """Bits actually used by bingo_hw_manager_task_desc_t for this configuration.
 
     Mirrors the RTL packed struct field for field. The host CVA6 counts as an extra core in
@@ -139,7 +165,7 @@ def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag
     """
     ncores_hw = nr_cores_per_cluster + 1
     cluster_w = _idx_width(nr_clusters_per_chiplet)
-    return (1 + 5 + 1                              # cond_exec_{invert,group_id,en}
+    return (1 + cerf_group_id_width + 1            # cond_exec_{invert,group_id,en}
             + 2                                    # task_type
             + task_id_width
             + TASK_DESC_CHIP_ID_WIDTH              # assigned_chiplet_id
@@ -173,14 +199,16 @@ def get_task_desc_width(occamy_cfg, nr_cores_per_cluster=None, nr_clusters_per_c
                 "width, or an explicit s1_quadrant.task_desc_width")
         bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
                                      get_bingo_dep_tag_width(occamy_cfg),
-                                     get_bingo_task_id_width(occamy_cfg))
+                                     get_bingo_task_id_width(occamy_cfg),
+                                     get_bingo_cerf_group_id_width(occamy_cfg))
         words = max(1, -(-bits // TASK_DESC_WORD_BITS))   # ceil
         return words * TASK_DESC_WORD_BITS
     task_desc_width = int(explicit)
     if nr_cores_per_cluster is not None and nr_clusters_per_chiplet is not None:
         bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
                                      get_bingo_dep_tag_width(occamy_cfg),
-                                     get_bingo_task_id_width(occamy_cfg))
+                                     get_bingo_task_id_width(occamy_cfg),
+                                     get_bingo_cerf_group_id_width(occamy_cfg))
         if bits > task_desc_width:
             raise ValueError(
                 f"s1_quadrant.task_desc_width ({task_desc_width}) is smaller than the "
@@ -1171,6 +1199,9 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         # Task-id width (TaskIdWidth). The id space is 2**width and the compiler hands out
         # one id per task, so this caps the graph size; exported to SW as BINGO_TASK_ID_WIDTH.
         "task_id_width": get_bingo_task_id_width(occamy_cfg),
+        # CERF group count (NumCerfGroups); sets the descriptor's cond_exec_group_id width and
+        # the quadrant's CERF register words. Exported to SW as BINGO_CERF_GROUPS.
+        "cerf_groups": get_bingo_cerf_groups(occamy_cfg),
         # Task-descriptor bus width (TaskDescBusWidth). DERIVED from this config's layout
         # unless s1_quadrant.task_desc_width pins it; get_cheader_kwargs runs the SAME
         # derivation for BINGO_TASK_DESC_WIDTH, so the descriptor the SW packer emits is
@@ -1449,12 +1480,14 @@ def get_mem_chip_num_sys_idma(mem_chip) -> int:
 def get_sim_clock_cfg(multichip_cfg):
     """The simulated clocks (hemaia_multichip.sim_clock): the testbench master clock in MHz
     that the compute chips and the memory chip divide down, the divider software gives the
-    compute chips' host and clusters, and the memory chip's digital divider. Their D2D PHYs
-    run at the master clock. Absent: 500 MHz, the runtime's own dividers (0), memchip /6 --
-    the long-standing simulation setup."""
+    compute chips' host, the one it gives their clusters (cluster_clk_div, default the host's),
+    and the memory chip's digital divider. Their D2D PHYs run at the master clock. Absent:
+    500 MHz, the runtime's own dividers (0), memchip /6 -- the long-standing simulation setup."""
     c = multichip_cfg.get("sim_clock", {}) or {}
+    core = int(c.get("core_clk_div", 0))
     return {"sim_clk_mhz": float(c.get("master_mhz", 500.0)),
-            "core_clk_div": int(c.get("core_clk_div", 0)),
+            "core_clk_div": core,
+            "cluster_clk_div": int(c.get("cluster_clk_div", core)),
             "memchip_clk_div": int(c.get("memchip_clk_div", 6))}
 
 
@@ -1553,6 +1586,9 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
         "dep_tag_width": get_bingo_dep_tag_width(occamy_cfg),
         "task_id_width": get_bingo_task_id_width(occamy_cfg),
+        "cerf_groups": get_bingo_cerf_groups(occamy_cfg),
+        "cerf_words": get_bingo_cerf_groups(occamy_cfg) // CERF_WORD_BITS,
+        "cerf_group_id_width": get_bingo_cerf_group_id_width(occamy_cfg),
         "waiting_queue_depth": get_bingo_waiting_queue_depth(occamy_cfg),
         "task_desc_width": task_desc_width,
         "task_desc_words": task_desc_width // TASK_DESC_WORD_BITS,
@@ -1580,6 +1616,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "d2d_ports": d2d_ports,
         "same_memchip_speed": 1 if same_memchip_speed else 0,
         "core_clk_div": get_sim_clock_cfg(multichip_cfg)["core_clk_div"],
+        "cluster_clk_div": get_sim_clock_cfg(multichip_cfg)["cluster_clk_div"],
         "sim_clk_mhz": int(get_sim_clock_cfg(multichip_cfg)["sim_clk_mhz"]),
     }
     return cheader_kwargs
@@ -1796,6 +1833,8 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
         "backup_boot_addr": hex_backup_boot_addr,
         "occamy_cfg": occamy_cfg,
         "addr_width": addr_width,
-        "bingo_hw_manager_nr_cores_per_chiplet":  nr_clusters * (nr_cores_per_cluster + 1) # +1 for the host core as acc
+        "bingo_hw_manager_nr_cores_per_chiplet":  nr_clusters * (nr_cores_per_cluster + 1), # +1 for the host core as acc
+        # 32-bit CERF register words in the quadrant periph (CERF_STATE, CERF_STATUS, ...)
+        "cerf_words": get_bingo_cerf_groups(occamy_cfg) // CERF_WORD_BITS
     }
     return ctrl_kwargs

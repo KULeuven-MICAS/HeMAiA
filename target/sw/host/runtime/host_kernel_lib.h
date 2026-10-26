@@ -1928,39 +1928,33 @@ static inline uint64_t __host_bingo_kernel_dequantize_i32f32(void *arg){
 // Supports multiple activation modes via args->mode:
 //   MODE_TOP_K (0):    Read logits from predecessor scratchpad, select top-k
 //   MODE_THRESHOLD (1): Read confidence from predecessor scratchpad, activate if < threshold
-//   MODE_STATIC (2):   Use compile-time cerf_write_mask directly
+//   MODE_STATIC (2):   Write the compile-time cerf_static_mask
 //
-// Args layout (__host_bingo_kernel_cerf_gating_args_t):
-//   [0] mode
-//   [1] pred_scratchpad_addr (unused for static)
-//   [2] cerf_controlled_mask
-//   [3] top_k_or_threshold: top_k | threshold_bits | cerf_write_mask
-//   [4] cerf_group_ids_addr: &cerf_group_ids[] | unused (0)
-//   [5] cond_activation_addr: per-expert uint8_t[] (SW guard for group sharing)
-//   [6] scratchpad_ptr
+// Args: __host_bingo_kernel_cerf_gating_args_t (host_kernel_args.h). The CERF masks are
+// BINGO_CERF_WORDS words; group g is bit g % 32 of word g / 32.
 //
-// Two-level gating (for >32 experts with CERF group sharing):
+// Two-level gating (for more experts than CERF groups, with CERF group sharing):
 //   Level 1 (HW CERF): Inactive groups skip entire expert clusters at zero cost.
 //   Level 2 (SW guard): Within active groups, only selected experts compute.
 //     The gating kernel writes 1/0 per expert to cond_activation_addr[].
 //     Expert kernels read their slot and early-return if 0.
-//     When experts <= 32 (no sharing), cond_activation_addr can be 0 (skip SW guard).
+//     When every expert has its own group, cond_activation_addr can be 0 (skip SW guard).
 static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    uint64_t *args = (uint64_t *)arg;
-    uint32_t mode = (uint32_t)args[0];
-    bingo_kernel_scratchpad_t* pred_sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[1];
-    uint32_t cerf_controlled_mask = (uint32_t)args[2];
-    uint64_t top_k_or_threshold = args[3];
-    uint64_t cerf_group_ids_addr = args[4];
-    uint8_t *cond_activation = (uint8_t *)(uintptr_t)args[5];
-    float *cond_weight = (float *)(uintptr_t)args[6];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[7];
+    const __host_bingo_kernel_cerf_gating_args_t *a = (const __host_bingo_kernel_cerf_gating_args_t *)arg;
+    uint32_t mode = (uint32_t)a->mode;
+    bingo_kernel_scratchpad_t* pred_sp = (bingo_kernel_scratchpad_t*)(uintptr_t)a->pred_scratchpad_addr;
+    const uint32_t *cerf_controlled_mask = a->cerf_controlled_mask;
+    uint64_t top_k_or_threshold = a->top_k_or_threshold;
+    uint64_t cerf_group_ids_addr = a->cerf_group_ids_addr;
+    uint8_t *cond_activation = (uint8_t *)(uintptr_t)a->cond_activation_addr;
+    float *cond_weight = (float *)(uintptr_t)a->cond_weight_addr;
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)a->scratchpad_ptr;
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
 
-    uint32_t cerf_write_mask = 0;
+    uint32_t cerf_write_mask[BINGO_CERF_WORDS] = {0};
 
     if (mode == BINGO_GATING_MODE_TOP_K) {
         uint32_t top_k = (uint32_t)top_k_or_threshold;
@@ -1992,7 +1986,7 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
                 }
             }
             // Level 1: Mark the CERF group of this expert as active (HW skip)
-            cerf_write_mask |= (1 << cerf_group_ids[best_idx]);
+            cerf_write_mask[cerf_group_ids[best_idx] / 32u] |= 1u << (cerf_group_ids[best_idx] % 32u);
             // Level 2: Mark this specific expert as active (SW guard)
             if (cond_activation)
                 cond_activation[best_idx] = 1;
@@ -2017,9 +2011,9 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
             for (uint32_t e = 0; e < num_experts; e++)
                 if (used[e]) cond_weight[e] *= inv;
         }
-        BINGO_PRINTF(1, "Chip(%x, %x): [Host] CERF Gating top_k: n=%d, k=%d, ctrl=0x%04x, write=0x%04x\r\n",
+        BINGO_PRINTF(1, "Chip(%x, %x): [Host] CERF Gating top_k: n=%d, k=%d, ctrl[0]=0x%08x, write[0]=0x%08x\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
-               num_experts, top_k, cerf_controlled_mask, cerf_write_mask);
+               num_experts, top_k, cerf_controlled_mask[0], cerf_write_mask[0]);
 
     } else if (mode == BINGO_GATING_MODE_THRESHOLD) {
         union { uint32_t u; float f; } thresh_conv;
@@ -2028,14 +2022,16 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
         float *confidence = (float *)(uintptr_t)pred_sp->return_value;
 
         if (*confidence < threshold) {
-            cerf_write_mask = cerf_controlled_mask;  // activate all → continue
+            for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++)
+                cerf_write_mask[w] = cerf_controlled_mask[w];  // activate all → continue
         }
 
     } else if (mode == BINGO_GATING_MODE_STATIC) {
-        cerf_write_mask = (uint32_t)top_k_or_threshold;
+        for (uint32_t w = 0; w < BINGO_CERF_WORDS; w++)
+            cerf_write_mask[w] = a->cerf_static_mask[w];
     }
 
-    // Write CERF registers: single bitmask update (read-modify-write)
+    // Write the groups this gate owns, and only those (per-word set/clear stores)
     bingo_cerf_update(cerf_controlled_mask, cerf_write_mask);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);

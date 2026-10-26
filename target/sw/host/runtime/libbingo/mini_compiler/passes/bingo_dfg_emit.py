@@ -33,7 +33,7 @@ def _is_c_constant(expr: str) -> bool:
 # address macros of bingo_api.h / bingo_alloc.h and the size arithmetic the emitter writes.
 _C_STATIC_WORDS = _C_TYPE_WORDS | frozenset({
     "sizeof", "ALIGN_UP", "__builtin_offsetof", "bingo_kernel_scratchpad_t",
-    "BINGO_CHIP_ADDR", "BINGO_L1_FIRST_ALLOC", "BINGO_HEAP_FRAGMENT_SIZE"})
+    "BINGO_CHIP_ADDR", "BINGO_L1_FIRST_ALLOC", "BINGO_HEAP_FRAGMENT_SIZE", "BINGO_ARGS_MAX"})
 
 
 # The high half of a program symbol's chip-global address (kernel_base._process_addr on a
@@ -70,6 +70,41 @@ def _is_c_static(expr: str, names) -> bool:
     words of _C_STATIC_WORDS and the macros in `names`."""
     return all(t in _C_STATIC_WORDS or t in names
                for t in _C_IDENT.findall(_C_INT_LITERAL.sub("0", expr)))
+
+
+# ARGS PHASES. A device task's args struct lives in its cluster's L1 for the whole run, so a graph
+# of several blocks one after the other (a whole layer) holds every block's args at once. A task may
+# carry `args_phase` (an int, default 0): each cluster's args of phase p > 0 then share one L1 region
+# with every other phase's, phase 0's land there at host init, and a phase's own args come in by
+# a DM task of the graph (`args_resident`, its args outside the region; PhaseArgsLoadArgs) that the
+# workload orders after every task of the previous phase on that cluster and before every task of
+# its phase. A cluster whose tasks are all of phase 0 is emitted as before.
+_ARGS_MAX = "#ifndef BINGO_ARGS_MAX\n#define BINGO_ARGS_MAX(a, b) ((a) > (b) ? (a) : (b))\n#endif\n"
+
+
+def _args_group(node, phased=False):
+    """The args region of a device task: "r" (resident: a load of a later phase's args) or its
+    args phase. phased (the chip's graph has args phases): the compiler's exit tasks are resident
+    too, since they run after every phase has taken the shared region; added after the
+    application assigned the phases, they carry none."""
+    if getattr(node, "args_resident", False):
+        return "r"
+    if phased and (node.kernel_name or "").endswith("_kernel_exit"):
+        return "r"
+    return int(getattr(node, "args_phase", 0) or 0)
+
+
+def _args_phased(nodes):
+    """Whether any device task of `nodes` has an args region other than phase 0."""
+    return any(_args_group(n) != 0 for n in nodes if (n.kernel_name or "").startswith("__snax"))
+
+
+def _c_max(exprs):
+    """The largest of the constant expressions `exprs`."""
+    out = exprs[-1]
+    for e in reversed(exprs[:-1]):
+        out = f"BINGO_ARGS_MAX({e}, {out})"
+    return out
 
 
 def _snax_symbol_sig(name: str) -> int:
@@ -309,12 +344,21 @@ class BingoDFGEmitMixin:
 
         # One shared order for the tag allocator and this list -- see bingo_stream_order().
         all_nodes = self.bingo_stream_order()
+        held = self.bingo_held_nodes()
 
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
 
         for chiplet_id in chiplets_to_process:
             local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
+            # Held tasks go last, both parts in stream order; every core's held tasks are already
+            # the tail of that core's order (bingo_held_nodes), so no core sees a different order.
+            local_nodes = ([n for n in local_nodes if n not in held]
+                           + [n for n in local_nodes if n in held])
             num_local_nodes = len(local_nodes)
+            if getattr(self, "hold_exits", False):
+                task_description_list += (
+                    f"uint32_t bingo_hw_scheduler_num_held_desc_chip_{chiplet_id:02x} = "
+                    f"{sum(1 for n in local_nodes if n in held)};\n")
             list_name = f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}"
             # The narrow SPM by default: the manager fetches the list over a 64-bit AXI-Lite
             # master, so a read of the WIDE spm is upsized through two crossbars and costs
@@ -362,6 +406,12 @@ class BingoDFGEmitMixin:
                         f"{fields['dep_set_chiplet_id']:02x}/{fields['dep_set_cluster_id']}:"
                         f"0b{fields['dep_set_code']:0{self.ncores_hw}b}\n")
                 task_description_list += "};\n"
+                if getattr(self, "desc_list_in_image", False):
+                    # the scheduler fetches the packed list where the program image holds it
+                    task_description_list += (
+                        f"uint64_t* {list_name} = (uint64_t*)(uintptr_t)chiplet_addr_transform_full("
+                        f"0x{chiplet_id:02x}, (uint64_t)(uintptr_t){image});\n")
+                    continue
                 task_description_list += (
                     f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
                     f"{count_name} * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n"
@@ -371,6 +421,46 @@ class BingoDFGEmitMixin:
                     f"                   sizeof({image}));\n")
 
         return task_description_list
+
+    def bingo_held_nodes(self) -> set:
+        """The tasks a hold_exits DFG keeps out of its first launch: every exit task, and every
+        dummy that exists only to serve held tasks. Empty without hold_exits.
+
+        Launched later (bingo_hw_scheduler_launch_held), they leave the cores free for lists a
+        host task launches in between: an exit at the head of a core's waiting queue would hold
+        everything behind it. Held tasks must be the tail of each core's order, or the core would
+        run a task of the launched part after a held one; refused otherwise.
+        """
+        if not getattr(self, "hold_exits", False):
+            return set()
+        if getattr(self, "_held_cache", None) is not None:
+            return self._held_cache
+        held = {n for n in self.node_list
+                if n.kernel_name in ("__snax_bingo_kernel_exit", "__host_bingo_kernel_exit")}
+        grown = True
+        while grown:
+            grown = False
+            for n in self.node_list:
+                if n in held or n.node_type != "dummy":
+                    continue
+                succ = list(self.successors(n))
+                if succ and all(x in held for x in succ):
+                    held.add(n)
+                    grown = True
+        by_core: dict = {}
+        for n in self.bingo_stream_order():
+            by_core.setdefault((n.assigned_chiplet_id, n.assigned_cluster_id,
+                                n.assigned_core_id), []).append(n)
+        for (chip, cl, core), seq in by_core.items():
+            flags = [n in held for n in seq]
+            if True in flags and not all(flags[flags.index(True):]):
+                late = seq[flags.index(True) + flags[flags.index(True):].index(False)]
+                raise ValueError(
+                    f"hold_exits: on chiplet 0x{chip:02x} cluster {cl} core {core}, "
+                    f"'{late.node_name}' comes after a held task. Held tasks must be the last "
+                    f"tasks of their core.")
+        self._held_cache = held
+        return held
 
     def _dev_task_numbering(self, chiplet_id: int):
         """The device task ids of a chiplet: node_id -> (index into the arg/kernel lists, index
@@ -766,7 +856,10 @@ class BingoDFGEmitMixin:
             elif kn and kn.startswith("__host"):
                 # host scratchpads live in L3 and are not packed
                 l3_terms.append(sp_align)
-        # device arg blocks share the cluster's L1 arena
+        # device arg blocks share the cluster's L1 arena; with args phases (_args_group) the
+        # resident args, then one region every phase's args take in turn
+        args_terms = {}   # cluster -> {group: [terms]}
+        phased = _args_phased(local_nodes)
         for node in local_nodes:
             kn = node.kernel_name
             if not (kn and kn.startswith("__snax")):
@@ -777,7 +870,15 @@ class BingoDFGEmitMixin:
                 t = "__snax_bingo_kernel_exit_args_t"
             else:
                 continue
-            l1_terms.setdefault(node.assigned_cluster_id, []).append(f"ALIGN_UP(sizeof({t}), 64)")
+            args_terms.setdefault(node.assigned_cluster_id, {}).setdefault(
+                _args_group(node, phased), []).append(f"ALIGN_UP(sizeof({t}), 64)")
+        for cl, groups in args_terms.items():
+            if set(groups) == {0}:
+                l1_terms.setdefault(cl, []).extend(groups[0])
+            else:
+                phases = sorted(g for g in groups if g != "r")
+                l1_terms.setdefault(cl, []).extend(
+                    groups.get("r", []) + [_c_max(["(" + " + ".join(groups[p]) + ")" for p in phases])])
 
         # With slot packing the scratchpad half of the arena is (slots x sp_align) rather than
         # (nodes x sp_align). The ARG half is unchanged and must stay unchanged: arg structs
@@ -791,6 +892,8 @@ class BingoDFGEmitMixin:
             for cl, sl in slots_per_cl.items():
                 l1_terms.setdefault(cl, []).append(f"{max(sl) + 1} * {sp_align}")
 
+        if any(set(g) != {0} for g in args_terms.values()):
+            f.write(_ARGS_MAX)
         f.write("        // 3a. One arena per memory for scratchpads and device args (bump-sliced)\n")
         self._arena_off = {}   # cluster -> the arena's bump offset, as a constant expression
         for cl in sorted(l1_terms):
@@ -854,9 +957,12 @@ class BingoDFGEmitMixin:
             node._scratchpad_c_var = sp_var
         f.write("\n")
 
-        # Now wire SW guard fields — gating node scratchpad C vars are all known
+        # Now wire SW guard fields — gating node scratchpad C vars are all known. A gate on
+        # another chiplet has its scratchpad there, in a variable this chiplet's code does not
+        # declare: a task it gates across a die gets no SW guard (gating_sp_addr stays 0).
         for node in local_nodes:
-            if node.kernel_args and node._gating_node is not None:
+            if (node.kernel_args and node._gating_node is not None
+                    and node._gating_node.assigned_chiplet_id == node.assigned_chiplet_id):
                 gating_sp_var = node._gating_node._scratchpad_c_var
                 if gating_sp_var:
                     is_dev = node.kernel_name and node.kernel_name.startswith("__snax")
@@ -1053,7 +1159,8 @@ class BingoDFGEmitMixin:
                     f"__bingo_dev_kernel_idx_chip_{chiplet_id:02x}, {num_dev}u);\n")
 
         # Every runtime patch has landed in the images: one DMA a cluster puts them in L1
-        copies = sorted({(v[0], v[1], v[4]) for v in image_member.values()})
+        copies = sorted({(v[0], v[1], v[4]) for v in image_member.values()
+                         if v[0] in self._args_init_images})
         if copies:
             f.write("\n        // 3d. Device args images -> their cluster's L1 arena\n")
             f.write('        asm volatile("fence" ::: "memory");\n')
@@ -1062,6 +1169,34 @@ class BingoDFGEmitMixin:
                         f"                           chiplet_addr_transform_full(0x{chiplet_id:02x}, "
                         f"(uint64_t)(uintptr_t)&{img_var}),\n"
                         f"                           sizeof({img_t}));\n")
+
+    def _check_args_phase_order(self, local_nodes):
+        """ARGS PHASES: the region of a cluster's phase-p args is taken by the next phase's load,
+        so every task with args in phase p (p >= 1) must follow its cluster's phase-p load and
+        every one must precede its cluster's phase-(p + 1) load, by a path in the graph. A task
+        with no such path reads another phase's bytes as its args."""
+        import networkx as nx
+        loads = {}
+        for n in local_nodes:
+            ka = getattr(n, "kernel_args", None)
+            if getattr(n, "args_resident", False) and hasattr(ka, "phase") and hasattr(ka, "cluster"):
+                loads[(n.assigned_cluster_id, int(ka.phase))] = n
+        bad = []
+        for (cl, q), ld in sorted(loads.items(), key=lambda kv: kv[0]):
+            before, after = nx.ancestors(self, ld), nx.descendants(self, ld)
+            for n in local_nodes:
+                if n.assigned_cluster_id != cl or not (n.kernel_name or "").startswith("__snax"):
+                    continue
+                g = _args_group(n, True)
+                if g == "r":
+                    continue
+                if g < q and n not in before:
+                    bad.append(f"{n.node_name} (phase {g}) not before the phase-{q} load")
+                elif g == q and n not in after:
+                    bad.append(f"{n.node_name} (phase {g}) not after the phase-{q} load")
+        if bad:
+            raise ValueError(f"args phases: {len(bad)} task(s) can run while another phase's args hold "
+                             f"their region, e.g. " + "; ".join(bad[:4]))
 
     def _emit_device_args_images(self, f, chiplet_id, local_nodes, handle_name_map, sp_packed):
         """One static image a cluster of the device args structs this chiplet's host would
@@ -1077,7 +1212,11 @@ class BingoDFGEmitMixin:
         address transforms) is patched by the host, in L3, before one DMA moves the image.
         A field no args class assigns is zero here rather than stale TCDM contents.
         """
+        self._args_init_images = set()
         if not (sp_packed and getattr(self, "static_args_image", True)):
+            if _args_phased(local_nodes):
+                raise ValueError("args phases need the static args images (static_l1 with packed "
+                                 "scratchpad slots, static_args_image)")
             return {}
         # With compile-time L1 addresses a field is initialised in the image when it is constant
         # once every local L1 variable it names -- a buffer handle or a scratchpad -- is
@@ -1106,51 +1245,46 @@ class BingoDFGEmitMixin:
         out = {}
         symbol_hi = False
         checks = []   # (image, member, field, run-time value) of every field made static
+        # the images the host init copies into L1 (args phases: the resident one and phase 0's)
+        self._args_init_images = set()
+        phased = _args_phased(local_nodes)
+        if phased:
+            self._check_args_phase_order(local_nodes)
         for cl in sorted(per_cl):
             cid = f"{chiplet_id:02x}"
-            img_t = f"__bingo_args_image_chip{cid}_cl{cl}_t"
-            img_var = f"__bingo_args_image_chip{cid}_cl{cl}"
-            l1_var = f"__bingo_args_l1_chip{cid}_cl{cl}"
             base = f"__bingo_l1_arena_chip{cid}_cl{cl}"
-            f.write(f"        // 3c. Device args of cluster {cl}: compile-time fields in a static image\n")
-            f.write("        typedef struct {\n")
-            for node, struct_t, _ in per_cl[cl]:
-                f.write(f"            {struct_t} a{node.node_id} __attribute__((aligned(64)));\n")
-            f.write(f"        }} {img_t};\n")
-            # per_chip_image: the image is the chiplet's own writable data, so it leaves the shared data region
-            # (runtime/host.ld.tpl keeps that region at one address in every chiplet's image)
-            sec = ', section(".bingo_chip.data")' if getattr(self, "per_chip_image", False) else ""
-            f.write(f"        static {img_t} {img_var} __attribute__((aligned(64){sec})) = {{\n")
-            l1_at = f"{l1_var}_at" if at_on else None
-            for node, struct_t, fields in per_cl[cl]:
-                const, runtime = [], {}
-                for k, v in fields.items():
-                    sv = self._c_static_value(v, chiplet_id, handle_name_map, local_nodes) \
-                        if at_on else v
-                    hi = _symbol_addr_hi(v, chiplet_id) if at_on else None
-                    if hi is not None:
-                        const.append((k, hi))
-                        symbol_hi = True
-                        checks.append((img_var, f"a{node.node_id}", k, v))
-                    elif _is_c_constant(v):
-                        const.append((k, sv))
-                    elif at_on and _is_c_static(sv, self._l1_at_names):
-                        const.append((k, sv))
-                        checks.append((img_var, f"a{node.node_id}", k, v))
-                    else:
-                        runtime[k] = v
-                if const:
-                    f.write(f"            .a{node.node_id} = {{" +
-                            ", ".join(f".{k} = {v}" for k, v in const) + "},\n")
-                out[node.node_id] = (img_var, img_t, f"a{node.node_id}", runtime, l1_var, l1_at)
-            f.write("        };\n")
-            f.write(f"        const uint64_t {l1_var} = {base} + {base}_off;\n")
+            groups = {}
+            for item in per_cl[cl]:
+                groups.setdefault(_args_group(item[0], phased), []).append(item)
+            if set(groups) == {0}:
+                symbol_hi |= self._emit_args_image(
+                    f, chiplet_id, cl, groups[0], "", f"__bingo_args_l1_chip{cid}_cl{cl}", handle_name_map,
+                    local_nodes, out, checks)
+                img_t = f"__bingo_args_image_chip{cid}_cl{cl}_t"
+                self._args_init_images.add(f"__bingo_args_image_chip{cid}_cl{cl}")
+                if at_on:
+                    self._arena_off[cl] += f" + sizeof({img_t})"
+                f.write(f"        {base}_off += sizeof({img_t});\n\n")
+                continue
+            # args phases: the resident image, then the region every phase's image takes in turn
+            phases = sorted(g for g in groups if g != "r")
+            if "r" in groups:
+                symbol_hi |= self._emit_args_image(
+                    f, chiplet_id, cl, groups["r"], "_r", f"__bingo_args_l1_chip{cid}_cl{cl}_r", handle_name_map,
+                    local_nodes, out, checks)
+                self._args_init_images.add(f"__bingo_args_image_chip{cid}_cl{cl}_r")
+                if at_on:
+                    self._arena_off[cl] += f" + sizeof(__bingo_args_image_chip{cid}_cl{cl}_r_t)"
+                f.write(f"        {base}_off += sizeof(__bingo_args_image_chip{cid}_cl{cl}_r_t);\n\n")
+            for p in phases:
+                symbol_hi |= self._emit_args_image(
+                    f, chiplet_id, cl, groups[p], f"_p{p}", f"__bingo_args_l1_chip{cid}_cl{cl}_p{p}",
+                    handle_name_map, local_nodes, out, checks)
+            self._args_init_images.add(f"__bingo_args_image_chip{cid}_cl{cl}_p{phases[0]}")
+            region = _c_max([f"sizeof(__bingo_args_image_chip{cid}_cl{cl}_p{p}_t)" for p in phases])
             if at_on:
-                f.write(f"#define {l1_at} ({base}_at + {self._arena_off[cl]})\n")
-                f.write(f"        if ({l1_var} != {l1_at}) host_abort(BINGO_EXIT_LAYOUT);\n")
-                self._l1_at_names.add(l1_at)
-                self._arena_off[cl] += f" + sizeof({img_t})"
-            f.write(f"        {base}_off += sizeof({img_t});\n\n")
+                self._arena_off[cl] += f" + {region}"
+            f.write(f"        {base}_off += {region};\n\n")
         if symbol_hi:
             # The program runs at its chip's prefix (PC and symbol addresses carry it), so the
             # chip-local 40 bits are what must lie below 4 GiB
@@ -1166,8 +1300,66 @@ class BingoDFGEmitMixin:
             f.write("#endif\n")
         return out
 
+    def _emit_args_image(self, f, chiplet_id, cl, items, sfx, l1_var, handle_name_map, local_nodes, out,
+                         checks):
+        """One static image of device args structs (items: (node, struct, fields)) of cluster `cl`,
+        `sfx` naming it among the cluster's images, landing at the arena's bump offset: its typedef,
+        its compile-time fields, the L1 address variable `l1_var` (and its macro with compile-time
+        L1 addresses). Fills `out` and `checks`; the caller moves the offset. Returns whether a field
+        holds a program symbol's high half."""
+        at_on = self._l1_at_on
+        cid = f"{chiplet_id:02x}"
+        img_t = f"__bingo_args_image_chip{cid}_cl{cl}{sfx}_t"
+        img_var = f"__bingo_args_image_chip{cid}_cl{cl}{sfx}"
+        base = f"__bingo_l1_arena_chip{cid}_cl{cl}"
+        symbol_hi = False
+        f.write(f"        // 3c. Device args of cluster {cl}{' (' + sfx[1:] + ')' if sfx else ''}: "
+                "compile-time fields in a static image\n")
+        f.write("        typedef struct {\n")
+        for node, struct_t, _ in items:
+            f.write(f"            {struct_t} a{node.node_id} __attribute__((aligned(64)));\n")
+        f.write(f"        }} {img_t};\n")
+        # per_chip_image: the image is the chiplet's own writable data, so it leaves the shared data region
+        # (runtime/host.ld.tpl keeps that region at one address in every chiplet's image)
+        sec = ', section(".bingo_chip.data")' if getattr(self, "per_chip_image", False) else ""
+        f.write(f"        static {img_t} {img_var} __attribute__((aligned(64){sec})) = {{\n")
+        l1_at = f"{l1_var}_at" if at_on else None
+        for node, struct_t, fields in items:
+            const, runtime = [], {}
+            for k, v in fields.items():
+                sv = self._c_static_value(v, chiplet_id, handle_name_map, local_nodes) \
+                    if at_on else v
+                hi = _symbol_addr_hi(v, chiplet_id) if at_on else None
+                if hi is not None:
+                    const.append((k, hi))
+                    symbol_hi = True
+                    checks.append((img_var, f"a{node.node_id}", k, v))
+                elif _is_c_constant(v):
+                    const.append((k, sv))
+                elif at_on and _is_c_static(sv, self._l1_at_names):
+                    const.append((k, sv))
+                    checks.append((img_var, f"a{node.node_id}", k, v))
+                else:
+                    runtime[k] = v
+            if const:
+                f.write(f"            .a{node.node_id} = {{" +
+                        ", ".join(f".{k} = {v}" for k, v in const) + "},\n")
+            out[node.node_id] = (img_var, img_t, f"a{node.node_id}", runtime, l1_var, l1_at)
+        f.write("        };\n")
+        f.write(f"        const uint64_t {l1_var} = {base} + {base}_off;\n")
+        if at_on:
+            f.write(f"#define {l1_at} ({base}_at + {self._arena_off[cl]})\n")
+            f.write(f"        if ({l1_var} != {l1_at}) host_abort(BINGO_EXIT_LAYOUT);\n")
+            self._l1_at_names.add(l1_at)
+        return symbol_hi
+
     def _emit_scheduler_launch(self, f, chiplet_id):
         """Emit the scheduler initialization and launch calls."""
+        cid = f"{chiplet_id:02x}"
+        n_launch = (f"bingo_hw_scheduler_num_task_desc_chip_{cid} - "
+                    f"bingo_hw_scheduler_num_held_desc_chip_{cid}"
+                    if getattr(self, "hold_exits", False)
+                    else f"bingo_hw_scheduler_num_task_desc_chip_{cid}")
         f.write("\n")
         f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
@@ -1179,7 +1371,7 @@ class BingoDFGEmitMixin:
             f.write(f"                                (uint64_t)(uintptr_t)__bingo_gid_lists_chip_{chiplet_id:02x},\n")
             f.write(f"                                {self.num_cores_per_cluster}u,\n")
             f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
-            f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+            f.write(f"                                {n_launch});\n\n")
         elif getattr(self, "compact_task_tables", False):
             f.write(f"        bingo_hw_scheduler_init_compact((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
@@ -1187,7 +1379,7 @@ class BingoDFGEmitMixin:
             f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_local_dev_id_chip_{chiplet_id:02x},\n")
             f.write(f"                                num_total_tasks,\n")
             f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
-            f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+            f.write(f"                                {n_launch});\n\n")
         else:
             f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
@@ -1195,8 +1387,13 @@ class BingoDFGEmitMixin:
             f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
             f.write(f"                                num_total_tasks,\n")
             f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
-            f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+            f.write(f"                                {n_launch});\n\n")
         
+        held = (f"bingo_hw_scheduler_num_held_desc_chip_{cid}"
+                if getattr(self, "hold_exits", False) else "0u")
+        f.write(f"        bingo_hw_scheduler_set_list(bingo_hw_scheduler_task_desc_list_chip_{cid},\n"
+                f"                                    bingo_hw_scheduler_num_task_desc_chip_{cid}, "
+                f"{held});\n")
         if getattr(self, "compact_id_maps", False) or getattr(self, "gid_lists", False):
             f.write(f"        uint32_t err = bingo_hw_scheduler_sparse(host_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                                 host_kernel_list_chip_{chiplet_id:02x},\n")
