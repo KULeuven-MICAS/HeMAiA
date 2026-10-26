@@ -347,14 +347,30 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
                  top_k_or_threshold: Union[int, float] = 0,
                  cerf_group_ids_addr=None,
                  cond_activation_addr=None,
-                 cond_weight_addr=None):
+                 cond_weight_addr=None,
+                 cerf_static_mask: int = 0,
+                 cerf_words: int = 1):
+        # The two CERF masks are bit sets over every group (bit g = group g); the C struct
+        # holds them as cerf_words 32-bit words (BINGO_CERF_WORDS), so cerf_words must be
+        # the platform's, which the compiler passes (BingoDFG.cerf_words).
         self.mode = mode
         self.pred_scratchpad_addr = pred_scratchpad_addr
-        self.cerf_controlled_mask = cerf_controlled_mask
+        self.cerf_controlled_mask = int(cerf_controlled_mask)
         self.top_k_or_threshold = top_k_or_threshold
         self.cerf_group_ids_addr = cerf_group_ids_addr
         self.cond_activation_addr = cond_activation_addr
         self.cond_weight_addr = cond_weight_addr
+        self.cerf_static_mask = int(cerf_static_mask)
+        self.cerf_words = int(cerf_words)
+        for name, mask in (("cerf_controlled_mask", self.cerf_controlled_mask),
+                           ("cerf_static_mask", self.cerf_static_mask)):
+            if mask < 0 or mask >> (32 * self.cerf_words):
+                raise ValueError(f"{name}=0x{mask:x} has a group past the "
+                                 f"{32 * self.cerf_words} the CERF holds.")
+
+    def _mask_words(self, field: str, mask: int, assignments: dict) -> None:
+        for w in range(self.cerf_words):
+            assignments[f"{field}[{w}]"] = f"0x{(mask >> (32 * w)) & 0xFFFFFFFF:08x}"
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_cerf_gating_args_t"
@@ -366,7 +382,10 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
             assignments["pred_scratchpad_addr"] = str(self.pred_scratchpad_addr)
         else:
             assignments["pred_scratchpad_addr"] = "0"
-        assignments["cerf_controlled_mask"] = f"0x{self.cerf_controlled_mask:04x}"
+        self._mask_words("cerf_controlled_mask", self.cerf_controlled_mask, assignments)
+        self._mask_words("cerf_static_mask",
+                         self.cerf_static_mask if self.mode == BINGO_GATING_MODE_STATIC else 0,
+                         assignments)
 
         if self.mode == BINGO_GATING_MODE_TOP_K:
             assignments["top_k_or_threshold"] = str(int(self.top_k_or_threshold))
@@ -380,7 +399,7 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
             assignments["top_k_or_threshold"] = f"0x{thresh_bits:08x}"
             assignments["cerf_group_ids_addr"] = "0"
         elif self.mode == BINGO_GATING_MODE_STATIC:
-            assignments["top_k_or_threshold"] = f"0x{int(self.top_k_or_threshold):04x}"
+            assignments["top_k_or_threshold"] = "0"
             assignments["cerf_group_ids_addr"] = "0"
         else:
             assignments["top_k_or_threshold"] = str(self.top_k_or_threshold)

@@ -57,6 +57,58 @@ class SnaxBingoKernelSyncProbeArgs(BingoKernelArgs):
         return assignments
 
 
+class SnaxBingoKernelCerfTilesArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_cerf_tiles, the gate of a 'tiles' fork.
+
+    counts is a uint32_t[num_slots] the gate's predecessor wrote (the rows each slot got),
+    readable by the gate's core. group_base and group_block come from the compiler's tile
+    layout (bingo_dfg_conditional._alloc_tile_groups), so the fork fills them in.
+    """
+
+    def __init__(self, counts: Union[BingoMemAlloc, int], num_slots: int, rows: int,
+                 tiles: int, group_base: int = 0, group_block: int = 1):
+        self.counts = counts
+        self.num_slots = int(num_slots)
+        self.rows = int(rows)
+        self.tiles = int(tiles)
+        self.group_base = int(group_base)
+        self.group_block = int(group_block)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_cerf_tiles_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.counts, "counts_addr", a, handle_name_map,
+                           split_64bit=False, as_64bit=False)
+        a["num_slots"] = str(self.num_slots)
+        a["rows"] = str(self.rows)
+        a["tiles"] = str(self.tiles)
+        a["group_base"] = str(self.group_base)
+        a["group_block"] = str(self.group_block)
+        return a
+
+
+class SnaxBingoKernelCerfStaticArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_cerf_static: a 'static' gate on a device core. ctrl and state are bit
+    sets over every CERF group (bit g = group g), emitted as cerf_words 32-bit words."""
+
+    def __init__(self, ctrl: int, state: int, cerf_words: int = 1):
+        self.ctrl = int(ctrl)
+        self.state = int(state)
+        self.cerf_words = int(cerf_words)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_cerf_static_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        for w in range(self.cerf_words):
+            a[f"cerf_ctrl[{w}]"] = f"0x{(self.ctrl >> (32 * w)) & 0xFFFFFFFF:08x}"
+            a[f"cerf_state[{w}]"] = f"0x{(self.state >> (32 * w)) & 0xFFFFFFFF:08x}"
+        return a
+
+
 class SnaxBingoKernelChipBarrierArgs(BingoKernelArgs):
     """Args for __snax_bingo_kernel_chip_barrier: one cross-chip barrier over the rectangle
     top_left..bottom_right, run as a task on ONE core of every compute chip in it.
@@ -150,6 +202,21 @@ class SnaxBingoKernelIdma1dCopyArgs(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
         assignments["size"] = str(self.size)
         return assignments
+
+
+class PhaseArgsLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
+    """The DM task that brings args phase `phase` of chip `chip`'s cluster `cluster` into L1: a 1D
+    copy of that phase's args image (the generated host code's static image, in L3) over the
+    cluster's args region (passes/bingo_dfg_emit.py, ARGS PHASES). Its node must be marked
+    `args_resident`, so its own args stay outside the region it overwrites."""
+
+    def __init__(self, chip: int, cluster: int, phase: int):
+        if phase < 1:
+            raise ValueError(f"args phase {phase}: phase 0 lands at host init, a load brings phases 1 and up")
+        img = f"__bingo_args_image_chip{chip:02x}_cl{cluster}_p{phase}"
+        super().__init__(f"(chiplet_addr_transform_full(0x{chip:02x}, (uint64_t)(uintptr_t)&{img}))",
+                         f"(__bingo_args_l1_chip{chip:02x}_cl{cluster}_p{phase})", f"sizeof({img}_t)")
+        self.chip, self.cluster, self.phase = int(chip), int(cluster), int(phase)
 
 # BINGO IDMA strided copy: `outer` repetitions of `reps` runs of `size` bytes
 class SnaxBingoKernelIdma2dCopyArgs(BingoKernelArgs):
