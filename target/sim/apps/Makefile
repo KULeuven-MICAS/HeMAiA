@@ -9,6 +9,8 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 SW_HOST_APPS_DIR 		:= $(MKFILE_DIR)../../sw/host/apps/
 SW_DEVICE_APPS_DIR 	:= $(MKFILE_DIR)../../sw/device/apps/snax/
 BIN_DIR := $(MKFILE_DIR)../bin
+# Copies stream through the client: the file server's server-side copy (what cp tries by default) can hang
+CP ?= cp --reflink=never
 
 CVA6_GCC_ROOT = /tools/riscv/bin
 RISCV_CC      = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
@@ -76,10 +78,10 @@ $(APP_ELF): FORCE
 		DEV_APP=$(DEV_APP)
 
 apps: $(APP_ELF)
-	cp $(APP_ELF) $(MKFILE_DIR)
+	$(CP) $(APP_ELF) $(MKFILE_DIR)
 	echo "$(APP_ELF)" > $(MKFILE_DIR).rtlbinary
-	cp $(APP_BIN) $(MKFILE_DIR)
-	cp $(APP_DUMP) $(MKFILE_DIR)
+	$(CP) $(APP_BIN) $(MKFILE_DIR)
+	$(CP) $(APP_DUMP) $(MKFILE_DIR)
 	python3 bin2hex.py -i $(APP_NAME).bin
 	python3 copy_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
 # Per-chiplet host images (params per_chip_image, target/sw/host/apps/per_chip_image.py): each compute chip
@@ -88,34 +90,34 @@ apps: $(APP_ELF)
 		name=$$(basename $$img .bin); id=$${name##*_chip}; \
 		dir=app_chip_$$(echo $$id | cut -c1)_$$(echo $$id | cut -c2); \
 		[ -d "$(BIN_DIR)/$$dir" ] || { echo "per-chip image $$name: no $(BIN_DIR)/$$dir"; exit 1; }; \
-		cp -f $$img $(MKFILE_DIR); \
+		$(CP) -f $$img $(MKFILE_DIR); \
 		python3 bin2hex.py -i $$name.bin; \
 		rm -rf $(BIN_DIR)/$$dir; \
-		cp -r $(MKFILE_DIR)/$$name $(BIN_DIR)/$$dir; \
+		$(CP) -r $(MKFILE_DIR)/$$name $(BIN_DIR)/$$dir; \
 		echo "staged $$name into $(BIN_DIR)/$$dir"; \
 	done
 	if [ -f "$(APP_MEM)" ]; then \
-		cp -f "$(APP_MEM)" $(MKFILE_DIR); \
+		$(CP) -f "$(APP_MEM)" $(MKFILE_DIR); \
 		python3 bin2hex.py -i mempool.bin; \
-		cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
+		$(CP) -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
 	fi
 # Removed first, like the HBM below, so a chip does not keep the previous workload's.
 	rm -rf $(BIN_DIR)/mempool_chip_*
 	for img in $(APP_MEM_CHIPS); do \
 		name=$$(basename $$img .bin); \
-		cp -f $$img $(MKFILE_DIR); \
+		$(CP) -f $$img $(MKFILE_DIR); \
 		python3 bin2hex.py -i $$name.bin; \
-		cp -r -f $(MKFILE_DIR)/$$name $(BIN_DIR); \
+		$(CP) -r -f $(MKFILE_DIR)/$$name $(BIN_DIR); \
 	done
 # The HBM image is symlinked, never copied: it can be GiBs. Removed first so a
 # workload without one does not inherit the previous workload's.
 	rm -rf $(BIN_DIR)/hbm
 	if [ -f "$(APP_HBM)/manifest.txt" ]; then \
-		cp -rs "$(APP_HBM)" $(BIN_DIR)/hbm; \
+		$(CP) -rs "$(APP_HBM)" $(BIN_DIR)/hbm; \
 	fi
 	rm -rf $(BINGO_TRACE_HEADER_DIR)
 	mkdir -p $(BINGO_TRACE_HEADER_DIR)
-	cp -f $(BINGO_SHARED_TRACE_HEADER) $(BINGO_TRACE_HEADER_DIR)/perf_tracing.h
+	$(CP) -f $(BINGO_SHARED_TRACE_HEADER) $(BINGO_TRACE_HEADER_DIR)/perf_tracing.h
 	printf '%s\n' apps/bingo_trace_headers/perf_tracing.h > $(BINGO_TRACE_HEADER_MANIFEST)
 	app_trace_root="$(SW_DEVICE_APPS_DIR)$(DEV_APP)"; \
 	if [ -n "$(DEV_APP)" ] && [ -d "$$app_trace_root" ]; then \
@@ -125,7 +127,7 @@ apps: $(APP_ELF)
 				rel="$${hdr#$$app_trace_root/}"; \
 				staged="$(BINGO_TRACE_HEADER_DIR)/$$rel"; \
 				mkdir -p "$$(dirname "$$staged")"; \
-				cp -f "$$hdr" "$$staged"; \
+				$(CP) -f "$$hdr" "$$staged"; \
 				printf '%s\n' "apps/bingo_trace_headers/$$rel" >> $(BINGO_TRACE_HEADER_MANIFEST); \
 			fi; \
 		done; \
