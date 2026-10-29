@@ -13,6 +13,7 @@ _start:
     sd          ra, 8(sp)
     sd          s0, 0(sp)
     call        initialize_bss
+    call        initialize_tcdm
 #   call        initialize_wide_spm
 #   call        initialize_narrow_spm
     call        enable_fpu

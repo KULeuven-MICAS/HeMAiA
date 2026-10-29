@@ -351,6 +351,24 @@ void initialize_bss() {
 
 }
 
+// The first and last 8 KiB of every cluster's TCDM zeroed, before the clusters wake: the first
+// space holds the cluster's allocator, the last its stack and other data. The rest is written
+// by DMA (data from L3 or the mempool) before anything reads it. The simulation bootrom used to
+// do this, but it runs uncached from the slow peripheral bus; this runs from L3.
+#define INIT_TCDM_SIZE 0x2000
+void initialize_tcdm() {
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        uint64_t tcdm = QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset;
+        sys_dma_blk_memcpy(get_current_chip_id(), chiplet_addr_transform(tcdm),
+                           chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
+                           INIT_TCDM_SIZE);
+        sys_dma_blk_memcpy(get_current_chip_id(),
+                           chiplet_addr_transform(tcdm + CLUSTER_TCDM_SIZE - INIT_TCDM_SIZE),
+                           chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
+                           INIT_TCDM_SIZE);
+    }
+}
+
 void initialize_wide_spm() {
     size_t wide_spm_size =
         (size_t)(&__wide_spm_end) - (size_t)(&__wide_spm_start);

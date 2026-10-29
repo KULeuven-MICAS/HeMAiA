@@ -14,34 +14,10 @@
 // For values need to share between functions, use uninitialized global variable
 // + initialization function
 
-#include "chip_id.h"
-#include "sys_dma_bootrom.h"
-#include "occamy_memory_map.h"
-#define bool uint8_t
-#define true 1
-#define false 0
-// We only initialize the first 8KB and last 8KB of the TCDM
-// This is mainly for the saving of simulation time
-// In real silicon, all the mem should be initialized
-// In the testing setup, anyway the mem will be handled by the dma engine to load data either from L3 or mempool later
-// The first space is for the allocator and the last space is for stack and other data
-#define INIT_TCDM_SIZE 0x2000
 void bootrom() {
-    // L2 (the narrow SPM) is not cleared here: the simulation testharness zeroes it at time zero
-    // (target/sim/testharness/template/load_binary.sv.tpl, clear_narrow_spm)
-    // Initialize Cluster TCDM
-    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        // CLUSTER_TCDM_BASE_ADDR = QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset
-        // CLUSTER_TCDM_END_ADDR = CLUSTER_TCDM_BASE_ADDR + CLUSTER_TCDM_SIZE
-        // First 8KB
-        sys_dma_blk_memcpy(
-            chiplet_addr_transform(QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset),
-            chiplet_addr_transform(WIDE_ZERO_MEM_BASE_ADDR),
-            INIT_TCDM_SIZE);
-        // Last 8KB
-        sys_dma_blk_memcpy(
-            chiplet_addr_transform(QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset + CLUSTER_TCDM_SIZE - INIT_TCDM_SIZE),
-            chiplet_addr_transform(WIDE_ZERO_MEM_BASE_ADDR),
-            INIT_TCDM_SIZE);
-        }
+    // Nothing to initialise: the CVA6 fetches this ROM uncached over the peripheral bus, a few
+    // hundred ns an instruction, so the work lives in the application, which runs from L3.
+    // L2 (the narrow SPM) is zeroed by the simulation testharness at time zero
+    // (target/sim/testharness/template/load_binary.sv.tpl, clear_narrow_spm); the clusters'
+    // TCDM by the host runtime's start-up (target/sw/host/runtime/start.S, initialize_tcdm).
 }
