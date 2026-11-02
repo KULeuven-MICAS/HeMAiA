@@ -1,0 +1,70 @@
+// full: Llama-3-8B's FFN (4,096 -> 14,336 -> 4,096, 448 intermediate columns a cluster), synthetic weights of the
+// model's shapes in INT4 (../../../llama3/common/llama3_data.py), a fresh 256-token prompt on 16 + 4 chiplets, the whole
+// block. Four passes of 64 rows: X of a pass (64 x 4,096 INT8, 256 KiB) is what an L1 holds beside the weight slabs. X of
+// every pass comes from the root memory chip's HBM, multicast at the start by its push engine (64 KiB tiles, a flag
+// each); a pass's X comes into L1 right after the previous pass's second down chunk load (x_early). Every pass streams
+// the weights from the memory chips again (restream): the model's 84 MiB of INT4 weights do not stay in the rings. Each
+// chip's down projection is split by output columns between its clusters, 16 slices of 128 a cluster through 8 output
+// slots (out_slots), one ChainGather a group of 4 slices (chain_group), so a pass runs 8 gathers; dependency relays
+// instead of order edges for the gathers (gather_relay_only); every chip's first weight chunks pushed at the start
+// (start_per_chip). ../../common/ffn_prefill_mc.py explains each parameter where it reads it; the stage apps beside this
+// one take these params.
+{
+  stage: "full"
+  num_chiplets: 16
+  num_clusters: 2
+  model: llama3-8b-synthetic
+  seed: 1
+  tokens: 256
+  rows: 64
+  wbits: 4
+  blocks: 1
+  dn_cols: 128
+  w_chunk_bytes: 98304
+  w_buffers: 2
+  x_buffers: 1
+  restream: true
+  weight_ring:
+  {
+    slots: 8
+    batch: 4
+    policy: 1
+    head: 4
+    batch_head: 1
+  }
+  weight_crest: false
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  static_l1: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  l3_overlay: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  mapping: single_pass
+  deq_per_row: true
+  x_blocks: 4
+  store_lag: 1
+  gemm_reuse: true
+  post_blocks: 4
+  root_light: true
+  split_last: true
+  sym_zero: false
+  dn_split: cols
+  split_first_dn: true
+  col_unit: 16
+  dn_load_early: true
+  relay_on_simd: true
+  first_gather_waits_copies: false
+  out_slots: 8
+  start_per_chip: true
+  gather_relay_only: true
+  chain_group: 4
+  x_early: true
+  relay_per_gather: true
+  w4_paired: true
+}

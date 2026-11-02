@@ -11,9 +11,9 @@
 # returned, and do not report "still healthy" to the user between events.
 S=$(cd "$(dirname "$0")/.." && pwd); R=$S/runs
 T=$1; end=$(( $(date +%s) + ${2:-3600} ))
-W=${FFN_WORK:-/tmp/opencode/w}; mkdir -p "$W"; SEEN=$W/seen_$T; touch "$SEEN"
+W=${FFN_WORK:-/tmp/ffn_tick_$USER}; mkdir -p "$W"; SEEN=$W/seen_$T; touch "$SEEN"
 PAT="WATCHDOG STOP|WATCHDOG WARN|WATCHDOG SLOW|WATCHDOG CHECK-ERROR|WATCHDOG no simulator|ASSERTION|CHECK FAIL|L1 OOM|BUILD ERROR|EXITED|DONE|GONE|LIVE WATCHDOG|LOWSPACE"
-show() { echo "--- $(date +%H:%M)"; python3 "${S%/sweep/*}/sweep/common/sim_watchdog.py" status "$R/$T"; "$S/pf_status.sh" stg_ | grep "^quota"; tail -n 3 "$R/$T.events" | cut -c1-200; }
+show() { echo "--- $(date +%H:%M)"; python3 "${S%/sweep/*}/sweep/common/sim_watchdog.py" status "$R/$T"; q=$(quota -u "$USER" | tail -1 | awk '{print $1}' | tr -d '*'); echo "quota: $((q / 1048576)) GB of 150 GB hard"; tail -n 3 "$R/$T.events" | cut -c1-200; }
 while [ "$(date +%s)" -lt "$end" ]; do
   new=$(grep -hE "$PAT" "$R/$T.events" 2>/dev/null | sort -u | comm -13 <(sort -u "$SEEN") -)
   if [ -n "$new" ]; then echo "$new" | cut -c1-230; echo "$new" >> "$SEEN"; show; exit 0; fi

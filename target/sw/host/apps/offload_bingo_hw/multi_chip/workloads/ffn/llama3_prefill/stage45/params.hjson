@@ -1,0 +1,60 @@
+// stage45: stages 4-5 of one pass: the chip's A8 in L1 before the window; the down slices over the weight stream, the ChainGathers into the root and the stores. The mapping's params are full's with tokens 64 (one pass of rows). ../../common/ffn_stages_mc.py.
+{
+  stage: "45"
+  num_chiplets: 16
+  num_clusters: 2
+  model: llama3-8b-synthetic
+  seed: 1
+  tokens: 64
+  rows: 64
+  wbits: 4
+  blocks: 1
+  dn_cols: 128
+  w_chunk_bytes: 98304
+  w_buffers: 2
+  x_buffers: 1
+  restream: true
+  weight_ring:
+  {
+    slots: 8
+    batch: 4
+    policy: 1
+    head: 4
+    batch_head: 1
+  }
+  weight_crest: false
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  static_l1: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  l3_overlay: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  mapping: single_pass
+  deq_per_row: true
+  x_blocks: 4
+  store_lag: 1
+  gemm_reuse: true
+  post_blocks: 4
+  root_light: true
+  split_last: true
+  sym_zero: false
+  dn_split: cols
+  split_first_dn: true
+  col_unit: 16
+  dn_load_early: true
+  relay_on_simd: true
+  first_gather_waits_copies: false
+  out_slots: 8
+  start_per_chip: true
+  gather_relay_only: true
+  chain_group: 4
+  x_early: true
+  relay_per_gather: true
+  w4_paired: true
+}

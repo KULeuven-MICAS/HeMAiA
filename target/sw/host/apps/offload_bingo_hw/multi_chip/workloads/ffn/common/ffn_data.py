@@ -17,8 +17,8 @@ are the calibration samples; T tokens are T rows of every activation below. Ever
 calibration samples' absolute maximum mapped onto 127 (util/calib.py): the normed input hq and
 the SwiGLU output a8.
 
-THE GOLDEN is the device's own arithmetic (util/hwmodel.py, util/fp.py), stage by stage, for the
-tensor-parallel mapping the driver builds (ffn_mc.py):
+THE GOLDEN is the device's own arithmetic (util/hwmodel.py, util/fp.py; its GEMVs on float64 BLAS, exact_gemv), stage by stage, for the
+tensor-parallel mapping the driver builds (ffn_prefill_mc.py):
 
     hq        = quant_i8(rmsnorm(x16) (.) gain, s_h)       on the root, staged
     g16[g]    = d_port(hq @ Wgu[:, cols g], k_x) (.) s_gu   every cluster g its columns
@@ -56,6 +56,19 @@ def import_util(dsv2_dir):
     return fp, hwmodel, layout, pack, reference
 
 
+def exact_gemv(fp, xq, Wq, k):
+    """util/hwmodel.gemv on float64 BLAS (numpy has no BLAS for integers): every product and partial sum of INT8 x
+    INT4/INT8 over the model's depths is an integer far below 2^53, so the result is the INT32 accumulation bit for bit;
+    a bound at or above that falls back to the integer product."""
+    x, w = np.asarray(xq), np.asarray(Wq)
+    bound = float(np.max(np.abs(x), initial=0)) * float(np.max(np.abs(w), initial=0)) * x.shape[-1]
+    if bound >= 2.0 ** 52:
+        acc = x.astype(np.int64) @ w.astype(np.int64)
+    else:
+        acc = np.rint(x.astype(np.float64) @ w.astype(np.float64)).astype(np.int64)
+    return fp.d_port(acc, k), acc
+
+
 def _bf16(path, shape):
     u = np.fromfile(path, dtype="<u2")
     if u.size != int(np.prod(shape)):
@@ -63,10 +76,18 @@ def _bf16(path, shape):
     return (u.astype(np.uint32) << 16).view(np.float32).reshape(shape)
 
 
+# Synthetic models (no checkpoint): name -> builder(inter) returning load_weights' dict. A workload registers its own
+# (workloads/llama3/common/llama3_data.py) before the driver reads its params' `model`.
+SYNTHETIC = {}
+
+
 def load_weights(cache_dir, model, inter=None):
     """The FFN of `model` (a sweep/llm_blocks/ffn/fetch_weights.py key) in [in, out] orientation, float32
     values of the BF16 checkpoint: gate, up [hidden, inter], down [inter, hidden], gain [hidden].
-    `inter` keeps only the first `inter` intermediate columns (a smaller FFN of the same layer)."""
+    `inter` keeps only the first `inter` intermediate columns (a smaller FFN of the same layer). A model in
+    SYNTHETIC is built by its builder instead."""
+    if model in SYNTHETIC:
+        return SYNTHETIC[model](inter)
     with open(os.path.join(cache_dir, "manifest.json")) as f:
         man = json.load(f)
     if model not in man:
@@ -106,7 +127,9 @@ class FfnData:
     same rows of down. `chips`: per chip index its clusters (global numbers). `order`: the chip
     indices in the order the reduce folds them into the root's (the root first)."""
 
-    def __init__(self, cache_dir, model, dsv2_dir, seed=1, n_calib=8, wbits=4, tokens=1, inter=None):
+    def __init__(self, cache_dir, model, dsv2_dir, seed=1, n_calib=8, wbits=4, tokens=1, inter=None, rows=None):
+        """`rows` (a block of a whole layer): {x16, cal} -- the tokens [T, H] FP16 the FFN runs on and the rows its static
+        scales are calibrated on -- instead of seeded draws."""
         fp, hm, layout, pack, ref = import_util(dsv2_dir)
         self.fp, self.hm, self.layout, self.packmod = fp, hm, layout, pack
         if wbits != 4:
@@ -126,6 +149,11 @@ class FfnData:
         cal = rng.normal(0.0, 1.0, size=(n_calib, H)).astype(np.float16).astype(np.float32)
         self.T = int(tokens)
         self.x16 = rng.normal(0.0, 1.0, size=(self.T, H)).astype(np.float16)    # [T, H]
+        if rows is not None:
+            self.x16 = np.asarray(rows["x16"], dtype=np.float16)
+            cal = np.asarray(rows["cal"], dtype=np.float16).astype(np.float32)
+            if self.x16.shape != (self.T, H):
+                raise ValueError(f"rows x16 {self.x16.shape}: the FFN takes [{self.T}, {H}]")
         self.gain16 = W["gain"].astype(np.float16)
         # the normed, gained input as the device would compute it (RMSNorm, then the gain)
         xg16 = lambda x: fp.mul16(hm.rmsnorm(np.asarray(x, dtype=np.float16)), self.gain16)
@@ -139,7 +167,7 @@ class FfnData:
         self.inv_a = fp.f32bits(self.s_a.inv)
         # ---- the device's arithmetic, up to the per-cluster cut ---------------------------
         self.hq = np.stack([fp.quant_i8(xg16(x), self.s_h.inv) for x in self.x16])   # [T, H]
-        g_raw, _ = hm.gemv(self.hq, self.gu_q, self.k_x)
+        g_raw, _ = exact_gemv(fp, self.hq, self.gu_q, self.k_x)
         self.gu_f = hm.dequant_scale(self.s_h.s, self.gu_s, self.k_x)       # FP16 [2 I]
         g16 = fp.mul16(g_raw, self.gu_f[None, :])
         a16 = fp.mul16(hm.silu16(g16[:, :I]), g16[:, I:])
@@ -171,7 +199,7 @@ class FfnData:
 
     def part(self, c0, n):
         """The cluster's partial y: its rows of down, off the D port (FP16 [T, H])."""
-        p, _ = self.hm.gemv(self.a8[:, c0:c0 + n], self.dn_q[c0:c0 + n, :], self.k_dn)
+        p, _ = exact_gemv(self.fp, self.a8[:, c0:c0 + n], self.dn_q[c0:c0 + n, :], self.k_dn)
         return p
 
     def golden(self, cols, chips, order):

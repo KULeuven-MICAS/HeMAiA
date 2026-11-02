@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """What the level-2 workloads share on the 16 + 4 chiplet platform: the topology, the weight rings,
 the anchors, the synchronisation arm, the broadcast of the token, the chips' fold and the reduce,
-the checks and the emission. ffn_mc.py documents each mechanism; the workloads (ffn, moe) build
+the checks and the emission. The workloads (ffn, moe, fa) build
 their layer between `setup()` and `finish()`:
 
     S = Workload(args, p, plat, hw)     # its data, S.make_sym(...), S.make_rings(...)
@@ -16,8 +16,9 @@ their layer between `setup()` and `finish()`:
     S.finish(...)                       # end anchor, report, checks, compile
 
 THE SWITCHES (params): bcast (bcast_l1 | pull), reduce (chain | root), sync (edge | barrier) and
-barrier_mode (bcast | sw), as ffn_mc.py describes them; the ablation turns the first three on and
-off, with barrier_mode bcast. weight_crest (CREST chunks expanded in place) is kept but is not part of
+barrier_mode (bcast: one 0xFF broadcast store of the chip's checkpoint, then a local poll | sw: the
+point-to-point software barrier through the top-left chip); the ablations turn the first three on and
+off (ffn/common/ffn_prefill_mc.py, THE ABLATION, its own reduce root and barrier placement). weight_crest (CREST chunks expanded in place) is kept but is not part of
 the ablation: the paper's cluster has no decompressor.
 """
 
@@ -83,7 +84,9 @@ class ClusterNodes:
 class ChipletBuild(FabricBase):
     TAG = "l2"                          # the prefix of every staged symbol and printed line
 
-    def __init__(self, args, p, plat, hw):
+    def __init__(self, args, p, plat, hw, shared=None):
+        """`shared`: another build whose graph, staging, anchors and node helpers this one adds to (a block
+        of a whole layer, dsv2_prefill_mc.py); None makes its own."""
         self.args, self.p, self.plat, self.hw = args, p, plat, hw
         self.T = int(p.get("tokens", 1))
         if self.T < 1:
@@ -141,6 +144,13 @@ class ChipletBuild(FabricBase):
         self.order = fold_cycle(chips, self.ROOT)   # the fold order: the root, then the cycle
 
         # ---- the graph ------------------------------------------------------------------
+        self.sym = {}
+        self.checks = []                       # (name, got handle, golden array, bytes)
+        if shared is not None:
+            for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark"):
+                setattr(self, a, getattr(shared, a))
+            self.n_anchor = 0
+            return
         self.st = DataStaging(plat, on_host=True)
         if not self.st.has_hbm:
             raise ValueError(f"{args.platformcfg} has no HBM")
@@ -175,8 +185,6 @@ class ChipletBuild(FabricBase):
                                     chip_id=self.ROOT, cluster_id=0)
         self.mark = BingoMemAlloc(f"zz_{self.TAG}_sram_mark", size=64, mem_level="L1",
                                   chip_id=self.ROOT, cluster_id=0)
-        self.sym = {}
-        self.checks = []                       # (name, got handle, golden array, bytes)
 
     # ---- topology helpers -----------------------------------------------------------------
     def fold_order(self):
@@ -321,8 +329,10 @@ class ChipletBuild(FabricBase):
 
     def make_streams(self):
         wbuf = int(self.p.get("w_buffers", 3))
+        # stream_name: the slabs' handle names (a layer's blocks each name their own)
         self.ls = [LoadStream(self.cx(g), self.c(g), nbytes=self.chunk, nbuf=wbuf,
-                              slack=1024 if self.crest else 0) for g in range(self.G)]
+                              slack=1024 if self.crest else 0, name=getattr(self, "stream_name", "stream"))
+                   for g in range(self.G)]
 
     @staticmethod
     def chunk_trailer():
@@ -577,6 +587,18 @@ class ChipletBuild(FabricBase):
                       SnaxBingoKernelWaitFlagsArgs(h, 0, 0), prev if k == self.ROOT else [self.end])
 
     # ---- emission -------------------------------------------------------------------------
+    def emit_ring_schedules(self):
+        """Each chip's ring schedule, the table its prefetcher walks."""
+        for k in self.chips:
+            r = self.rings[k]
+            self.st.put(f"{self.TAG}_ring_sched_k{k:02x}", "uint64_t", np.array(r.schedule(), dtype=np.uint64))
+            print(f"[{self.TAG}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
+                  f"{self.mem[k]:#04x} engine {self.engine[k]}")
+
+    def data_h_extra(self):
+        """More lines for the end of the data header."""
+        return []
+
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
         dfg, p, st, args, T = self.dfg, self.p, self.st, self.args, self.TAG
         if self.crest:
@@ -587,11 +609,7 @@ class ChipletBuild(FabricBase):
                         print(f"[{T}] chip {k:#04x}: CREST {kind} {u / 2**20:.2f} MiB pushed as "
                               f"{n / 2**20:.2f} MiB ({r:.3f}x)")
                 print(f"[{T}] chip {k:#04x}: CREST {cr.plain} chunk(s) stored plain")
-        for k in self.chips:
-            r = self.rings[k]
-            st.put(f"{T}_ring_sched_k{k:02x}", "uint64_t", np.array(r.schedule(), dtype=np.uint64))
-            print(f"[{T}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
-                  f"{self.mem[k]:#04x} engine {self.engine[k]}")
+        self.emit_ring_schedules()
         if args.data_h:
             st.emit(args.data_h, args.output_dir)
             if p.get("d2d_ddr", True):
@@ -608,14 +626,29 @@ class ChipletBuild(FabricBase):
                 with open(args.data_h, "a") as f:
                     f.write(f"\n// params d2d_rx_yield: RX yield windows, compute / memory chips\n"
                             f"#define HEMAIA_D2D_RX_YIELD {wc}\n#define HEMAIA_D2D_RX_YIELD_MEM {wm}\n")
+            more = self.data_h_extra()
+            if more:
+                with open(args.data_h, "a") as f:
+                    f.write("\n" + "\n".join(more) + "\n")
         extra = [os.path.basename(str(args.data_h))] if args.data_h else None
         if self.barrier_fence:
             self.fence_barriers()
         dfg.skip_viz = bool(p.get("fast_export", True))
+        # params desc_in_image: each chip's scheduler fetches its task descriptors from the packed list in the
+        # program image (L3) instead of a copy in the narrow SPM, which holds about 7,500 descriptors
+        # params l1_pin_last: name substrings of L1 buffers the static packer places last (a long-lived buffer that
+        # would otherwise split the space the others pack into); l1_order: the packer's preference order (name,
+        # size, search: the lowest peak of several largest-first orders)
+        static_l1 = bool(p.get("static_l1", True))
+        if static_l1 and (p.get("l1_pin_last") or p.get("l1_order")):
+            from bingo_l1_packer import StaticL1Options
+            static_l1 = StaticL1Options(enable=True, pin_last=tuple(p.get("l1_pin_last", ())),
+                                        order=p.get("l1_order", "name"))
         dfg.bingo_compile_dfg(
             app_name=app_name, output_dir=args.output_dir,
             output_file_name=args.output_offload_file_name, extra_include_header_list=extra,
-            static_l1=bool(p.get("static_l1", True)), desc_list_in_narrow_spm=True)
+            static_l1=static_l1, desc_list_in_narrow_spm=True,
+            desc_list_in_image=bool(p.get("desc_in_image", False)))
         self.check_symmetric()
         header = os.path.join(args.output_dir, args.output_offload_file_name)
         self.check_core_order(header, x_prefixes)
@@ -645,6 +678,20 @@ class ChipletBuild(FabricBase):
                           trailer=bool(self.ring_trailer), crest=bool(self.crest),
                           slot_bytes=self.slot_bytes))
             print(f"[{T}] Execution IR: {out}")
+        # params replay_cluster: [chip (hex string or int), cluster]: that cluster's tasks inside the window, with their
+        # arguments, as a standalone program for the SNAX cluster simulator (passes/bingo_cluster_replay.py), into
+        # replay_<chip>_<cluster>.h in the output dir
+        if p.get("replay_cluster") is not None:
+            from bingo_cluster_replay import emit_cluster_replay
+            rc = p["replay_cluster"]
+            chip = int(rc[0], 16) if isinstance(rc[0], str) else int(rc[0])
+            # params replay_gates: [[task regex, anchor regex, cycles], ...], the external waits as delays after the
+            # cluster's own anchor tasks; replay_durations: [[task regex, cycles], ...], tasks held to at least that long
+            # (bingo_cluster_replay.py); replay_pre: the cluster's setup tasks before the window run too
+            emit_cluster_replay(dfg, chip, int(rc[1]), os.path.join(args.output_dir, "static_l1_layout.csv"),
+                                os.path.join(args.output_dir, f"replay_{chip:02x}_{int(rc[1])}.h"),
+                                gates=p.get("replay_gates"), durations=p.get("replay_durations"),
+                                include_pre=bool(p.get("replay_pre", False)))
 
     def check_core_order(self, header, x_prefixes):
         """Every DM core reaches its cluster's x task before its first weight-ring load, in the
