@@ -41,9 +41,12 @@ int main() {
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
 #if defined(HEMAIA_D2D_DDR) && HEMAIA_D2D_DDR
-    printf_safe("Chip(%x, %x): [Host] D2D links in DDR mode%s\r\n", get_current_chip_loc_x(),
-                get_current_chip_loc_y(), d2d_ddr_err ? " -- memchip read-back FAILED" : "");
-    if (d2d_ddr_err) return -1;
+    // Only a failed switch is reported: every UART line holds the host's start-up.
+    if (d2d_ddr_err) {
+        printf_safe("Chip(%x, %x): [Host] D2D links to DDR mode: memchip read-back FAILED\r\n",
+                    get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    }
 #endif
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Multi-chip Offload HW Bingo Main\r\n");
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
