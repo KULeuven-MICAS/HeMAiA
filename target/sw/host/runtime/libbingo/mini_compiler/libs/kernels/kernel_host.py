@@ -430,6 +430,98 @@ class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
         return a
 
 
+class HostBingoKernelWeightPrefetchRangeArgs(HostBingoKernelWeightPrefetchArgs):
+    """The weight prefetcher over chunks [chunk_lo, chunk_hi) of each ring (chunk_hi 0: to its
+    end; host_kernel_lib.h). Two of them on one host, one after the other, push what one
+    prefetcher pushes, so another host task can run between them."""
+    KERNEL_NAME = "__host_bingo_kernel_weight_prefetch_range"
+
+    def __init__(self, *args, chunk_lo: int = 0, chunk_hi: int = 0, **kw):
+        super().__init__(*args, **kw)
+        if int(chunk_lo) < 0 or (int(chunk_hi) and int(chunk_hi) <= int(chunk_lo)):
+            raise ValueError(f"chunk_lo={chunk_lo} chunk_hi={chunk_hi}: 0 <= lo < hi (hi 0: the end)")
+        self.chunk_lo, self.chunk_hi = int(chunk_lo), int(chunk_hi)
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_weight_prefetch_range_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {f"w.{f}": v for f, v in super().get_c_field_assignments(handle_name_map).items()}
+        a["chunk_lo"], a["chunk_hi"] = str(self.chunk_lo), str(self.chunk_hi)
+        return a
+
+
+class HostBingoKernelHbmBcastArgs(BingoKernelArgs):
+    """The HBM multicast (host_kernel_lib.h): the memory chiplet's push engine multicasts
+    n_tiles tiles from its HBM into every compute chiplet's L3, each followed by its flag
+    (64 B apart). The task runs on a host whose chiplet the multicast reaches, and ends once
+    the last flag has landed there."""
+    KERNEL_NAME = "__host_bingo_kernel_hbm_bcast"
+
+    def __init__(self, src_addr, dst_addr, flag_addr, value_addr, value: int, tile_bytes: int,
+                 n_tiles: int, memchip_id: int, engine: int):
+        if not 0 <= int(engine) <= 3:
+            raise ValueError(f"engine={engine}: 0..3, one of the memchip's push engines")
+        if int(n_tiles) < 1 or int(tile_bytes) < 1:
+            raise ValueError(f"n_tiles={n_tiles}, tile_bytes={tile_bytes}: both >= 1")
+        self.src_addr, self.dst_addr, self.flag_addr = src_addr, dst_addr, flag_addr
+        self.value_addr, self.value = value_addr, int(value)
+        self.tile_bytes, self.n_tiles = int(tile_bytes), int(n_tiles)
+        self.memchip_id, self.engine = int(memchip_id), int(engine)
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_hbm_bcast_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        for f in ("src_addr", "dst_addr", "flag_addr", "value_addr"):
+            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
+                               as_64bit=True)
+        for f in ("value", "tile_bytes", "n_tiles", "memchip_id", "engine"):
+            a[f] = str(getattr(self, f))
+        return a
+
+
+class HostBingoKernelHbmUcastArgs(BingoKernelArgs):
+    """The HBM unicast (host_kernel_lib.h), the multicast's conventional counterpart: the memory
+    chiplet's push engine writes the n_tiles tiles and their flags into each chiplet of `chips` in
+    turn (one copy a chiplet), at the same addresses as the multicast, plus a progress flag a tile
+    into `prog_addr` (64 B apart, n_tiles x len(chips) of them) on the issuing host's chiplet. Ends
+    once the last progress flag has landed there."""
+    KERNEL_NAME = "__host_bingo_kernel_hbm_ucast"
+
+    def __init__(self, src_addr, dst_addr, flag_addr, prog_addr, value_addr, value: int,
+                 tile_bytes: int, n_tiles: int, memchip_id: int, engine: int, chips):
+        if not 0 <= int(engine) <= 3:
+            raise ValueError(f"engine={engine}: 0..3, one of the memchip's push engines")
+        if int(n_tiles) < 1 or int(tile_bytes) < 1:
+            raise ValueError(f"n_tiles={n_tiles}, tile_bytes={tile_bytes}: both >= 1")
+        chips = [int(c) for c in chips]
+        if not 1 <= len(chips) <= 16 or any(not 0 <= c <= 0xFE for c in chips):
+            raise ValueError(f"chips={chips}: 1..16 chiplet ids")
+        self.src_addr, self.dst_addr, self.flag_addr, self.prog_addr = src_addr, dst_addr, flag_addr, prog_addr
+        self.value_addr, self.value = value_addr, int(value)
+        self.tile_bytes, self.n_tiles = int(tile_bytes), int(n_tiles)
+        self.memchip_id, self.engine = int(memchip_id), int(engine)
+        self.chips = chips
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_hbm_ucast_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        for f in ("src_addr", "dst_addr", "flag_addr", "prog_addr", "value_addr"):
+            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
+                               as_64bit=True)
+        for f in ("value", "tile_bytes", "n_tiles", "memchip_id", "engine"):
+            a[f] = str(getattr(self, f))
+        a["n_chips"] = str(len(self.chips))
+        pack = lambda cs: sum(c << (8 * i) for i, c in enumerate(cs))
+        a["chips_lo"] = f"0x{pack(self.chips[:8]):016x}ull"
+        a["chips_hi"] = f"0x{pack(self.chips[8:]):016x}ull"
+        return a
+
+
 class HostBingoKernelIdmaArgs(BingoKernelArgs):
     def __init__(self,
                  src_addr: Union[BingoMemAlloc, int],

@@ -149,7 +149,8 @@ class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
         assignments["spatial_stride_src"] = str(self.spatial_stride_src)
         assignments["spatial_stride_dst"] = str(self.spatial_stride_dst)
-        assignments["num_temporal_dims"] = str(self.num_temporal_dims)
+        # bits 9:8 the stage of a task split in two (0 whole, 1 configure, 2 start): xdma.h xdma_6d
+        assignments["num_temporal_dims"] = str(self.num_temporal_dims | (getattr(self, "stage", 0) << 8))
         for i in range(5):
             assignments[f"temporal_strides_src[{i}]"] = str(self.temporal_strides_src[i])
         for i in range(5):

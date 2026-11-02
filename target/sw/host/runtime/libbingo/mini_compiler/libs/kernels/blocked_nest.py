@@ -28,8 +28,9 @@ THE HARDWARE it has to fit, and the three facts that bound what is expressible:
      target, 4 fp16 or 8 int8, and must be contiguous there. So an fp16 output needs
      tileSize % 4 == 0, and no engine on this cluster can write a tileSize = 2 operand
      from fp16 -- the xDMA's atom is the same 8 B.
-  2. ONE LANE STRIDE PER SIDE. Lane c sits at base + c*stride, so the 8 lanes of a beat
-     have to be 8 evenly spaced runs on both sides. This is what refuses an int8 operand
+  2. ONE LANE STRIDE PER SIDE. Lane c sits at base + c*stride, so the lanes of a beat
+     (num_channel of them: the beat is lanes x 8 B, `lanes` below) have to be evenly spaced
+     runs on both sides. This is what refuses an int8 operand
      whose 16 B atom sits inside a taller block (e.g. meshRow 32, tileSize 16): two lanes
      fill an atom and the next atom is a block away, which no single stride reaches.
   3. THREE LOOPS PER SIDE, one of them spent on the operand interleave when the pass also
@@ -47,7 +48,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-LANES = 8          # lanes per beat
+LANES = 8          # lanes per beat at a 64 B beat; callers pass the cluster's (beat / 8 B)
 LANE_BYTES = 8     # bytes per lane
 FP16_PER_LANE = LANE_BYTES // 2
 
@@ -98,17 +99,17 @@ def _side_dims(loops):
     return out
 
 
-def _stream(loops, lane_step):
-    """(i, j) of every lane of every beat, in stream order: shape (beats, LANES, 2)."""
+def _stream(loops, lane_step, lanes):
+    """(i, j) of every lane of every beat, in stream order: shape (beats, lanes, 2)."""
     bounds = [lp[0] for lp in loops]
     grids = np.indices(bounds[::-1]).reshape(len(bounds), -1)[::-1]   # innermost first
     i = sum(g * lp[2][0] for g, lp in zip(grids, loops))
     j = sum(g * lp[2][1] for g, lp in zip(grids, loops))
-    c = np.arange(LANES)
+    c = np.arange(lanes)
     return np.stack([i[:, None] + c * lane_step[0], j[:, None] + c * lane_step[1]], -1)
 
 
-def _lane_targets(beats, tmap, out_bytes):
+def _lane_targets(beats, tmap, out_bytes, lanes):
     """Target byte address of each OUTPUT lane, or None if a lane is not contiguous."""
     run = np.arange(FP16_PER_LANE)
     t = tmap[beats[..., 0][..., None], beats[..., 1][..., None] + run]  # (beats, 8, 4)
@@ -118,16 +119,16 @@ def _lane_targets(beats, tmap, out_bytes):
         return t[..., 0] * 2
     if len(t) % 2:
         return None
-    pairs = t.reshape(len(t) // 2, LANES, 2, FP16_PER_LANE).reshape(-1, LANES, 2 * FP16_PER_LANE)
+    pairs = t.reshape(len(t) // 2, lanes, 2, FP16_PER_LANE).reshape(-1, lanes, 2 * FP16_PER_LANE)
     if np.any(np.diff(pairs, axis=-1) != 1):
         return None
     return pairs[..., 0]
 
 
-def _fit_writer(bounds, addrs):
+def _fit_writer(bounds, addrs, lanes):
     """Writer lane stride and per-loop strides that reproduce `addrs`, or None."""
     lw = int(addrs[0, 1] - addrs[0, 0])
-    if np.any(addrs - addrs[:, :1] != np.arange(LANES) * lw):
+    if np.any(addrs - addrs[:, :1] != np.arange(lanes) * lw):
         return None
     bases = addrs[:, 0]
     strides, n = [], 1
@@ -141,17 +142,17 @@ def _fit_writer(bounds, addrs):
     return lw, list(zip(bounds, strides))
 
 
-def _candidates(rows, cols, pitch):
+def _candidates(rows, cols, pitch, lanes):
     """(lane_dir, reader lane stride, lane step, base loops) for each lane direction."""
-    if rows % LANES == 0:        # lane c = row i0+c, 4 fp16 at j
+    if rows % lanes == 0:        # lane c = row i0+c, 4 fp16 at j
         yield ("row", pitch, (1, 0),
-               [(rows // LANES, LANES * pitch, (LANES, 0)),
+               [(rows // lanes, lanes * pitch, (lanes, 0)),
                 (cols // FP16_PER_LANE, LANE_BYTES, (0, FP16_PER_LANE))])
-    if cols % (LANES * FP16_PER_LANE) == 0:     # lane c = 4 fp16 at j0 + 4c of one row
+    if cols % (lanes * FP16_PER_LANE) == 0:     # lane c = 4 fp16 at j0 + 4c of one row
         yield ("col", LANE_BYTES, (0, FP16_PER_LANE),
                [(rows, pitch, (1, 0)),
-                (cols // (LANES * FP16_PER_LANE), LANES * LANE_BYTES,
-                 (0, LANES * FP16_PER_LANE))])
+                (cols // (lanes * FP16_PER_LANE), lanes * LANE_BYTES,
+                 (0, lanes * FP16_PER_LANE))])
 
 
 def _splits(loop):
@@ -161,16 +162,16 @@ def _splits(loop):
         yield [(d, s, (di, dj)), (b // d, s * d, (di * d, dj * d))]
 
 
-def _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims):
+def _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims, lanes):
     tmap = target_index(rows, cols, mb, kb)
     budget = agu_dims - (1 if fused_mul else 0)
     best = None
-    for lane_dir, rd_lane, lane_step, base in _candidates(rows, cols, pitch):
+    for lane_dir, rd_lane, lane_step, base in _candidates(rows, cols, pitch, lanes):
         for sa in _splits(base[0]):
             for sb in _splits(base[1]):
                 for perm in itertools.permutations(sa + sb):
                     loops = list(perm)
-                    addrs = _lane_targets(_stream(loops, lane_step), tmap, out_bytes)
+                    addrs = _lane_targets(_stream(loops, lane_step, lanes), tmap, out_bytes, lanes)
                     if addrs is None:
                         continue
                     rd = [(lp[0], lp[1]) for lp in loops]
@@ -179,7 +180,7 @@ def _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims):
                         if wb[0] % 2:
                             continue
                         wb[0] //= 2
-                    fw = _fit_writer(wb, addrs)
+                    fw = _fit_writer(wb, addrs, lanes)
                     if fw is None:
                         continue
                     wr_lane, wr = fw
@@ -212,7 +213,7 @@ def _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims):
     return best
 
 
-def verify(nest: BlockedNest, rows, cols, mb, kb, out_bytes):
+def verify(nest: BlockedNest, rows, cols, mb, kb, out_bytes, lanes=LANES):
     """Walk the descriptor exactly as the device runs it; compare with the index map.
 
     Independent of the search: it knows nothing of loops, splits or merges, only the
@@ -225,7 +226,7 @@ def verify(nest: BlockedNest, rows, cols, mb, kb, out_bytes):
         grids = np.indices(bounds[::-1]).reshape(len(bounds), -1)[::-1]
         base = sum(g * s for g, s in zip(grids, strides))
         base = np.concatenate([base + r * rep_stride for r in range(nest.reps)])
-        return base[:, None] + np.arange(LANES) * lane               # (beats, 8) bytes
+        return base[:, None] + np.arange(lanes) * lane               # (beats, lanes) bytes
 
     src = walk(nest.rd_lane, nest.rd, nest.rep_rd)                     # fp16 source bytes
     dst = walk(nest.wr_lane, nest.wr, nest.rep_wr)                     # target bytes
@@ -237,7 +238,7 @@ def verify(nest: BlockedNest, rows, cols, mb, kb, out_bytes):
     if out_bytes == 1:
         if len(elems) != 2 * len(dst):
             raise ValueError("blocked nest: reader and writer beat counts disagree")
-        elems = elems.reshape(len(dst), LANES, 2 * FP16_PER_LANE)
+        elems = elems.reshape(len(dst), lanes, 2 * FP16_PER_LANE)
     elif len(elems) != len(dst):
         raise ValueError("blocked nest: reader and writer beat counts disagree")
     per_lane = elems.shape[-1]
@@ -254,9 +255,13 @@ def verify(nest: BlockedNest, rows, cols, mb, kb, out_bytes):
 
 
 def blocked_nest(rows: int, cols: int, pitch: int, mb: int, kb: int, out_bytes: int,
-                 fused_mul: bool, agu_dims: int = 3) -> BlockedNest:
+                 fused_mul: bool, agu_dims: int = 3, lanes: int = LANES) -> BlockedNest:
     """The blocked pass for S [rows, cols] fp16 at `pitch` -> A-layout of S with (mb, kb)
-    blocks, fp16 (out_bytes 2) or int8 (1). Verified. Raises with the reason otherwise."""
+    blocks, fp16 (out_bytes 2) or int8 (1). Verified. Raises with the reason otherwise.
+
+    `lanes` is the SIMD's lanes per beat, its beat over 8 B: a nest derived for more lanes
+    than the hardware has moves that many fewer bytes a beat, and leaves the operand's
+    other bytes unwritten."""
     if rows % mb or cols % kb:
         raise ValueError(
             f"a [{rows}, {cols}] tile does not tile {mb}x{kb} blocks; a partial block "
@@ -270,12 +275,12 @@ def blocked_nest(rows: int, cols: int, pitch: int, mb: int, kb: int, out_bytes: 
         raise ValueError(
             f"tileSize {kb}: an int8 atom of {kb} B is narrower than the 4-element fp16 "
             f"lane it is quantised from, so one input lane would straddle two atoms.")
-    nest = _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims)
+    nest = _search(rows, cols, pitch, mb, kb, out_bytes, fused_mul, agu_dims, lanes)
     if nest is None:
         raise ValueError(
             f"no blocked nest writes {'int8' if out_bytes == 1 else 'fp16'} blocks of "
             f"{mb}x{kb} from a [{rows}, {cols}] tile: every order either splits a lane "
             f"across blocks at addresses one lane stride cannot reach, or needs more than "
             f"one repeat level. A 2-D lane grid on the SIMD writer would lift the first.")
-    verify(nest, rows, cols, mb, kb, out_bytes)
+    verify(nest, rows, cols, mb, kb, out_bytes, lanes)
     return nest

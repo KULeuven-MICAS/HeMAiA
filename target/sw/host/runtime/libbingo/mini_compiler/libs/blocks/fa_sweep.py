@@ -20,7 +20,20 @@ PER TILE j, for every query tile q (the kernels are attention transposed, gemm_f
                FP16 at k_o (GEMM_FA_D_FP16) into part[q]
 
 then per query tile c / l into o~^T (simd_mla_normalise) and its transpose (xDMA): xt[q], one query
-per row, FP16, in the accumulator's bytes. One resident K_j and V_j serve every query tile.
+per row, FP16, in the accumulator's bytes. With `ot8` (the quantiser's scale, FP32 bits) the
+normalisation quantises in the same pass (simd_mla_normalise_q8): xt[q] is then o~ INT8 in the A layout
+of one 16-row tile (the next GEMM's operand), and no transpose runs. One resident K_j and V_j serve every
+query tile. With `sm_batch` (and mask_c, or no mask) a key tile's softmaxes of every query tile are one
+SIMD task (simd_fa_softmax_n): one dispatch for nq tiles; sm[q][j] is that task for every q. With `prologue`
+each arena's geometry is built by a PROLOGUE softmax at the head of the sweep (in the SIMD core's program before
+the first softmax, which the cfg-reuse pass then promotes to PRIMED), off the first key tile's path.
+
+THE MASK (optional). `mask(j, q)` -> an L1 handle of a [bc, br] FP16 tile (0, or -65504 where key j's
+row must not reach query q's lane) or None: the SIMD core adds it to S^T between QK(j, q) and
+SM(j, q), so a masked score's P is exactly 0 (a causal prefill's keys after its queries). With
+`mask_c` the handle is instead an INT32 [bc, br] bias (0, or -65504 * 2^k_s) that QK(j, q) reads as
+its C, so the score leaves the D port masked, RNE(S * 2^-k_s - 65504), and no SIMD task sits
+between the matmul and the softmax.
 
 THE GEMM CORE'S PROGRAM is QK(j, *) then PV(j - 1, *), so a tile's softmax runs under the next
 tile's score matmuls. With `gemm_async` every matmul is a start / wait pair (blocks/gemm_async.py): a
@@ -37,10 +50,15 @@ are made.
 from dataclasses import dataclass, field
 
 from bingo_kernel_args import (
+    SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelGemmFaPvArgs,
     SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
+    SnaxBingoKernelSimdFaSoftmaxNArgs,
+    SnaxBingoKernelFaBuildShapesArgs,
+    SnaxBingoKernelSimdFaWaitArgs,
     SnaxBingoKernelSimdMlaNormaliseArgs,
+    SnaxBingoKernelSimdMlaNormaliseQ8Args,
     SnaxBingoKernelXdmaTranspose2dArgs,
 )
 
@@ -70,9 +88,9 @@ class FaSweepCfg:
         if self.bc % 16 or self.bc % 4 or self.d_qk % 4 or self.d_v % 16 or self.br % 16:
             raise ValueError(f"FaSweepCfg: bc={self.bc} d_qk={self.d_qk} d_v={self.d_v} "
                              f"br={self.br} do not tile the (16, 4, 16) array")
-        if self.nt < 2 or self.nq < 1:
-            raise ValueError(f"FaSweepCfg: nt={self.nt} (at least 2: the pipeline runs two tiles "
-                             f"deep) nq={self.nq}")
+        # one tile is a sweep whose only PV is both the first (no C) and the last (FP16 D)
+        if self.nt < 1 or self.nq < 1:
+            raise ValueError(f"FaSweepCfg: nt={self.nt} nq={self.nq}")
 
     @property
     def beat(self):
@@ -114,7 +132,8 @@ def fa_sweep_alloc(l1, cfg: FaSweepCfg) -> FaSweepBufs:
 
 
 def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None, oacc_free=None,
-             name="s", early=2):
+             name="s", early=2, mask=None, mask_c=False, ot8=None, sm_batch=False, prologue=False,
+             geom_core=None, sm_async=False):
     """Build one sweep on the cluster `g` names. g: an object with node(name, core, kernel, args,
     after), dfg, gemm, chiplet, cluster (a Ctx, or the chiplet driver's adapter). q8: {q: (handle, ready
     tasks)}, the query tiles in the A layout. roles: {"gemm", "simd", "xdma"} core ids.
@@ -122,7 +141,11 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
     oacc_free: {q: [tasks]}, what must finish before oacc[q] is overwritten (the readers of the
     previous sweep's xt[q]). early: the tiles fetched before the first matmul (2, or 1 when the source
     has fewer than four slabs). Returns a dict: qk, sm, pv (per [q][j], the tasks consumers depend on),
-    norm, tr ([q]), xt ([q] handles)."""
+    norm, tr ([q]), xt ([q] handles). geom_core: the role (in roles) whose core builds each arena's geometry
+    (fa_build_shapes) at the sweep's head instead of the SIMD core; each arena's first softmax then runs GEOM_PRIMED
+    behind it (prologue is then not used). sm_async: each softmax fires its SIMD tasks and returns (NO_DRAIN), and a
+    wait task on its arena retires them: the consumers depend on the wait, and the program order puts the wait behind
+    the next softmax's fire, so the SIMD core sets up one softmax while the block runs the one before."""
     gq = GemmQueue.of(g.dfg, cfg.gemm_async)
     gm, simd, xdma = roles["gemm"], roles["simd"], roles["xdma"]
     nq, nt, beat = cfg.nq, cfg.nt, cfg.beat
@@ -154,6 +177,20 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
     # matmul, then K_{j+1} and V_{j+1} right after PV(j-1) is created, so every fetch comes after the
     # tasks that free its slab. Two early tiles (K0 V0 K1 V1) need four slabs free of each other; with
     # one, tile 1 is fetched after tile 0's score matmuls, which free K0's slab.
+    geom = {}
+    if geom_core is not None:
+        if sm_batch:
+            raise ValueError("fa_sweep geom_core: the single-tile softmax only")
+        for q in range(nq):
+            geom[q] = g.node(f"{name}gsh{q}", roles[geom_core], "__snax_bingo_kernel_fa_build_shapes",
+                             SnaxBingoKernelFaBuildShapesArgs(bufs.arena[q], cfg.bc, 1),
+                             [prev["norm"][q]] if prev else [])
+    elif prologue:
+        for q in range(nq):
+            g.node(f"{name}smp{q}", simd, "__snax_bingo_kernel_simd_fa_softmax",
+                   FA(at_offset(bufs.s16[0][q], beat), bufs.p8[0][q], bufs.arena[q], cfg.bc, 1, tile_idx=0,
+                      seed_state=0, geom_mode=FA.GEOM_PROLOGUE, score_scale=cfg.a_exp, p_mode=FA.EXACT, p8_pitch=0),
+                   [prev["norm"][q]] if prev else [])
     fetch_k(0)
     fetch_v(0)
     if early >= 2:
@@ -169,17 +206,48 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
                 deps.append(sm[q][j - 2])
             elif prev:
                 deps.append(prev["sm"][q][-1])
+            bias = mask(j, q) if mask is not None and mask_c else None
             qk[q][j] = matmul("qk", f"{name}qk{j}q{q}", SnaxBingoKernelGemmFaQkArgs(
-                k_slab, q8[q][0], 0, at_offset(s16, beat), M=cfg.bc // 16, K=cfg.d_qk // 4,
+                k_slab, q8[q][0], 0 if bias is None else bias, at_offset(s16, beat), M=cfg.bc // 16, K=cfg.d_qk // 4,
                 N=cfg.br // 16, d_shift=cfg.k_s), deps)
         # the slab frees when every query tile's score matmul is done: the last one in the core's
         # program, whose wait follows the earlier waits
         src.release(kt[j][2], qk[nq - 1][j])
 
     def make_sm(j):
+        if sm_batch:
+            if mask is not None and not mask_c:
+                raise ValueError("fa_sweep sm_batch: the mask must be QK's C (mask_c), no SIMD task in between")
+            deps = []
+            for q in range(nq):
+                deps.append(qk[q][j])
+                if j:
+                    deps.append(sm[q][j - 1])
+                elif prev:
+                    deps.append(prev["norm"][q])
+                if j >= 2:
+                    deps.append(pv[q][j - 2])
+                elif prev:
+                    deps.append(prev["pv"][q][len(prev["pv"][q]) - 2 + j])
+            deps = list(dict.fromkeys(deps))
+            node = g.node(f"{name}sm{j}", simd, "__snax_bingo_kernel_simd_fa_softmax_n",
+                          SnaxBingoKernelSimdFaSoftmaxNArgs(
+                              [at_offset(bufs.s16[j % 2][q], beat) for q in range(nq)],
+                              [bufs.p8[j % 2][q] for q in range(nq)], [bufs.arena[q] for q in range(nq)],
+                              cfg.bc, 1, tile_idx=j, seed_state=1, score_scale=cfg.a_exp, p_mode=FA.EXACT,
+                              p8_pitch=0), deps)
+            for q in range(nq):
+                sm[q][j] = node
+            return
         for q in range(nq):
             s16, p8 = bufs.s16[j % 2][q], bufs.p8[j % 2][q]
             deps = [qk[q][j]]
+            mk = mask(j, q) if mask is not None and not mask_c else None
+            if mk is not None:
+                n = cfg.bc * cfg.br
+                deps = [g.node(f"{name}mk{j}q{q}", simd, "__snax_bingo_kernel_simd_stream_elementwise",
+                               SnaxBingoKernelSimdAddF16Args(at_offset(s16, beat), mk, at_offset(s16, beat),
+                                                             n // 32, 32), [qk[q][j]])]
             if j:
                 deps.append(sm[q][j - 1])
             elif prev:
@@ -187,11 +255,25 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
             if j >= 2:
                 deps.append(pv[q][j - 2])
             elif prev:
-                deps.append(prev["pv"][q][nt - 2 + j])
-            sm[q][j] = g.node(f"{name}sm{j}q{q}", simd, "__snax_bingo_kernel_simd_fa_softmax",
-                              FA(at_offset(s16, beat), p8, bufs.arena[q], cfg.bc, 1, tile_idx=j,
-                                 seed_state=1, geom_mode=FA.GEOM_SELF, score_scale=cfg.a_exp,
-                                 p_mode=FA.EXACT, p8_pitch=0), deps)
+                # the previous sweep's PV that last read p8[j % 2]: its last two (its own tile count, which a sweep
+                # over more keys than the one before does not share)
+                deps.append(prev["pv"][q][len(prev["pv"][q]) - 2 + j])
+            first_primed = j == 0 and q in geom
+            if first_primed:
+                deps.append(geom[q])
+            fire = g.node(f"{name}sm{j}q{q}", simd, "__snax_bingo_kernel_simd_fa_softmax",
+                          FA(at_offset(s16, beat), p8, bufs.arena[q], cfg.bc, 1, tile_idx=j,
+                             seed_state=1, geom_mode=FA.GEOM_PRIMED if first_primed else FA.GEOM_SELF,
+                             score_scale=cfg.a_exp, p_mode=FA.EXACT | (FA.NO_DRAIN if sm_async else 0),
+                             p8_pitch=0), deps)
+            if sm_async:
+                wt = g.node(f"{name}sm{j}q{q}_w", simd, "__snax_bingo_kernel_simd_fa_wait",
+                            SnaxBingoKernelSimdFaWaitArgs(bufs.arena[q]), [fire])
+                # the block reads and writes the softmax's buffers until the wait (bingo_liveness RULE 1)
+                fire.operands_held_by = wt
+                gq.start_phase[fire] = gq.wait_phase[wt] = f"{cfg.phase}_sm"
+                fire = wt
+            sm[q][j] = fire
 
     def make_pv(j):
         v_ready, v_slab, _ = vt[j]
@@ -228,6 +310,15 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
         oacc, part = bufs.oacc[q], bufs.part[q]
         ot16 = at_offset(oacc, cfg.d_v * cfg.br * 2)
         x = at_offset(oacc, 0)
+        if ot8 is not None:
+            n = g.node(f"{name}norm{q}", simd, "__snax_bingo_kernel_simd_mla_normalise_q8",
+                       SnaxBingoKernelSimdMlaNormaliseQ8Args(
+                           at_offset(bufs.arena[q], lay["lrun"]), part, at_offset(part, beat), x,
+                           cfg.d_v, cfg.a_n_f32bits, ot8), [pv[q][nt - 1], sm[q][nt - 1]])
+            norm.append(n)
+            tr.append(n)
+            xt.append(x)
+            continue
         n = g.node(f"{name}norm{q}", simd, "__snax_bingo_kernel_simd_mla_normalise",
                    SnaxBingoKernelSimdMlaNormaliseArgs(
                        at_offset(bufs.arena[q], lay["lrun"]), part, at_offset(part, beat), ot16,

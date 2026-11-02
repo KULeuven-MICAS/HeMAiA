@@ -129,7 +129,12 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
 
     KERNEL_NAME = "__snax_bingo_kernel_gemm_start"
 
-    def __init__(self, *args, seq: int, shape_addr=0, **kwargs):
+    # stage: CONFIGURE_AND_START (one task), or the dispatch split in two tasks of the GEMM core's program:
+    # CONFIGURE_ONLY writes every CSR and returns, START_ONLY starts the configuration the CONFIGURE_ONLY task
+    # just before it in the program left (blocks/gemm_async.py cfg_ahead)
+    CONFIGURE_AND_START, CONFIGURE_ONLY, START_ONLY = 0, 1, 2
+
+    def __init__(self, *args, seq: int, shape_addr=0, reuse: int = 0, stage: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         if int(seq) < 1:
             raise ValueError(f"seq={seq}: dispatches are numbered from 1")
@@ -137,6 +142,12 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
         # shape_addr: this cluster's L1 copy of the shape's parameters (SnaxBingoKernelGemmShapeInitArgs),
         # or 0 for the table in L3
         self.shape_addr = shape_addr
+        # reuse: the cluster's previous VersaCore dispatch had this one's configuration but its operand
+        # addresses (passes/bingo_cfg_reuse.py reuse_gemm_start_config), so the kernel writes those and starts
+        self.reuse = int(bool(reuse))
+        if int(stage) not in (0, 1, 2):
+            raise ValueError(f"stage={stage}: 0 configure and start, 1 configure only, 2 start only")
+        self.stage = int(stage)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_start_args_t"
@@ -145,6 +156,8 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
         assignments = super().get_c_field_assignments(handle_name_map)
         assignments["seq"] = str(self.seq)
         self._process_addr(self.shape_addr, "shape_addr", assignments, handle_name_map, split_64bit=False)
+        assignments["reuse"] = str(self.reuse)
+        assignments["stage"] = str(self.stage)
         return assignments
 
 

@@ -184,6 +184,53 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_weight_prefetch_args_t;
 
+// The weight prefetcher over a part of each ring's schedule: chunks [chunk_lo, chunk_hi)
+// (chunk_hi 0: to the ring's end). Two of them on one host, one after the other, push what one
+// prefetcher pushes (a chunk's slot is fixed by its index, and the later one finds the slots the
+// earlier one filled from their release words), so another host task can run between a chip's
+// first chunks and the rest: an HBM multicast on the same push engine, say.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_range_args {
+    __host_bingo_kernel_weight_prefetch_args_t w;   // w.scratchpad_ptr unused
+    uint64_t chunk_lo;
+    uint64_t chunk_hi;
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_weight_prefetch_range_args_t;
+
+// The HBM multicast (host_kernel_lib.h): a memory chiplet's push engine multicasts n_tiles
+// tiles from its HBM into every compute chiplet's L3 (chip id 0xFF), each tile followed by
+// its flag, driven by this chiplet's host through the engine's descriptor queue.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_bcast_args {
+    uint64_t src_addr;      // tile 0 in the memory chiplet's HBM; tile t at + t * tile_bytes
+    uint64_t dst_addr;      // tile 0's L3 address, the same on every chiplet
+    uint64_t flag_addr;     // tile 0's flag in L3, the same on every chiplet; 64 B apart
+    uint64_t value_addr;    // a 4-byte word holding `value` in the memory chiplet (HBM or SRAM)
+    uint64_t value;         // what a landed flag holds
+    uint64_t tile_bytes;
+    uint64_t n_tiles;
+    uint64_t memchip_id;
+    uint64_t engine;        // the memory chiplet's push engine (sys_dma.h)
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_hbm_bcast_args_t;
+
+// The HBM unicast (host_kernel_lib.h): the same tiles and flags as the multicast, written into one
+// listed compute chiplet's L3 at a time, plus a progress flag a tile in this chiplet's L3.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_ucast_args {
+    uint64_t src_addr;      // tile 0 in the memory chiplet's HBM; tile t at + t * tile_bytes
+    uint64_t dst_addr;      // tile 0's L3 address, the same on every chiplet
+    uint64_t flag_addr;     // tile 0's flag in L3, the same on every chiplet; 64 B apart
+    uint64_t prog_addr;     // the progress flags in this chiplet's L3, one per (chiplet, tile); 64 B apart
+    uint64_t value_addr;    // a 4-byte word holding `value` in the memory chiplet (HBM or SRAM)
+    uint64_t value;         // what a landed flag holds
+    uint64_t tile_bytes;
+    uint64_t n_tiles;
+    uint64_t memchip_id;
+    uint64_t engine;        // the memory chiplet's push engine (sys_dma.h)
+    uint64_t n_chips;       // 1..16
+    uint64_t chips_lo;      // chiplet ids 0..7, 8 bits each, chips[0] in the low byte
+    uint64_t chips_hi;      // chiplet ids 8..15
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_hbm_ucast_args_t;
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
     uint64_t src_addr;
     uint64_t dst_addr;

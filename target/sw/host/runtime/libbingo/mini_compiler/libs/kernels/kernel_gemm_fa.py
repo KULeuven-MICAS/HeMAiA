@@ -25,7 +25,9 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
 
     For `pv`, pass the SAME handle as input_C_addr and output_D_addr: the matmul then
     computes O += P.V in place, and the accumulation across KV tiles is the GEMM's own C
-    input rather than a separate pass.
+    input rather than a separate pass. For `qk`, input_C_addr is 0 (no bias) or an INT32
+    [Bc, Br] bias in the score tile's order, a key a row, added before the D port's
+    conversion: S^T = RNE((K.Q^T + C) * 2^-d_shift) (a causal prefill's mask).
 
     These kernels emit the INTERLEAVED D layout the LANEWISE softmax depends on, which is
     what separates them from SnaxBingoKernelGemmFullArgs; see offload_hw_kernels/gemm_fa.h.
@@ -42,6 +44,16 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
     B_KMAJOR = 1
     C_COLSCALE = 2
     D_FP16 = 4
+    #   REUSE       start kernels only, QK or PV: the cluster's previous VersaCore dispatch was
+    #               the same kernel with the same shape, flags, d_shift, b_pitch and kind of C,
+    #               so only the operand addresses (and PV's corr factors) are written. Set by
+    #               passes/bingo_cfg_reuse.py, which knows the GEMM core's program.
+    REUSE = 8
+    #   CONFIGURE / START   start kernels only: one dispatch as two tasks of the GEMM core's program,
+    #               a configure task (every CSR, or REUSE's addresses; no start) and the start task
+    #               right after it (PV's column factors and the start; blocks/gemm_async.py cfg_ahead)
+    CONFIGURE = 16
+    START = 32
     # The widest output the C-path scaler covers, in meshCol blocks (its maxColBlocks).
     COLSCALE_MAX_N = 2
     # The D-port converter's largest power-of-two scale: the score tile is RNE(S * 2^-k),
@@ -62,8 +74,16 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
                  b_pitch: int = 0):
         is_pv = self.KERNEL_NAME in ("__snax_bingo_kernel_gemm_fa_pv",
                                      "__snax_bingo_kernel_gemm_fa_pv_start")
+        is_start = (self.KERNEL_NAME or "").endswith("_start")
         if M <= 0 or K <= 0 or N <= 0:
             raise ValueError(f"M, K, N must be positive block counts, got {M}, {K}, {N}")
+        stages = self.REUSE | self.CONFIGURE | self.START
+        if flags & stages and not is_start:
+            raise ValueError("REUSE / CONFIGURE / START describe a queued dispatch: start kernels only")
+        if flags & self.CONFIGURE and flags & self.START:
+            raise ValueError("CONFIGURE and START are the two tasks of one dispatch: one flag a task")
+        reuse = flags & stages
+        flags &= ~stages
         if flags & ~(self.B_KMAJOR | self.C_COLSCALE | self.D_FP16):
             raise ValueError(f"flags={flags:#x} has bits outside GEMM_FA_*")
         if flags and not is_pv:
@@ -95,7 +115,7 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
             if N > self.COLSCALE_MAX_N:
                 raise ValueError(f"C_COLSCALE covers {self.COLSCALE_MAX_N} column blocks "
                                  f"(Int32ColumnScale maxColBlocks), N={N}")
-        self.flags = int(flags)
+        self.flags = int(flags | reuse)
         self.corr_addr = corr_addr
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr

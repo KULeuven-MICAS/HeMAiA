@@ -17,8 +17,7 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | `reshape.py` | `Reshape` — an explicit layout change as a stage, for the gap between two blocks that both live in L1. |
 | `shard.py` | `Scatter` and `Gather` — the two ends of a row split, so a layer can run a row-independent operator on every cluster. |
 
-`multi_chip/workloads/dsv2/two_chiplet` builds DeepSeek-V2-Lite's layer 1 from them, one stage
-at a time and as the full layer, its weights in the HBM.
+The multi-chip workloads (`multi_chip/workloads/fa`, `ffn`, `moe`) build their blocks from them.
 
 ## Streamed weights, and the HBM
 

@@ -891,10 +891,12 @@ static inline weight_prefetch_run_t weight_prefetch_run_of(
     return run;
 }
 
-static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
+// The prefetcher over chunks [lo, hi) of each ring (hi 0: to its end). A ring's chunk k sits in
+// slot k % n_slots whoever pushes it, so a part starting at lo has pushed nothing yet and knows the
+// chunks below lo - n_slots read (their slots were refilled); it learns the rest from the release words.
+static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_prefetch_args_t *a,
+                                            uint64_t lo, uint64_t hi) {
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __host_bingo_kernel_weight_prefetch_args_t *a =
-        (const __host_bingo_kernel_weight_prefetch_args_t *)arg;
     const volatile uint64_t *sched = (const volatile uint64_t *)(uintptr_t)a->sched_addr;
     const uint64_t nr = a->n_rings < 4 ? a->n_rings : 4, ns = a->n_slots, sb = a->slot_bytes;
     const uint64_t batch = a->batch ? a->batch : 1, policy = a->policy;
@@ -913,10 +915,11 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
     // ahead of the first push; only rings < nr are ever read)
     uint64_t n[4], first[4], pos[4], cons[4], left = 0;
     for (uint64_t r = 0; r < nr; r++) {
-        n[r] = sched[r];
+        n[r] = hi && hi < sched[r] ? hi : sched[r];
         first[r] = sched[4 + r];
-        pos[r] = cons[r] = 0;
-        left += n[r];
+        pos[r] = lo < n[r] ? lo : n[r];
+        cons[r] = pos[r] > ns ? pos[r] - ns : 0;
+        left += n[r] - pos[r];
     }
     int rec_ready = a->rec_addr == 0;
     uint64_t turn = 0;
@@ -1064,6 +1067,93 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
     if (wp_regs.set) *sys_dma_engine_reg(mem, eng, IDMA_LENGTH_ADDR) = 0;
 #endif
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
+    return BINGO_RET_SUCC;
+}
+
+static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
+    return weight_prefetch_part((const __host_bingo_kernel_weight_prefetch_args_t *)arg, 0, 0);
+}
+
+static inline uint64_t __host_bingo_kernel_weight_prefetch_range(void *arg){
+    const __host_bingo_kernel_weight_prefetch_range_args_t *a =
+        (const __host_bingo_kernel_weight_prefetch_range_args_t *)arg;
+    return weight_prefetch_part(&a->w, a->chunk_lo, a->chunk_hi);
+}
+
+// Tiles of one HBM multicast in flight: each is two queued transfers (the tile, its flag), and
+// the engine's queue holds SysIdmaQueueDepth (32) of them. A doorbell to a full queue would be
+// held on the link, stalling every other write into that memory chiplet behind it.
+#define HBM_BCAST_INFLIGHT 16
+
+// Spin until the 4-byte flag at addr, in this chiplet's L3, holds value.
+static inline void hbm_bcast_wait_flag(uint64_t addr, uint32_t value) {
+    const volatile uint32_t *f = (const volatile uint32_t *)(uintptr_t)addr;
+    for (;;) {
+        asm volatile("fence" ::: "memory");     // flushes the WT D-cache: a fresh flag
+        if (*f == value) return;
+        for (int i = 0; i < 32; i++) asm volatile("nop");
+    }
+}
+
+// The HBM multicast: the memory chiplet's push engine reads every tile from its own HBM and
+// writes it to chip id 0xFF, which the D2D routers deliver into every other chiplet's L3 at
+// the same address, then the tile's flag the same way. A tile and its flag are queued in that
+// order on one engine, which runs its queue in order, so a chiplet that sees the flag holds
+// the tile. The multicast skips only its sender, the memory chiplet, so this chiplet gets its
+// copy like every other one, and the task ends once the last flag has landed here.
+static inline uint64_t __host_bingo_kernel_hbm_bcast(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __host_bingo_kernel_hbm_bcast_args_t *a = (const __host_bingo_kernel_hbm_bcast_args_t *)arg;
+    const uint8_t mem = (uint8_t)a->memchip_id;
+    const uint32_t eng = (uint32_t)a->engine, value = (uint32_t)a->value;
+    const uint64_t n = a->n_tiles, tb = a->tile_bytes;
+    const uint64_t loc = (1ull << 40) - 1, all = chiplet_addr_transform_full(0xFF, 0);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
+    sys_dma_engine_queue_enable(mem, eng);
+    for (uint64_t t = 0; t < n; t++) {
+        if (t >= HBM_BCAST_INFLIGHT)
+            hbm_bcast_wait_flag(a->flag_addr + (t - HBM_BCAST_INFLIGHT) * 64, value);
+        sys_dma_engine_queue(mem, eng, all | ((a->dst_addr + t * tb) & loc), a->src_addr + t * tb, tb);
+        sys_dma_engine_queue(mem, eng, all | ((a->flag_addr + t * 64) & loc), a->value_addr, 4);
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
+    hbm_bcast_wait_flag(a->flag_addr + (n - 1) * 64, value);
+    return BINGO_RET_SUCC;
+}
+
+// Tile + flag + progress triples of one HBM unicast in flight: three queued transfers each, within
+// the engine's 32-entry queue.
+#define HBM_UCAST_INFLIGHT 10
+
+// The HBM unicast, the conventional counterpart of the multicast: the memory chiplet's push engine
+// writes every tile, then its flag, into ONE chiplet's L3 at a time (chips[0] first), one copy a
+// chiplet, at the same addresses the multicast uses. After each tile's flag the engine also writes
+// a progress flag into this chiplet's L3 (prog_addr, 64 B apart, one a transfer pair), which the
+// host polls to keep the queue from filling, so it never reads another chiplet's memory. The engine
+// runs its queue in order; the task ends once the last progress flag has landed here.
+static inline uint64_t __host_bingo_kernel_hbm_ucast(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __host_bingo_kernel_hbm_ucast_args_t *a = (const __host_bingo_kernel_hbm_ucast_args_t *)arg;
+    const uint8_t mem = (uint8_t)a->memchip_id;
+    const uint32_t eng = (uint32_t)a->engine, value = (uint32_t)a->value;
+    const uint64_t n = a->n_tiles, tb = a->tile_bytes, nc = a->n_chips, total = nc * n;
+    const uint64_t loc = (1ull << 40) - 1, here = chiplet_addr_transform_full(get_current_chip_id(), 0);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
+    sys_dma_engine_queue_enable(mem, eng);
+    for (uint64_t p = 0; p < total; p++) {
+        const uint64_t c = p / n, t = p % n;
+        const uint8_t chip = (uint8_t)((c < 8 ? a->chips_lo >> (8 * c) : a->chips_hi >> (8 * (c - 8))) & 0xFF);
+        const uint64_t base = chiplet_addr_transform_full(chip, 0);
+        if (p >= HBM_UCAST_INFLIGHT)
+            hbm_bcast_wait_flag(a->prog_addr + (p - HBM_UCAST_INFLIGHT) * 64, value);
+        sys_dma_engine_queue(mem, eng, base | ((a->dst_addr + t * tb) & loc), a->src_addr + t * tb, tb);
+        sys_dma_engine_queue(mem, eng, base | ((a->flag_addr + t * 64) & loc), a->value_addr, 4);
+        sys_dma_engine_queue(mem, eng, here | ((a->prog_addr + p * 64) & loc), a->value_addr, 4);
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
+    hbm_bcast_wait_flag(a->prog_addr + (total - 1) * 64, value);
     return BINGO_RET_SUCC;
 }
 

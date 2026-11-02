@@ -640,6 +640,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_start_args {
   uint32_t a_pitch;
   uint32_t seq;
   uint32_t shape_addr;    // 0: the shape table in L3; else this cluster's L1 copy (gemm_shape_init)
+  uint32_t reuse;         // 1: the cluster's previous dispatch had this one's configuration (bingo_cfg_reuse)
+  uint32_t stage;         // 0: configure and start; 1: configure only; 2: start only (its stage-1 task configured it)
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_start_args_t;
 
@@ -1300,6 +1302,20 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_mla_normalise_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_mla_normalise_args_t;
 
+// simd_mla_normalise with the quantiser behind the multiply: o~8 = quant(O16 (.) c / l), INT8,
+// packed INTERLEAVE4, so each 64-B pair of output beats is a [16 queries x 4 latents] block:
+// the A operand of the next GEMM (one 16-row tile, the latents along K). beats % 4 == 0.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_mla_normalise_q8_args {
+  uint32_t l_addr;             // the running sum, one FP16 beat (a lane per query)
+  uint32_t latch_addr;         // one beat, == input_addr - one SIMD beat
+  uint32_t input_addr;         // O16, `beats` beats (a latent per beat)
+  uint32_t output_addr;        // o~8, beats / 2 beats, the A layout
+  uint32_t beats;
+  uint32_t a_n_f32bits;
+  uint32_t inv_scale_f32bits;  // the quantiser's scale
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_mla_normalise_q8_args_t;
+
 // Softmax over ONE row of `beats` FP16 beats (the router's 64 logits = 2 beats): the row's
 // max and sum fold across lanes, so each comes out splatted. Five tasks:
 //   Reduce MAX -> tmp; Map a=-1 -> x's latch; EW0 ADD|STICKY_B [-m][x] -> Map EXP ->
@@ -1472,6 +1488,39 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
   uint32_t p8_pitch;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_softmax_args_t;
+
+// simd_fa_softmax for n (1..4) query tiles of one key tile in one task: per tile its score
+// buffer (s16), P buffer (p8) and arena, every other field as simd_fa_softmax's (geometry SELF;
+// the shared CSRs programmed once, for the first tile; one drain). Addresses are the SIMD's L1.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax_n_args {
+  uint32_t n;
+  uint32_t s16_0, s16_1, s16_2, s16_3;
+  uint32_t p8_0, p8_1, p8_2, p8_3;
+  uint32_t arena_0, arena_1, arena_2, arena_3;
+  uint32_t bc;
+  uint32_t dhead;
+  uint32_t tile_idx;
+  uint32_t seed_state;
+  uint32_t score_scale;
+  uint32_t p_mode;
+  uint32_t p8_pitch;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_fa_softmax_n_args_t;
+
+// A simd_fa_softmax arena's geometry (simd_fa_build_shapes and its memo), on any core; the arena is that
+// cluster's L1, bc and dhead the arena's softmaxes' own.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_fa_build_shapes_args {
+  uint32_t arena;
+  uint32_t bc;
+  uint32_t dhead;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_fa_build_shapes_args_t;
+
+// The wait of a SIMD_FA_P_NO_DRAIN softmax (simd.h): the arena whose memo holds the count to wait for. On the SIMD core.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_wait_args {
+  uint32_t arena;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_fa_wait_args_t;
 
 
 // ONE LAYOUT CONVERTER, dispatching on the pair it is given.
