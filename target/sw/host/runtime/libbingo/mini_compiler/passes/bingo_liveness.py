@@ -13,6 +13,9 @@
 #    break it by forgetting an annotation. A task whose engine keeps reading after it returns
 #    names the task that waits for the engine (`operands_held_by`: a queued GEMM's start, whose
 #    array streams the operands until the wait); that task is a user of everything it names.
+#    A task that only writes addresses into an engine's configuration and starts nothing
+#    (`config_only`: a GEMM's configure task, blocks/gemm_async.py cfg_ahead) is no user: its
+#    start task, which names the same buffers, is.
 #
 # 2. ORDERING COMES FROM THE GRAPH, NOT A SCHEDULE. BINGO has no linear time axis -- the
 #    manager fires a task as soon as its edges are satisfied -- so ASAP/ALAP levels do not
@@ -55,7 +58,7 @@ def collect_handle_users(nodes) -> Dict[int, Tuple[BingoMemAlloc, Set]]:
                 visit(item, node)
 
     for node in nodes:
-        if getattr(node, "kernel_args", None) is None:
+        if getattr(node, "kernel_args", None) is None or getattr(node, "config_only", False):
             continue
         held_by = getattr(node, "operands_held_by", None)
         for _attr, value in node.kernel_args.__dict__.items():
@@ -91,7 +94,7 @@ def reachability(dfg, nodes) -> Dict[object, Set]:
     does not. One bitset a node (bingo_reach): a Python set of every node's descendants grows
     with the square of the graph.
     """
-    desc: Dict[object, Set] = dict(reach_sets(dfg))
+    desc = reach_sets(dfg)          # a ReachMap: the slot packer also asks it for concurrent nodes
     for n in nodes:
         desc.setdefault(n, frozenset())
     return desc

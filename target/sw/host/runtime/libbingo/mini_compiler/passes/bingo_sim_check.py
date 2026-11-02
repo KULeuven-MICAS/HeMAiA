@@ -134,7 +134,26 @@ def _cerf_scenarios(dfg):
     """
     if not getattr(dfg, "_gating_to_targets", {}):
         return ["all"]
-    return ["all", "none", "low_k", "high_k"]
+    scenarios = ["all", "none", "low_k", "high_k"]
+    # A tile gate enables a prefix of each slot's tiles; random prefixes, 0 and full
+    # included, are the outcomes it can produce (see _tile_prefixes).
+    if any(f.select.get("mode") == "tiles" for f in getattr(dfg, "_cond_forks", [])):
+        scenarios += [f"prefix{i}" for i in range(4)]
+    return scenarios
+
+
+def _tile_prefixes(fork, scenario):
+    """Tiles enabled per slot of a tile fork under `scenario`: every slot full for 'all',
+    none for 'none', otherwise a seeded draw that covers 0, 1, a middle value and full."""
+    lay = fork._tile_layout
+    T = lay["tiles"]
+    if scenario == "all":
+        return [T] * lay["slots"]
+    if scenario == "none":
+        return [0] * lay["slots"]
+    rng = random.Random(f"{scenario}:{fork.source.node_name}")
+    picks = [0, 1, T, rng.randint(0, T)]
+    return [picks[(s + rng.randint(0, 3)) % 4] for s in range(lay["slots"])]
 
 
 def _descriptors(dfg, TaskDescriptor, geo, delay_of, scenario="all"):
@@ -149,7 +168,15 @@ def _descriptors(dfg, TaskDescriptor, geo, delay_of, scenario="all"):
     per = {i: [] for i in range(geo["n_chiplets"])}
     for n in dfg.bingo_stream_order():
         controlled = set(getattr(n, "cerf_write_groups", ()) or ())
-        if controlled:
+        fork = dfg._fork_of(n) if controlled else None
+        if fork is not None and fork.select.get("mode") == "tiles":
+            lay = fork._tile_layout
+            activated = {lay["base"] + s * lay["block"] + t
+                         for s, k in enumerate(_tile_prefixes(fork, scenario))
+                         for t in range(k)}
+            cerf_w = sum(1 << g for g in activated)
+            cerf_c = sum(1 << g for g in controlled)
+        elif controlled:
             groups = sorted({node_to_group[t] for t in gating_targets.get(n, set())
                              if t in node_to_group})
             k = max(0, min(_gate_k(dfg, n), len(groups)))
@@ -262,6 +289,8 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
             push_interval=5,
             random_seed=seed,
             cerf_scope="carried",     # what the RTL does with the carried predicate
+            # NumCerfGroups (BINGO_CERF_GROUPS); the model's CERF is that wide
+            num_cerf_groups=int(getattr(dfg, "cerf_groups", 32)),
         )
         supported = {f.name for f in dataclasses.fields(SimConfig)}
         return SimConfig(**{k: v for k, v in want.items() if k in supported}), sorted(set(want) - supported)

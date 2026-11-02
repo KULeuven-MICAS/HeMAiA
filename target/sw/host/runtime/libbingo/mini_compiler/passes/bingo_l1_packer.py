@@ -58,10 +58,11 @@ class StaticL1Options:
     debug: bool = False           # dump every sharing decision and who justified it
     pin_first: Tuple[str, ...] = ()   # name substrings to place at the front
     pin_last: Tuple[str, ...] = ()    # ...and at the back
+    search_tries: int = 64            # order="search": the jittered largest-first orders tried a cluster
 
     def __post_init__(self):
-        if self.order not in ("name", "size", "reverse"):
-            raise ValueError(f"order must be name, size or reverse; got {self.order!r}")
+        if self.order not in ("name", "size", "reverse", "search"):
+            raise ValueError(f"order must be name, size, reverse or search; got {self.order!r}")
         if self.alignment <= 0 or self.alignment % 64:
             raise ValueError(f"alignment must be a positive multiple of 64; got {self.alignment}")
 
@@ -207,28 +208,51 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
         # The heuristic above chose a preference order; the constraints now override it where
         # they disagree. Kahn's algorithm, taking the heuristic's order as the tie-break, so a
         # workload with no constraints gets exactly the layout it got before.
-        order = _order_with_constraints(order, preds, items)
+        cands = [order]
+        if opts.order == "search" and not pins and not pins_last:
+            # order="search": first-fit over several preference orders, the lowest peak kept. Largest
+            # first, allocation order, then largest first with each size scaled by a seeded factor in
+            # [0.75, 1.25] (deterministic: the seed is the cluster), so near-equal sizes trade places. Every
+            # order keeps the AAAA_ buffers (the symmetric ones, whose offset must be 0 on every chip) in front.
+            import random
+            rng = random.Random(key[0] * 64 + key[1])
+            sym = lambda i: not items[i][0].name.startswith("AAAA_")
+            cands = [order, sorted(idxs, key=lambda i: items[i][0].name)]
+            for _ in range(opts.search_tries):
+                f = {i: rng.uniform(0.75, 1.25) for i in idxs}
+                cands.append(sorted(idxs, key=lambda i: (-items[i][0].size * f[i], items[i][0].name)))
+            cands = [sorted(o, key=sym) for o in cands]
 
-        placed: List[Tuple[int, int, int]] = []   # (idx, start, end)
-        peak = 0
-        for i in order:
-            size = _footprint(items[i][0].size, alignment, guard)
-            blockers = [(s, e) for (j, s, e) in placed if j in interference[i]]
-            blockers.sort()
-            # start above every declared predecessor: one alignment unit past its base is the
-            # lowest address that still satisfies `offset[pred] < offset[i]`
-            off = 0
-            for pidx in preds[i]:
-                ppl = placement.get(id(items[pidx][0]))
-                if ppl is not None:
-                    off = max(off, ppl[1] + alignment)
-            for s, e in blockers:
-                if off + size <= s:
-                    break          # fits in the gap below this blocker
-                off = max(off, e)
-            placed.append((i, off, off + size))
+        def first_fit(order):
+            local: Dict[int, int] = {}
+            placed: List[Tuple[int, int, int]] = []   # (idx, start, end)
+            peak = 0
+            for i in order:
+                size = _footprint(items[i][0].size, alignment, guard)
+                blockers = [(s, e) for (j, s, e) in placed if j in interference[i]]
+                blockers.sort()
+                # start above every declared predecessor: one alignment unit past its base is the
+                # lowest address that still satisfies `offset[pred] < offset[i]`
+                off = 0
+                for pidx in preds[i]:
+                    if pidx in local:
+                        off = max(off, local[pidx] + alignment)
+                for s, e in blockers:
+                    if off + size <= s:
+                        break          # fits in the gap below this blocker
+                    off = max(off, e)
+                placed.append((i, off, off + size))
+                local[i] = off
+                peak = max(peak, off + size)
+            return peak, local
+
+        peak, local = None, None
+        for cand in cands:
+            pk, lc = first_fit(_order_with_constraints(cand, preds, items))
+            if peak is None or pk < peak:
+                peak, local = pk, lc
+        for i, off in local.items():
             placement[id(items[i][0])] = (items[i][0], off)
-            peak = max(peak, off + size)
         total = sum(_footprint(items[i][0].size, alignment, guard) for i in idxs)
         # A LOWER BOUND must be the weight of a set that is MUTUALLY interfering -- a clique.
         # Summing one buffer's neighbours is not that (they need not interfere with each
@@ -384,11 +408,19 @@ def pack_scratchpad_slots(nodes, desc):
     for _key, group in sorted(by_arena.items()):
         order = sorted(group, key=lambda n: n.node_id)
         conflict = {n: set() for n in order}
-        for i, a in enumerate(order):
-            for b in order[i + 1:]:
-                if not can_share(users[a], users[b], desc):
-                    conflict[a].add(b)
-                    conflict[b].add(a)
+        if _singletons(order, users, desc):
+            # every scratchpad touched by its own node only: two conflict exactly when their nodes are unordered,
+            # which the chain form lists without testing every pair (bingo_reach.ReachMap.concurrent)
+            here = set(order)
+            cols = sorted({desc.where[n][0] for n in order})       # the columns holding this arena's nodes
+            for a in order:
+                conflict[a].update(b for b in desc.concurrent(a, cols) if b in here)
+        else:
+            for i, a in enumerate(order):
+                for b in order[i + 1:]:
+                    if not can_share(users[a], users[b], desc):
+                        conflict[a].add(b)
+                        conflict[b].add(a)
         for n in sorted(order, key=lambda x: (-len(conflict[x]), x.node_id)):
             taken = {slots[m] for m in conflict[n] if m in slots}
             sl = 0
@@ -396,6 +428,12 @@ def pack_scratchpad_slots(nodes, desc):
                 sl += 1
             slots[n] = sl
     return slots, users
+
+
+def _singletons(nodes, users, desc):
+    """Every node's scratchpad touched by the node alone, and desc in the chain form with every node in its graph."""
+    return (getattr(desc, "chain_form", False) and all(users[n] == {n} for n in nodes)
+            and all(desc.on_column(n) for n in nodes))
 
 
 def verify_scratchpad_slots(slots, users, desc):
@@ -406,6 +444,11 @@ def verify_scratchpad_slots(slots, users, desc):
         # slots are per-arena, so two nodes only collide if the arena matches too
         by_slot.setdefault((n.assigned_chiplet_id, n.assigned_cluster_id, s), []).append(n)
     for s, group in sorted(by_slot.items()):
+        if _singletons(group, users, desc):
+            # the group is pairwise ordered exactly when, in topological order, each node reaches the next
+            seq = sorted(group, key=lambda n: desc.pos[n])
+            if all(seq[i + 1] in desc[seq[i]] for i in range(len(seq) - 1)):
+                continue
         for i, a in enumerate(group):
             for b in group[i + 1:]:
                 if not can_share(users[a], users[b], desc):
@@ -430,19 +473,26 @@ def check_emitted_arena_text(text: str) -> List[str]:
     import re
 
     problems: List[str] = []
+    # one scan of the header for each pattern, every arena's matches at once
+    used_of, off_of, size_at = {}, {}, {}
+    for b, s in re.findall(r"(__bingo_l[13]_arena_\w+) \+ (\d+) \* " + _SP_ALIGN_RE, text):
+        used_of.setdefault(b, []).append(int(s))
+    for b, v in re.findall(r"uint64_t (__bingo_l[13]_arena_\w+)_off = (.*?);", text):
+        off_of.setdefault(b, v)
+    for m in re.finditer(r"(__bingo_l[13]_arena_\w+) = bingo_l[13]_alloc(?:_at)?\(", text):
+        size_at.setdefault(m.group(1), m.start())
     for m in re.finditer(r"uint64_t (__bingo_l[13]_arena_\w+) = bingo_l[13]_alloc(?:_at)?\(", text):
         base = m.group(1)
-        # how many slots does the arena RESERVE, and where does the arg bump start?
-        size_m = re.search(re.escape(base) + r" = bingo_l[13]_alloc(?:_at)?\((.*?)\);", text, re.S)
-        off_m = re.search(r"uint64_t " + re.escape(base) + r"_off = (.*?);", text)
-        if off_m is None:
+        if base not in off_of:
             continue
+        # how many slots does the arena RESERVE, and where does the arg bump start?
+        size_m = re.compile(re.escape(base) + r" = bingo_l[13]_alloc(?:_at)?\((.*?)\);", re.S).match(
+            text, size_at[base])
         reserved = re.search(r"(\d+) \* " + _SP_ALIGN_RE, size_m.group(1)) if size_m else None
-        off_slots = re.match(r"(\d+) \* " + _SP_ALIGN_RE, off_m.group(1).strip())
+        off_slots = re.match(r"(\d+) \* " + _SP_ALIGN_RE, off_of[base].strip())
         off_slots = int(off_slots.group(1)) if off_slots else 0
 
-        used = [int(s) for s in re.findall(
-            re.escape(base) + r" \+ (\d+) \* " + _SP_ALIGN_RE, text)]
+        used = used_of.get(base)
         if not used:
             continue                      # unpacked: scratchpads bump like everything else
         top = max(used) + 1

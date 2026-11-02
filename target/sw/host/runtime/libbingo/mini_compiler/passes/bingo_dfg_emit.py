@@ -79,6 +79,9 @@ def _is_c_static(expr: str, names) -> bool:
 # a DM task of the graph (`args_resident`, its args outside the region; PhaseArgsLoadArgs) that the
 # workload orders after every task of the previous phase on that cluster and before every task of
 # its phase. A cluster whose tasks are all of phase 0 is emitted as before.
+# PING-PONG (the DFG's `args_pingpong`): two regions, the even phases' and the odd phases', so a phase's
+# load waits only for the phase two before it (every task of phase p - 2 before the phase-p load) and
+# a phase runs while the next one's args land.
 _ARGS_MAX = "#ifndef BINGO_ARGS_MAX\n#define BINGO_ARGS_MAX(a, b) ((a) > (b) ? (a) : (b))\n#endif\n"
 
 
@@ -877,8 +880,10 @@ class BingoDFGEmitMixin:
                 l1_terms.setdefault(cl, []).extend(groups[0])
             else:
                 phases = sorted(g for g in groups if g != "r")
+                sets = ([[p for p in phases if p % 2 == 0], [p for p in phases if p % 2 == 1]]
+                        if getattr(self, "args_pingpong", False) else [phases])
                 l1_terms.setdefault(cl, []).extend(
-                    groups.get("r", []) + [_c_max(["(" + " + ".join(groups[p]) + ")" for p in phases])])
+                    groups.get("r", []) + [_c_max(["(" + " + ".join(groups[p]) + ")" for p in ps]) for ps in sets if ps])
 
         # With slot packing the scratchpad half of the arena is (slots x sp_align) rather than
         # (nodes x sp_align). The ARG half is unchanged and must stay unchanged: arg structs
@@ -1182,6 +1187,8 @@ class BingoDFGEmitMixin:
             if getattr(n, "args_resident", False) and hasattr(ka, "phase") and hasattr(ka, "cluster"):
                 loads[(n.assigned_cluster_id, int(ka.phase))] = n
         bad = []
+        # ping-pong: the phase-q load takes the region of q's parity, so only the phases before q of that parity
+        pp = getattr(self, "args_pingpong", False)
         for (cl, q), ld in sorted(loads.items(), key=lambda kv: kv[0]):
             before, after = nx.ancestors(self, ld), nx.descendants(self, ld)
             for n in local_nodes:
@@ -1189,6 +1196,8 @@ class BingoDFGEmitMixin:
                     continue
                 g = _args_group(n, True)
                 if g == "r":
+                    continue
+                if pp and g < q and (q - g) % 2:
                     continue
                 if g < q and n not in before:
                     bad.append(f"{n.node_name} (phase {g}) not before the phase-{q} load")
@@ -1276,15 +1285,19 @@ class BingoDFGEmitMixin:
                 if at_on:
                     self._arena_off[cl] += f" + sizeof(__bingo_args_image_chip{cid}_cl{cl}_r_t)"
                 f.write(f"        {base}_off += sizeof(__bingo_args_image_chip{cid}_cl{cl}_r_t);\n\n")
-            for p in phases:
-                symbol_hi |= self._emit_args_image(
-                    f, chiplet_id, cl, groups[p], f"_p{p}", f"__bingo_args_l1_chip{cid}_cl{cl}_p{p}",
-                    handle_name_map, local_nodes, out, checks)
             self._args_init_images.add(f"__bingo_args_image_chip{cid}_cl{cl}_p{phases[0]}")
-            region = _c_max([f"sizeof(__bingo_args_image_chip{cid}_cl{cl}_p{p}_t)" for p in phases])
-            if at_on:
-                self._arena_off[cl] += f" + {region}"
-            f.write(f"        {base}_off += {region};\n\n")
+            # one region every phase takes in turn, or (ping-pong) the even phases' then the odd phases'
+            sets = ([[p for p in phases if p % 2 == 0], [p for p in phases if p % 2 == 1]]
+                    if getattr(self, "args_pingpong", False) else [phases])
+            for ps in (x for x in sets if x):
+                for p in ps:
+                    symbol_hi |= self._emit_args_image(
+                        f, chiplet_id, cl, groups[p], f"_p{p}", f"__bingo_args_l1_chip{cid}_cl{cl}_p{p}",
+                        handle_name_map, local_nodes, out, checks)
+                region = _c_max([f"sizeof(__bingo_args_image_chip{cid}_cl{cl}_p{p}_t)" for p in ps])
+                if at_on:
+                    self._arena_off[cl] += f" + {region}"
+                f.write(f"        {base}_off += {region};\n\n")
         if symbol_hi:
             # The program runs at its chip's prefix (PC and symbol addresses carry it), so the
             # chip-local 40 bits are what must lie below 4 GiB

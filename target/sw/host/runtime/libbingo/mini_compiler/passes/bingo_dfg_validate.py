@@ -71,6 +71,7 @@ class BingoDFGValidateMixin:
         for seq in by_core.values():
             for i in range(len(seq) - 1):
                 hb.add_edge(seq[i], seq[i + 1])
+        qpos = {nd: i for seq in by_core.values() for i, nd in enumerate(seq)}   # place in its core's queue
         # 5. SPIN CYCLE -- a consumer spinning on a producer (an ordering-only edge,
         #    bingo_add_order_edge) that, through dependencies and queue order, the producer
         #    itself waits for. No dependency check is stuck: the consumer's kernel just never
@@ -129,21 +130,24 @@ class BingoDFGValidateMixin:
                     f"hang check: cell {cell} holds {len(by_tag)} distinct tags "
                     f"but the descriptor encodes {max_tags} (tag_width={tag_width}).")
             for tag, el in by_tag.items():
-                for i in range(len(el)):
-                    for j in range(i + 1, len(el)):
-                        (sa, ca), (sb, cb) = el[i], el[j]
-                        fwd = (sb is ca) or (sb in reach(ca))
-                        bwd = (sa is cb) or (sa in reach(cb))
-                        if not fwd and not bwd:
-                            raise ValueError(
-                                f"hang check: two edges that can be live at the "
-                                f"same time share tag {tag} on cell {cell}, which "
-                                f"is ONE presence bit -- the first consumer to "
-                                f"check drains it and the second waits forever.\n"
-                                f"  edge A: {sa.node_name} -> {ca.node_name}\n"
-                                f"  edge B: {sb.node_name} -> {cb.node_name}\n"
-                                f"  cell = (chiplet, cluster, consumer core, "
-                                f"producer core)")
+                # A cell's consumers all run on one in-order core, so they are totally ordered. Taken in that order,
+                # an earlier consumer can only precede a later edge (the reverse would close a cycle through the core's
+                # order), and if every consumer precedes the next edge's producer, it precedes every later producer too
+                # (consumer -> next producer -> its consumer -> ...). So testing consecutive edges decides every pair.
+                el.sort(key=lambda e: qpos[e[1]])
+                for (sa, ca), (sb, cb) in zip(el, el[1:]):
+                    fwd = (sb is ca) or (sb in reach(ca))
+                    bwd = (sa is cb) or (sa in reach(cb))
+                    if not fwd and not bwd:
+                        raise ValueError(
+                            f"hang check: two edges that can be live at the "
+                            f"same time share tag {tag} on cell {cell}, which "
+                            f"is ONE presence bit -- the first consumer to "
+                            f"check drains it and the second waits forever.\n"
+                            f"  edge A: {sa.node_name} -> {ca.node_name}\n"
+                            f"  edge B: {sb.node_name} -> {cb.node_name}\n"
+                            f"  cell = (chiplet, cluster, consumer core, "
+                            f"producer core)")
         # 6. CROSS-DIE PREDICATE PATH. A conditionally-gated task on another die
         #    only learns its predicate if some task reachable from its gating
         #    node carries the CERF window to that die. The gating task's own

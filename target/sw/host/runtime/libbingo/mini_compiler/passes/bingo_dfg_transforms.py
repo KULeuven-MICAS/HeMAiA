@@ -1,8 +1,9 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 import networkx as nx
+import numpy as np
 
-from bingo_reach import reach_sets
+from bingo_reach import ChainLabels, reach_sets
 
 from bingo_node import BingoNode
 
@@ -676,30 +677,21 @@ class BingoDFGTransformsMixin:
             if debug:
                 print(f"[tag-fit] round {_round}: {len(over)} cell(s) over {budget} edges: "
                       + ", ".join(f"{k}:{len(es)}" for k, es in sorted(over.items())[:12]))
-            # Reachability as bitsets over a topological order: bit pos[b] of reach[a] is
-            # set when a reaches b. NOT bingo_stream_order(): that one is cached, and a
-            # cache taken before the dummy passes would hand the allocator and the emitter
-            # an order without the dummies. Any topological order will do here -- each
-            # core's tasks are already one chain, so every such order agrees on them.
+            # Reachability (bingo_reach.ChainLabels), kept up to date as order edges are added. NOT
+            # bingo_stream_order(): that one is cached, and a cache taken before the dummy passes would
+            # hand the allocator and the emitter an order without the dummies. Any topological order will
+            # do here -- each core's tasks are already one chain, so every such order agrees on them.
             topo = list(nx.topological_sort(self))
             pos = {n: i for i, n in enumerate(topo)}
-            reach: dict = {}
-            for n in reversed(topo):
-                r = 0
-                for s in self.successors(n):
-                    r |= reach[s] | (1 << pos[s])
-                reach[n] = r
+            reach = ChainLabels(self, topo)
 
             def before(a, b):
                 """a is b, or a happens-before b."""
-                return a is b or bool((reach[a] >> pos[b]) & 1)
+                return a is b or reach.reaches(a, b)
 
             def add_order(a, b):
                 self.add_edge(a, b, order_only=True)
-                gained = reach[b] | (1 << pos[b])
-                for x in topo:
-                    if x is a or (reach[x] >> pos[a]) & 1:
-                        reach[x] |= gained
+                reach.add_edge(a, b)
 
             def chain_cover(es):
                 """The fewest chains (= tags) the cell needs as it stands."""
@@ -1181,6 +1173,23 @@ class BingoDFGTransformsMixin:
                         return False
             return True
 
+        def _order(gs, drains, sets):
+            """bool [len(gs), len(gs)]: entry (i, j) is "every drain of gs[i] is, or reaches, every set of
+            gs[j]", for each pair at once: _precedes with drains / sets the whole groups', _precedes_in with
+            one cell's."""
+            D = [(i, cv) for i, g in enumerate(gs) for cv in drains(g)]
+            S = [(j, su) for j, g in enumerate(gs) for su in sets(g)]
+            M = hb_reach.matrix([cv for _i, cv in D], [su for _j, su in S])
+            M |= np.array([pos[cv] for _i, cv in D])[:, None] == np.array([pos[su] for _j, su in S])[None, :]
+            rs = np.flatnonzero(np.diff([-1] + [i for i, _cv in D]))     # each group's first drain row
+            cs = np.flatnonzero(np.diff([-1] + [j for j, _su in S]))     # and first set column
+            return np.logical_and.reduceat(np.logical_and.reduceat(M, rs, axis=0), cs, axis=1)
+
+        def _unordered(gs, P):
+            """The pairs (gs[i], gs[j]), i < j, ordered neither way by P, in itertools.combinations order."""
+            a, b = np.nonzero(np.triu(~P & ~P.T, 1))
+            return [(gs[i], gs[j]) for i, j in zip(a.tolist(), b.tolist())]
+
         # FAST PATH -- taken when every group is one edge in one cell (no broadcast
         # dep-set, no multi-column check). Per cell the conflict graph is the
         # incomparability graph of a partial order, so by Dilworth the minimum
@@ -1192,18 +1201,17 @@ class BingoDFGTransformsMixin:
             for key, edges in cells.items():
                 edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
                 n = len(edges)
-                reach = [_descendants(cv) for (_su, cv) in edges]
+                # edge a -> b: a's consumer is, or reaches, b's producer
+                cvs, sus = [cv for _su, cv in edges], [su for su, _cv in edges]
+                M = hb_reach.matrix(cvs, sus)
+                M |= np.array([pos[x] for x in cvs])[:, None] == np.array([pos[x] for x in sus])[None, :]
+                np.fill_diagonal(M, False)
                 # Integer node labels and a sorted walk of the matching, for
                 # the same reproducibility reason as above.
                 B = nx.Graph()
                 for a in range(n):
                     B.add_node(a); B.add_node(n + a)
-                for a in range(n):
-                    for b in range(n):
-                        if a == b:
-                            continue
-                        if edges[b][0] is edges[a][1] or edges[b][0] in reach[a]:
-                            B.add_edge(a, n + b)
+                B.add_edges_from((a, n + b) for a in range(n) for b in np.flatnonzero(M[a]).tolist())
                 match = (nx.algorithms.bipartite.hopcroft_karp_matching(
                              B, top_nodes=list(range(n)))
                          if B.number_of_edges() else {})
@@ -1258,9 +1266,8 @@ class BingoDFGTransformsMixin:
         H = nx.Graph()
         H.add_nodes_from(range(n_groups))
         for cell in sorted(groups_in_cell):
-            for a, b in _it.combinations(sorted(groups_in_cell[cell]), 2):
-                if not _precedes(a, b) and not _precedes(b, a):
-                    H.add_edge(a, b)
+            gs = sorted(groups_in_cell[cell])
+            H.add_edges_from(_unordered(gs, _order(gs, drainers.__getitem__, setters.__getitem__)))
         colour = _dsatur(H)
         n_tags = (max(colour.values()) + 1) if colour else 0
         H_cell = None
@@ -1292,9 +1299,9 @@ class BingoDFGTransformsMixin:
             H_cell = nx.Graph()
             H_cell.add_nodes_from(range(n_groups))
             for cell in sorted(groups_in_cell):
-                for a, b in _it.combinations(sorted(groups_in_cell[cell]), 2):
-                    if not _precedes_in(a, b, cell) and not _precedes_in(b, a, cell):
-                        H_cell.add_edge(a, b)
+                gs = sorted(groups_in_cell[cell])
+                H_cell.add_edges_from(_unordered(gs, _order(gs, lambda g: drains_in[(g, cell)],
+                                                            lambda g: sets_in[(g, cell)])))
             colour_cell = _dsatur(H_cell)
             n_cell = (max(colour_cell.values()) + 1) if colour_cell else 0
             print(f"Tag allocation: ordering groups as a whole needs {n_tags} tags, "
