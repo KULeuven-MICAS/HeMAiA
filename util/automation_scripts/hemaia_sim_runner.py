@@ -1365,6 +1365,10 @@ class HeMAiASimRunner:
                 shutil.rmtree(task_dir)
             bin_dest = task_dir / "bin"
             bin_dest.mkdir(parents=True, exist_ok=True)
+            # HEMAIA_HOST_TRACE=1: the CVA6 instruction tracer (instr_tracer.sv) writes
+            # logs/trace_chip_XY_hart_00000.log only when logs/ exists where the simulator runs
+            if os.environ.get("HEMAIA_HOST_TRACE") == "1":
+                (bin_dest / "logs").mkdir(exist_ok=True)
             for subdir in app_subdirs:
                 _copy_path(sim_bin / subdir, bin_dest / subdir)
 
