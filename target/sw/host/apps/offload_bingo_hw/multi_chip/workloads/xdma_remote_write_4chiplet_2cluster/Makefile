@@ -7,7 +7,7 @@ WORKLOAD      = xdma_remote_write_4chiplet_2cluster
 DEV_APP       = snax-bingo-offload
 # WORKLOAD is this directory's path under workloads/, so the app and repo roots follow from it
 # rather than from a count of "../" levels, which is right for one depth only. The same lines
-# serve a nested workload (WORKLOAD = dsv2/two_chiplet/stage1_rmsnorm, three levels down).
+# serve a nested workload (WORKLOAD = fa/llama3_prefill/full, three levels down).
 APP_ROOT  := $(patsubst %/workloads/$(WORKLOAD)/,%,$(MK_DIR))
 ifeq ($(APP_ROOT),$(MK_DIR))
     $(error WORKLOAD=$(WORKLOAD) is not the path of $(MK_DIR) under workloads/)

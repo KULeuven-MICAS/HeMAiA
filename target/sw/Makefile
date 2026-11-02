@@ -377,7 +377,7 @@ SINGLE_HOST_APP = $(WORKLOAD)
 else ifeq ($(HOST_APP_TYPE),offload_legacy)
 SINGLE_HOST_APP = offload_legacy_$(CHIP_TYPE)
 else
-# a nested WORKLOAD (dsv2/two_chiplet/stage1_rmsnorm) names a flat app, as host/apps/common.mk does
+# a nested WORKLOAD (fa/llama3_prefill/full) names a flat app, as host/apps/common.mk does
 SINGLE_HOST_APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(subst /,_,$(WORKLOAD))
 endif
 

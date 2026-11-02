@@ -87,7 +87,7 @@ import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # The repo root is found by what it holds, not by counting "../" levels, which is right for
-# one depth only: a workload may sit deeper under workloads/ (dsv2/two_chiplet/<stage>).
+# one depth only: a workload may sit deeper under workloads/ (fa/llama3_prefill/<stage>).
 ROOT_DIR = current_dir
 while not os.path.isdir(os.path.join(ROOT_DIR, "target/sw/host/runtime/libbingo/mini_compiler")):
     if os.path.dirname(ROOT_DIR) == ROOT_DIR:
