@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""The shared driver of the ffn decode workloads (workloads/dsv2/layer0/decode/ffn, workloads/llama3/decode/ffn): one
+"""The shared driver of the ffn decode workloads (workloads/dsv2/layer0/decode/ffn_gemv, workloads/llama3/decode/ffn): one
 LLM's dense SwiGLU FFN for ONE token, on the prefill's mapping (ffn_prefill_mc.PBuild) run as one pass of one row tile,
 with INT4 weights, tensor-parallel over every cluster of the 16 + 4 chiplet platform. The platform, the weight rings, the
 anchors and the setup are chiplet_mc.py's; the data and the golden are ffn_data.py's (one token).
