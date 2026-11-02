@@ -5,8 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """What the multi-chiplet LLM workload builds (workloads/ffn, moe, fa) share on the 16 + 4 chiplet
 platform: the mesh, the address of a local buffer on another chip, the fold order over the compute
-chips, and FabricBase, the topology and node helpers of ChipletBuild (ffn/common/chiplet_mc.py) and of
-the decode FFN's FBuild (ffn/common/ffn_mc.py).
+chips, and FabricBase, the topology and node helpers of ChipletBuild (ffn/common/chiplet_mc.py).
 
 It imports the compiler's modules, so a caller puts mini_compiler on sys.path (and imports
 _bingo_paths) before importing it.
