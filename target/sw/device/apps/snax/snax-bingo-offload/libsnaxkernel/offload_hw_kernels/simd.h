@@ -309,9 +309,34 @@ _bingo_rms_t_seed(snax_simd_shape_t *in, snax_simd_shape_t *out, uint64_t in_add
 
 // Run the currently-armed chain over `in` -> `out`, full geometry program. Returns
 // BINGO_RET_SUCC, or BINGO_RET_FAIL on a drain timeout / degenerate geometry.
+static inline uint32_t simd_fire_drain(void);
+
 static inline uint32_t simd_run_shapes(const snax_simd_shape_t *in,
                                        const snax_simd_shape_t *out) {
     snax_simd_program_fast(in, out);
+    return simd_fire_drain();
+}
+
+// A SIMD task in two stages (the args' csr_mode; the host's simd cfg-ahead): CONFIGURE programs
+// every register and launches nothing, START launches what CONFIGURE left and drains. The
+// registers are sticky and the previous task on this core drained before it returned, so the
+// two stages need only to be adjacent on the core: the host orders CONFIGURE right before its
+// START and gives it no dependency, so it runs while START still waits for its operands.
+#define SIMD_STAGE_FULL 0u
+#define SIMD_STAGE_CONFIGURE 1u
+#define SIMD_STAGE_START 2u
+
+static inline uint32_t simd_run_staged(const snax_simd_shape_t *in,
+                                       const snax_simd_shape_t *out, uint32_t stage) {
+    if (stage == SIMD_STAGE_CONFIGURE) {
+        snax_simd_program_fast(in, out);
+        return BINGO_RET_SUCC;
+    }
+    return simd_run_shapes(in, out);
+}
+
+// Launch the armed task and drain it.
+static inline uint32_t simd_fire_drain(void) {
     snax_simd_fire();
     const uint32_t drain = snax_simd_drain();
     if (drain == SNAX_SIMD_DRAIN_TIMEOUT) {
@@ -376,10 +401,10 @@ static inline uint32_t simd_pass_reduce(void *src, void *dst, uint32_t rows,
 
 // out = func(a*x + b) over `flat` beats, optional fused Fp16ToInt8 (which HALVES the
 // beats the writer emits, so the caller's dst_beats must halve with it).
-static inline uint32_t simd_pass_map(void *src, void *dst, uint32_t flat,
-                                     uint32_t a_bits, uint32_t b_bits,
-                                     uint32_t func, uint32_t out_dt,
-                                     uint32_t inv_scale) {
+static inline uint32_t simd_pass_map_st(void *src, void *dst, uint32_t flat,
+                                        uint32_t a_bits, uint32_t b_bits,
+                                        uint32_t func, uint32_t out_dt,
+                                        uint32_t inv_scale, uint32_t stage) {
     snax_simd_shape_t in, out;
     snax_simd_shape_flat(&in, src, flat);
     snax_simd_shape_flat(&out, dst, (out_dt == SIMD_OUT_I8) ? (flat / 2u) : flat);
@@ -387,7 +412,15 @@ static inline uint32_t simd_pass_map(void *src, void *dst, uint32_t flat,
     if (out_dt == SIMD_OUT_I8)
         snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
                        SIMD_QUANT_TAIL(0));
-    return simd_run_shapes(&in, &out);
+    return simd_run_staged(&in, &out, stage);
+}
+
+static inline uint32_t simd_pass_map(void *src, void *dst, uint32_t flat,
+                                     uint32_t a_bits, uint32_t b_bits,
+                                     uint32_t func, uint32_t out_dt,
+                                     uint32_t inv_scale) {
+    return simd_pass_map_st(src, dst, flat, a_bits, b_bits, func, out_dt, inv_scale,
+                            SIMD_STAGE_FULL);
 }
 
 // Broadcast one beat per row to `beats` beats per row, with a fused StreamMap
@@ -454,11 +487,11 @@ static inline uint32_t simd_pass_ew_sticky(void *seed_then_data, void *dst,
 //
 // `ext` picks WHICH elementwise instance: EW1 for a combine that follows the map (the
 // classic case), EW0 for one that must precede it.
-static inline uint32_t simd_pass_ew2(void *src_a, void *src_b, void *dst,
-                                     uint32_t rows, uint32_t beats,
-                                     uint32_t src_row_stride, uint32_t ext,
-                                     uint32_t ext_csr, uint32_t op,
-                                     uint32_t out_dt, uint32_t inv_scale) {
+static inline uint32_t simd_pass_ew2_st(void *src_a, void *src_b, void *dst,
+                                        uint32_t rows, uint32_t beats,
+                                        uint32_t src_row_stride, uint32_t ext,
+                                        uint32_t ext_csr, uint32_t op,
+                                        uint32_t out_dt, uint32_t inv_scale, uint32_t stage) {
     snax_simd_shape_t in, out;
     snax_simd_shape_ew2(&in, src_a, src_b, 3, beats, SIMD_BEAT_BYTES, rows, src_row_stride);
     uint32_t flat = rows * beats;
@@ -467,7 +500,16 @@ static inline uint32_t simd_pass_ew2(void *src_a, void *src_b, void *dst,
     if (out_dt == SIMD_OUT_I8)
         snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
                        SIMD_QUANT_TAIL(0));
-    return simd_run_shapes(&in, &out);
+    return simd_run_staged(&in, &out, stage);
+}
+
+static inline uint32_t simd_pass_ew2(void *src_a, void *src_b, void *dst,
+                                     uint32_t rows, uint32_t beats,
+                                     uint32_t src_row_stride, uint32_t ext,
+                                     uint32_t ext_csr, uint32_t op,
+                                     uint32_t out_dt, uint32_t inv_scale) {
+    return simd_pass_ew2_st(src_a, src_b, dst, rows, beats, src_row_stride, ext, ext_csr, op,
+                            out_dt, inv_scale, SIMD_STAGE_FULL);
 }
 
 // SQUARE ONE BEAT PER ROW, on the PRE-map elementwise. Half of a reciprocal.
@@ -615,16 +657,25 @@ static inline uint32_t simd_pass_map_reduce(void *src, void *dst, uint32_t rows,
 // rather than the largest tile imaginable.
 #define BINGO_SIMD_SCRATCH_POOL 16384u
 
+// ONE POOL A CLUSTER. A kernel's static lives in the device binary's .bss, in the chip's L3, which
+// both clusters of the chip share; the pool is an address in one cluster's L1 heap, so a single
+// static would hand the other cluster an address of the first cluster's heap, which its own TCDM
+// accesses at the same offset -- over whatever its own heap holds there (the scheduler's task-id
+// lists, allocated last, when the two clusters' heaps differ in size). Each cluster keeps its own.
+#define BINGO_SIMD_POOL_SLOTS 8u
+#define BINGO_SIMD_POOL(pool) ((pool)[snrt_cluster_idx() % BINGO_SIMD_POOL_SLOTS])
+
 // `need` bytes of L1 scratch into `lo`, which the macro declares: the kernel's own pool (a
-// static of the kernel that expands it, allocated on first use) when it fits, else a
-// per-call malloc. `lo` is 0 on a failed allocation, and `from_pool` is 1 when `lo` is the
-// pool and must not be freed.
+// static of the kernel that expands it, one a cluster, allocated on first use) when it fits,
+// else a per-call malloc. `lo` is 0 on a failed allocation, and `from_pool` is 1 when `lo` is
+// the pool and must not be freed.
 #define BINGO_SIMD_SCRATCH(lo, from_pool, pool_bytes, need)                  \
-    static uint32_t s_pool = 0u;                                             \
+    static uint32_t s_pool[BINGO_SIMD_POOL_SLOTS];                           \
     uint32_t lo, from_pool = 0u;                                             \
     if ((need) <= (pool_bytes)) {                                            \
-        if (!s_pool) s_pool = snrt_l1_malloc(pool_bytes);                    \
-        lo = s_pool;                                                         \
+        if (!BINGO_SIMD_POOL(s_pool))                                        \
+            BINGO_SIMD_POOL(s_pool) = snrt_l1_malloc(pool_bytes);            \
+        lo = BINGO_SIMD_POOL(s_pool);                                        \
         from_pool = 1u;                                                      \
     } else {                                                                 \
         lo = snrt_l1_malloc(need);                                           \
@@ -699,6 +750,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fp16_to_int8(void *arg) {
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t *a = (uint32_t *)arg;
+    const uint32_t stage = a[7];               // csr_mode: SIMD_STAGE_*
+    if (stage == SIMD_STAGE_START) {
+        if (simd_fire_drain() != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+        BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fp16_to_int8_args_t), a[3]);
+    }
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t beats = a[4];
@@ -718,9 +774,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fp16_to_int8(void *arg) {
     if (inv_scale_lo || inv_scale_hi) inv_scale = *(volatile uint32_t *)inv_scale_lo;
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    uint32_t rc = simd_pass_map((void *)(uint32_t)src_addr, (void *)(uint32_t)dst_addr,
-                                rows * beats, SIMD_F32_ONE, 0u, SIMD_FUNC_LINEAR,
-                                SIMD_OUT_I8, inv_scale);
+    uint32_t rc = simd_pass_map_st((void *)(uint32_t)src_addr, (void *)(uint32_t)dst_addr,
+                                   rows * beats, SIMD_F32_ONE, 0u, SIMD_FUNC_LINEAR,
+                                   SIMD_OUT_I8, inv_scale, stage);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
     BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
@@ -746,6 +802,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_stream_elementwise(void *arg) 
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t *a = (uint32_t *)arg;
+    const uint32_t stage = a[9];               // csr_mode: SIMD_STAGE_*
+    if (stage == SIMD_STAGE_START) {
+        if (simd_fire_drain() != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+        BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_stream_elementwise_args_t),
+                          a[3]);
+    }
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t beats = a[4];
@@ -789,10 +851,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_stream_elementwise(void *arg) 
     if (src_row_stride == 0u) src_row_stride = beats * SIMD_BEAT_BYTES;
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    uint32_t rc = simd_pass_ew2(src_a, src_b, (void *)(uint32_t)dst_addr, rows, beats,
-                                src_row_stride, SIMD_EXT_STREAMELEMENTWISE_1,
-                                SIMD_EXT_STREAMELEMENTWISE_1_CSR, op, out_dtype,
-                                inv_scale);
+    uint32_t rc = simd_pass_ew2_st(src_a, src_b, (void *)(uint32_t)dst_addr, rows, beats,
+                                   src_row_stride, SIMD_EXT_STREAMELEMENTWISE_1,
+                                   SIMD_EXT_STREAMELEMENTWISE_1_CSR, op, out_dtype,
+                                   inv_scale, stage);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
     BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
@@ -1238,11 +1300,11 @@ static inline uint32_t _bingo_rmsnorm_scratch(const void *arg, uint32_t bytes,
         }
         return ha->scratch_addr_lo;
     }
-    static uint32_t s_pool = 0u;
+    static uint32_t s_pool[BINGO_SIMD_POOL_SLOTS];   // one a cluster (BINGO_SIMD_POOL)
     if (bytes <= BINGO_SIMD_NORM_POOL) {
-        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_NORM_POOL);
+        if (!BINGO_SIMD_POOL(s_pool)) BINGO_SIMD_POOL(s_pool) = snrt_l1_malloc(BINGO_SIMD_NORM_POOL);
         *from_pool = 1u;
-        return s_pool;
+        return BINGO_SIMD_POOL(s_pool);
     }
     *from_pool = 0u;
     return snrt_l1_malloc(bytes);
@@ -1598,9 +1660,9 @@ static inline uint32_t _bingo_rmsnorm_col_major(void *arg) {
         }
         ssq_lo = ca->scratch_addr_lo;
     } else {
-        static uint32_t s_ssq = 0u;
-        if (!s_ssq) s_ssq = snrt_l1_malloc(SIMD_BEAT_BYTES + 63u);
-        ssq_lo = s_ssq;
+        static uint32_t s_ssq[BINGO_SIMD_POOL_SLOTS];    // one a cluster (BINGO_SIMD_POOL)
+        if (!BINGO_SIMD_POOL(s_ssq)) BINGO_SIMD_POOL(s_ssq) = snrt_l1_malloc(SIMD_BEAT_BYTES + 63u);
+        ssq_lo = BINGO_SIMD_POOL(s_ssq);
     }
     if (!ssq_lo) {
         printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major) L1 scratch alloc failed!\r\n",
@@ -2418,6 +2480,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 // ==========================================================================
 #define SIMD_FA_P_INTERLEAVE  1u
 #define SIMD_FA_P_CORR_EXPORT 2u
+// NO_DRAIN: the softmax fires its tasks and returns; __snax_bingo_kernel_simd_fa_wait on the same arena retires them.
+// The SIMD core then sets up the next softmax while the block still runs this one (the block runs tasks in order, so a
+// later softmax of the same arena reads the state this one leaves). Every consumer of P8, l or m depends on the wait.
+#define SIMD_FA_P_NO_DRAIN 4u
 
 // Shapes are cached in the arena rather than rebuilt per call. Building twelve of them
 // is several hundred instructions, which against a ~2400-cycle tile is not noise; and
@@ -2471,6 +2537,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 
 typedef struct {
     uint32_t magic, bc, dhead;
+    uint32_t pending;   // SIMD_FA_P_NO_DRAIN: the SIMD's submitted count after this arena's last softmax fired
 } simd_fa_memo_t;
 
 // Total arena bytes for a (bc, dhead) tile. The host allocates exactly this.
@@ -2528,6 +2595,19 @@ static void simd_fa_layout(simd_fa_layout_t *L, uint32_t arena, uint32_t bc,
     L->corrO = (uint8_t *)t;  t += B;
     L->oacc  = (uint8_t *)t;  t += dhead * B;
     (void)t;
+}
+
+// One task's six per-task CSRs by value (snax_simd_program_1d without a shape): source and
+// destination base, bound and stride of loop 0.
+static inline __attribute__((always_inline)) void simd_fa_prog(uint32_t ib, uint32_t in0,
+                                                               uint32_t is0, uint32_t ob,
+                                                               uint32_t on0, uint32_t os0) {
+    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_LSB, ib);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 0, in0);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, is0);
+    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, ob);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 0, on0);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 0, os0);
 }
 
 // Build every task geometry. Called once per (arena, bc, dhead); the only things that
@@ -2686,7 +2766,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     }
     // A cluster without INTERLEAVE4 would accept the bit and emit the plain pack: a P in the
     // wrong layout, which nothing downstream can detect. Refuse instead.
-    if ((p_mode & ~(SIMD_FA_P_INTERLEAVE | SIMD_FA_P_CORR_EXPORT)) ||
+    if ((p_mode & ~(SIMD_FA_P_INTERLEAVE | SIMD_FA_P_CORR_EXPORT | SIMD_FA_P_NO_DRAIN)) ||
         ((p_mode & SIMD_FA_P_INTERLEAVE) && (!BINGO_SIMD_HAS_QUANT_ILV4 || (bc & 3u)))) {
         printf_safe("[Cluster %d Core %d]: Error! simd_fa_softmax p_mode=%d unsupported "
                     "(bc=%d must be a multiple of 4; quantiser INTERLEAVE4 built=%d)\r\n",
@@ -2708,106 +2788,39 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     }
 
     uint32_t arena = (uint32_t)arena_a;
-    snax_simd_shape_t *sh = (snax_simd_shape_t *)arena;
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
-    // Geometry is fixed for a whole FA run of one query tile, so build it once per arena.
-    // Re-pointing the two bases that do change is two stores.
-    //
-    // tile_idx 0 is the first invocation for a given arena -- the workload walks j (the KV
-    // tile) outermost -- so it rebuilds UNCONDITIONALLY unless a SHAPES_ONLY prologue has
-    // already primed this arena. The memo is therefore only ever TRUSTED after a write this
-    // run made itself, never required to be valid on a cold arena, and uninitialised L1
-    // cannot be mistaken for a built geometry.
-    //
-    // WHY A PROLOGUE EXISTS AT ALL. The build is a few hundred scalar stores into TCDM,
-    // and their cost is set by what else is using the TCDM ports: with the iDMA streaming a
-    // K/V tile through the same ports each store costs several times what it does on an
-    // idle cluster. It is neither icache nor the CSR writes, it is port contention, so the
-    // cure is to not do it on the critical path. A prologue node does the build before the
-    // load chain has spun up, and every real tile after it takes the memo path instead.
-    //
-    // THE COLD TEST MUST COME FIRST, AND || MUST SHORT-CIRCUIT IT.
-    //
-    // TCDM is `tc_sram` with SimInit = "none" (snitch_data_mem.sv passes no SimInit and
-    // the default is "none"), and +vcs+initreg is applied only to netlist builds, not to
-    // sim_rtl. A word this run has not written therefore reads back X. Comparing the memo
-    // of a COLD arena puts that X into a branch condition, the PC goes X with it, and the
-    // hart is gone: no fault, no exception, no timeout, just a core that never retires
-    // again.
-    //
-    // So the cold test has to be the LEFT operand, where C's || never evaluates the memo
-    // on an arena nobody has written. The boolean value of the condition is the same
-    // either way; only the evaluation order is. The memo is then read only when a write
-    // is guaranteed to have happened already: by an earlier tile (tile_idx > 0) or by a
-    // PROLOGUE ancestor (PRIMED).
-    //
-    // The reference has the same hazard and solves it the same way round: it clears its
-    // shape table up front (snax-flashattn-decode.c, snax_simd_shapes_clear) precisely
-    // because .l1 is NOLOAD and "a shape that is declared but never filled programs the
-    // AGU from whatever was in TCDM".
-    simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
-    const uint32_t shapes_ready = (geom_mode == SIMD_FA_GEOM_PRIMED ||
-                                   geom_mode == SIMD_FA_GEOM_CSR_PRIMED);
-    const uint32_t cold = (tile_idx == 0u && !shapes_ready);
-    if (cold || memo->magic != SIMD_FA_MEMO_MAGIC ||
-        memo->bc != bc || memo->dhead != dhead) {
+    // Every task is programmed by value: its six CSRs from the arena layout (simd_fa_layout) and
+    // this call's buffers, not from shapes stored in the arena -- a stored shape is six loads a
+    // task, each stalling the core on a TCDM busy with the engines' streams. The shapes are
+    // still built where a prologue asks for them, for the kernels that read them
+    // (simd_fa_softmax_n).
+    if (geom_mode == SIMD_FA_GEOM_PROLOGUE) {
+        simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
         simd_fa_build_shapes(arena, bc, dhead);
         memo->magic = SIMD_FA_MEMO_MAGIC;
         memo->bc    = bc;
         memo->dhead = dhead;
     }
-    // The PROLOGUE does NOT return here, because the rest of the config is where the cost
-    // is: a handful of instruction-cache line refills in this function's base-re-pointing
-    // block and snax_simd_program_fast(). A refill is cheap on an idle fabric and expensive
-    // while the iDMA streams a tile through the same path, which is exactly when the first
-    // real tile runs. Doing them in the prologue moves the refills into a quiet window and
-    // every later tile hits in the icache.
-    //
-    // Nothing else changes: no beat is moved, no accelerator task is queued, and the running
-    // state is left alone -- seed_state is 0 for a prologue node, so init_state below does
-    // not run and the xDMA memsets remain the only writer of m and l.
     if (tile_idx == 0u && seed_state) simd_fa_init_state(arena, bc, dhead);
-    sh[FA_SH_TAP_IN].base = (void *)(uint32_t)s16_src;
-
-    // The caller hands us the GEMM's D buffer, which the workload allocated with ONE BEAT
-    // of headroom in front of it. That beat is the latch: m_new goes there, so the fused exp
-    // pass can read [m_new][the whole tile] as one contiguous stream straight out of the
-    // GEMM's output -- no copy. mnew's address comes from a shape that already points at it
-    // rather than from re-walking the layout.
-    {
-        const uint32_t latch = (uint32_t)s16_src - SIMD_BEAT_BYTES;
-        const uint32_t mnew = (uint32_t)sh[FA_SH_MNEW_OUT].base;
-        sh[FA_SH_P_IN].base = (void *)latch;
-        const uint32_t rsum_p8 = (uint32_t)p8_dst + (bc / 2u) * p8_pitch;
-        sh[FA_SH_P_OUT].base = (void *)(uint32_t)p8_dst;
-        // Set on every call, like the bases: the memoised shape must not carry another
-        // caller's pitch.
-        sh[FA_SH_P_OUT].stride[0] = p8_pitch;
-        sh[FA_SH_LNEW_IN].stride[0] = rsum_p8 - (uint32_t)sh[FA_SH_LNEW_IN].base;
-        sh[FA_SH_MNEW_OUT].stride[0] = latch - mnew;  // arena is allocated first: positive
-        // corr's second destination: the arena's corrO latch (for task 5), or under
-        // CORR_EXPORT the beat after this tile's row sum, where PV picks it up. Set on EVERY
-        // call, so the memoised shape never carries the other mode's stride.
-        const uint32_t corrL = (uint32_t)sh[FA_SH_CORR_OUT].base;
-        const uint32_t corr2 = (p_mode & SIMD_FA_P_CORR_EXPORT)
-                                   ? rsum_p8 + p8_pitch
-                                   : (uint32_t)sh[FA_SH_ORS_IN].base;   // = corrO
-        sh[FA_SH_CORR_OUT].stride[0] = corr2 - corrL;
-    }
-
-    // One full program establishes every CSR no task below varies -- address high word,
-    // spatial stride, channel and byte masks, temporal dims 1 and 2. From here each task
-    // writes only its six 1-D CSRs. It is done per invocation, not once ever, because
-    // another node may have used the block since.
-    if (geom_mode != SIMD_FA_GEOM_CSR_PRIMED)
-        snax_simd_program_fast(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
+    simd_fa_layout_t L;
+    simd_fa_layout(&L, arena, bc, dhead);
+    const uint32_t B = SIMD_BEAT_BYTES;
+    const uint32_t s16 = (uint32_t)s16_src, p8 = (uint32_t)p8_dst;
+    const uint32_t mnew = (uint32_t)L.mnew, rmax = (uint32_t)L.rmax, mrun = (uint32_t)L.mrun;
+    const uint32_t corrL = (uint32_t)L.corrL, lrun = (uint32_t)L.lrun, lnew = (uint32_t)L.lnew;
+    const uint32_t lsc = (uint32_t)L.lsc;
+    // m_new's second copy goes to the latch beat in front of the score tile; the row sum is
+    // the p8 buffer's trailing beat; corr's second copy goes in front of O or, exported, after
+    // the row sum
+    const uint32_t latch = s16 - B;
+    const uint32_t rsum_p8 = p8 + (bc / 2u) * p8_pitch;
+    const uint32_t corr2 = (p_mode & SIMD_FA_P_CORR_EXPORT) ? rsum_p8 + p8_pitch
+                                                            : (uint32_t)L.corrO;
+    // the full program, with task 1's geometry (the shared CSRs a CSR_PRIMED call trusts)
+    if (geom_mode != SIMD_FA_GEOM_CSR_PRIMED) snax_simd_program_flat(s16, bc, rmax, 1u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
 
-    // A PROLOGUE stops HERE -- after the whole config, before the first task is fired.
-    // The CSRs it has just written are shared state that the next invocation rewrites
-    // unconditionally (snax_simd_program_fast is "done per invocation, not once ever"),
-    // so leaving them programmed is not a handover, only a warm cache.
     if (geom_mode == SIMD_FA_GEOM_PROLOGUE) return BINGO_RET_SUCC;
 
     // ---- the online softmax, in full ------------------------------------------------
@@ -2820,7 +2833,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // 1  rowmax over the tile the GEMM has already written as fp16.
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, bc,
                    SIMD_RED_MAX | SIMD_RED_LANEWISE);
-    snax_simd_program_1d(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
+    simd_fa_prog(s16, bc, B, rmax, 1u, B);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
@@ -2828,7 +2841,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // 2  m_new = max(m_old, rowmax), into mnew and into the latch: the pair read twice.
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
                    SIMD_RED_MAX | SIMD_RED_LANEWISE);
-    snax_simd_program_1d(&sh[FA_SH_MNEW_IN], &sh[FA_SH_MNEW_OUT]);
+    simd_fa_prog(rmax, 2u, B, mnew, 2u, latch - mnew);
     simd_fa_rows(2u);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
@@ -2844,7 +2857,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 0, score_scale);
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 1, 0);
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 2, SIMD_FUNC_EXP);
-    snax_simd_program_1d(&sh[FA_SH_CORR_IN], &sh[FA_SH_CORR_OUT]);
+    simd_fa_prog(mnew, 2u, mrun - mnew, corrL, 2u, corr2 - corrL);
     snax_simd_fire();
     // Every task after this one reads one row: dimension 1 back to the neutral loop, which
     // is also what the next invocation's CSR_PRIMED mode expects to find.
@@ -2897,7 +2910,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
         return BINGO_RET_FAIL;
     }
 #endif
-    snax_simd_program_1d(&sh[FA_SH_P_IN], &sh[FA_SH_P_OUT]);
+    simd_fa_prog(latch, 1u + bc, B, p8, bc / 2u + 1u, p8_pitch);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
@@ -2912,7 +2925,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     if (!(p_mode & SIMD_FA_P_CORR_EXPORT)) {
         snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
                        SIMD_EW_MUL | SIMD_EW_STICKY_B);
-        snax_simd_program_1d(&sh[FA_SH_ORS_IN], &sh[FA_SH_ORS_OUT]);
+        simd_fa_prog((uint32_t)L.corrO, 1u + dhead, B, (uint32_t)L.oacc, dhead, B);
         snax_simd_fire();
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
@@ -2921,7 +2934,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // 6  corr * l_old
     snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
                    SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_program_1d(&sh[FA_SH_LSC_IN], &sh[FA_SH_LSC_OUT]);
+    simd_fa_prog(corrL, 2u, B, lsc, 1u, B);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
@@ -2929,7 +2942,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // 7  l_new = corr*l_old + rowsum
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
                    SIMD_RED_ADD | SIMD_RED_LANEWISE);
-    snax_simd_program_1d(&sh[FA_SH_LNEW_IN], &sh[FA_SH_LNEW_OUT]);
+    simd_fa_prog(lsc, 2u, rsum_p8 - lsc, lnew, 1u, B);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
@@ -2937,13 +2950,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // 8  commit the running state for the next KV tile.
     snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, SIMD_F32_ONE, 0,
                    SIMD_FUNC_LINEAR);
-    snax_simd_program_1d(&sh[FA_SH_CMT_IN], &sh[FA_SH_CMT_OUT]);
+    simd_fa_prog(mnew, 2u, lnew - mnew, mrun, 2u, lrun - mrun);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
     // ONE drain for all of them. Bounded, so a wedged engine reports itself instead of
     // hanging the simulation, and the node fails instead of letting the next GEMM read a
     // half-written P8.
+    if (p_mode & SIMD_FA_P_NO_DRAIN) {
+        ((volatile simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF))->pending = snax_simd_submitted();
+        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+        BINGO_RETURN_SUCC(sp, (uint32_t)p8_dst);
+    }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_START);
     uint32_t rc = snax_simd_wait_all_bounded();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_END);
@@ -2965,4 +2983,231 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
 
     BINGO_RETURN_SUCC(sp, (uint32_t)p8_dst);
 #endif
+}
+
+// ==========================================================================
+// simd_fa_softmax_n: simd_fa_softmax for n (1..4) query tiles of ONE key tile in one task. Each
+// tile has its own score buffer, P buffer and arena, and runs exactly the tasks of
+// simd_fa_softmax (geometry SELF: tile 0 builds each arena's shapes); the shared CSRs are
+// programmed once, for the first tile, since every tile has the same geometry; one drain retires
+// them all. One dispatch, one argument parse and one drain for n tiles instead of n.
+// ==========================================================================
+#if BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMREDUCE && \
+    BINGO_HAS_STREAMELEMENTWISE && BINGO_HAS_FP16TOINT8
+// One query tile's tasks, queued, not drained: simd_fa_softmax from its geometry to task 8.
+static inline void simd_fa_softmax_tile(uint32_t s16_src, uint32_t p8_dst, uint32_t arena,
+                                        uint32_t bc, uint32_t dhead, uint32_t tile_idx,
+                                        uint32_t seed_state, uint32_t program_shared,
+                                        uint32_t score_scale, uint32_t p_mode,
+                                        uint32_t p8_pitch) {
+    snax_simd_shape_t *sh = (snax_simd_shape_t *)arena;
+    simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
+    // geometry SELF: tile 0 builds unconditionally (the cold test first, see simd_fa_softmax)
+    if (tile_idx == 0u || memo->magic != SIMD_FA_MEMO_MAGIC || memo->bc != bc ||
+        memo->dhead != dhead) {
+        simd_fa_build_shapes(arena, bc, dhead);
+        memo->magic = SIMD_FA_MEMO_MAGIC;
+        memo->bc = bc;
+        memo->dhead = dhead;
+    }
+    if (tile_idx == 0u && seed_state) simd_fa_init_state(arena, bc, dhead);
+    sh[FA_SH_TAP_IN].base = (void *)s16_src;
+    {
+        const uint32_t latch = s16_src - SIMD_BEAT_BYTES;
+        const uint32_t mnew = (uint32_t)sh[FA_SH_MNEW_OUT].base;
+        sh[FA_SH_P_IN].base = (void *)latch;
+        const uint32_t rsum_p8 = p8_dst + (bc / 2u) * p8_pitch;
+        sh[FA_SH_P_OUT].base = (void *)p8_dst;
+        sh[FA_SH_P_OUT].stride[0] = p8_pitch;
+        sh[FA_SH_LNEW_IN].stride[0] = rsum_p8 - (uint32_t)sh[FA_SH_LNEW_IN].base;
+        sh[FA_SH_MNEW_OUT].stride[0] = latch - mnew;
+        const uint32_t corrL = (uint32_t)sh[FA_SH_CORR_OUT].base;
+        const uint32_t corr2 = (p_mode & SIMD_FA_P_CORR_EXPORT)
+                                   ? rsum_p8 + p8_pitch
+                                   : (uint32_t)sh[FA_SH_ORS_IN].base;
+        sh[FA_SH_CORR_OUT].stride[0] = corr2 - corrL;
+    }
+    if (program_shared) snax_simd_program_fast(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
+    // 1  rowmax
+    snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, bc,
+                   SIMD_RED_MAX | SIMD_RED_LANEWISE);
+    snax_simd_program_1d(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
+    snax_simd_fire();
+    // 2  m_new = max(m_old, rowmax), into mnew and the latch
+    snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
+                   SIMD_RED_MAX | SIMD_RED_LANEWISE);
+    snax_simd_program_1d(&sh[FA_SH_MNEW_IN], &sh[FA_SH_MNEW_OUT]);
+    simd_fa_rows(2u);
+    snax_simd_fire();
+    // 3  corr = exp(a * (m_old - m_new)), to both places
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
+                            (1u << SIMD_EXT_STREAMELEMENTWISE_0) | (1u << SIMD_EXT_STREAMMAP));
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 2);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1, SIMD_EW_SUB);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 0, score_scale);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 1, 0);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 2, SIMD_FUNC_EXP);
+    snax_simd_program_1d(&sh[FA_SH_CORR_IN], &sh[FA_SH_CORR_OUT]);
+    snax_simd_fire();
+    simd_fa_rows(1u);
+    // 4  P = exp(a * (S - m_new)) and its row sum, one pass
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
+                            (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                (1u << SIMD_EXT_STREAMMAP) |
+                                (1u << SIMD_EXT_STREAMREDUCE) |
+                                (1u << SIMD_EXT_FP16TOINT8));
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 1);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1,
+                            SIMD_EW_SUB | SIMD_EW_STICKY_B);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 0, bc);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 1,
+                            SIMD_RED_ADD | SIMD_RED_LANEWISE | SIMD_RED_TAP);
+    snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 0, BINGO_SIMD_I8_SCALE_UNIT);
+    snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 1,
+                            SIMD_QUANT_TAIL(bc) |
+                                ((p_mode & SIMD_FA_P_INTERLEAVE) ? SIMD_QUANT_ILV4 : 0u));
+#if BINGO_FA_DRAIN_BEFORE_FUSED
+    (void)snax_simd_wait_all_bounded();
+#endif
+    snax_simd_program_1d(&sh[FA_SH_P_IN], &sh[FA_SH_P_OUT]);
+    snax_simd_fire();
+    // 5  O *= corr (skipped under CORR_EXPORT: PV scales O on its C read path)
+    if (!(p_mode & SIMD_FA_P_CORR_EXPORT)) {
+        snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
+                       SIMD_EW_MUL | SIMD_EW_STICKY_B);
+        snax_simd_program_1d(&sh[FA_SH_ORS_IN], &sh[FA_SH_ORS_OUT]);
+        snax_simd_fire();
+    }
+    // 6  corr * l_old
+    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
+                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_program_1d(&sh[FA_SH_LSC_IN], &sh[FA_SH_LSC_OUT]);
+    snax_simd_fire();
+    // 7  l_new = corr * l_old + rowsum
+    snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
+                   SIMD_RED_ADD | SIMD_RED_LANEWISE);
+    snax_simd_program_1d(&sh[FA_SH_LNEW_IN], &sh[FA_SH_LNEW_OUT]);
+    snax_simd_fire();
+    // 8  commit m and l for the next key tile
+    snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, SIMD_F32_ONE, 0,
+                   SIMD_FUNC_LINEAR);
+    snax_simd_program_1d(&sh[FA_SH_CMT_IN], &sh[FA_SH_CMT_OUT]);
+    snax_simd_fire();
+}
+#endif
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax_n(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_fa_softmax_n_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_fa_softmax_n", "SIMD");
+#if !(BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMREDUCE && \
+      BINGO_HAS_STREAMELEMENTWISE && BINGO_HAS_FP16TOINT8)
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_fa_softmax_n",
+        "StreamElementwise_0+StreamMap+StreamReduce+StreamElementwise_1+Fp16ToInt8");
+#else
+    const __snax_bingo_kernel_simd_fa_softmax_n_args_t *a =
+        (const __snax_bingo_kernel_simd_fa_softmax_n_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fa_softmax_n_args_t);
+    const uint32_t n = a->n, bc = a->bc, dhead = a->dhead, p_mode = a->p_mode;
+    const uint32_t p8_pitch = a->p8_pitch ? a->p8_pitch : SIMD_BEAT_BYTES;
+    const uint32_t *s16 = &a->s16_0, *p8 = &a->p8_0, *ar = &a->arena_0;
+    if (n == 0u || n > 4u || bc == 0u || dhead == 0u || (bc & 1u) ||
+        (p_mode & ~(SIMD_FA_P_INTERLEAVE | SIMD_FA_P_CORR_EXPORT)) ||
+        ((p_mode & SIMD_FA_P_INTERLEAVE) && (!BINGO_SIMD_HAS_QUANT_ILV4 || (bc & 3u))) ||
+        p8_pitch < SIMD_BEAT_BYTES || (p8_pitch & 7u) ||
+        ((p_mode & SIMD_FA_P_INTERLEAVE) && SIMD_BEAT_BYTES < 64u &&
+         p8_pitch != SIMD_BEAT_BYTES)) {
+        printf_safe("[Cluster %d Core %d]: Error! simd_fa_softmax_n n=%d bc=%d dhead=%d "
+                    "p_mode=%d p8_pitch=%d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    n, bc, dhead, p_mode, p8_pitch);
+        return BINGO_RET_FAIL;
+    }
+    for (uint32_t q = 0u; q < n; q++) {
+        BINGO_SIMD_REQUIRE_LOCAL(s16[q], "simd_fa_softmax_n", "s16_src");
+        BINGO_SIMD_REQUIRE_LOCAL(p8[q], "simd_fa_softmax_n", "p8_dst");
+        BINGO_SIMD_REQUIRE_LOCAL(ar[q], "simd_fa_softmax_n", "arena");
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    for (uint32_t q = 0u; q < n; q++)
+        simd_fa_softmax_tile(s16[q], p8[q], ar[q], bc, dhead, a->tile_idx, a->seed_state,
+                             q == 0u, a->score_scale, p_mode, p8_pitch);
+    uint32_t rc = snax_simd_wait_all_bounded();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    if (rc) {
+        printf_safe("[Cluster %d Core %d]: simd_fa_softmax_n drain timeout tile %d "
+                    "(submitted %d finished %d status %08x)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), a->tile_idx, snax_simd_submitted(),
+                    snax_simd_finished(), snax_read_simd_cfg_reg(SIMD_STATUS));
+        return BINGO_RET_FAIL;
+    }
+    if (snax_simd_bad_config()) {
+        printf_safe("[Cluster %d Core %d]: simd_fa_softmax_n: the block REFUSED a task as "
+                    "degenerate (bad-config sticky).\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_RETURN_SUCC(sp, p8[n - 1u]);
+#endif
+}
+
+// A softmax arena's geometry -- simd_fa_build_shapes and its memo -- on whichever core runs
+// this: the scalar stores an arena's first simd_fa_softmax would otherwise make on the SIMD
+// core, at the head of its sweep. It writes TCDM only (no SIMD register), so an idle core can
+// take it; the arena's softmaxes then run GEOM_PRIMED and find the memo valid. bc and dhead are
+// the softmaxes' own. The fence orders the stores before the task reports done.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_fa_build_shapes(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_fa_build_shapes_args_t);
+#if !(BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMREDUCE && \
+      BINGO_HAS_STREAMELEMENTWISE && BINGO_HAS_FP16TOINT8)
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "fa_build_shapes",
+        "StreamElementwise_0+StreamMap+StreamReduce+StreamElementwise_1+Fp16ToInt8");
+#else
+    const __snax_bingo_kernel_fa_build_shapes_args_t *a =
+        (const __snax_bingo_kernel_fa_build_shapes_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_fa_build_shapes_args_t);
+    const uint32_t arena = a->arena, bc = a->bc, dhead = a->dhead;
+    if (bc == 0u || dhead == 0u || (bc & 1u)) {
+        printf_safe("[Cluster %d Core %d]: Error! fa_build_shapes bad geometry bc=%d dhead=%d\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), bc, dhead);
+        return BINGO_RET_FAIL;
+    }
+    BINGO_SIMD_REQUIRE_LOCAL(arena, "fa_build_shapes", "arena");
+    simd_fa_build_shapes(arena, bc, dhead);
+    simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
+    memo->magic = SIMD_FA_MEMO_MAGIC;
+    memo->bc    = bc;
+    memo->dhead = dhead;
+    __asm__ volatile("fence" ::: "memory");
+    BINGO_RETURN_SUCC(sp, arena);
+#endif
+}
+
+// The other half of a SIMD_FA_P_NO_DRAIN softmax: wait until the SIMD has retired every task that softmax fired (the
+// submitted count it left in the arena's memo), then check the block's bad-config bit. Runs on the SIMD core, after
+// the softmax in its program; P8, l and m are there when it returns.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_wait(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_fa_wait_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_fa_wait", "SIMD");
+    const __snax_bingo_kernel_simd_fa_wait_args_t *a = (const __snax_bingo_kernel_simd_fa_wait_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fa_wait_args_t);
+    const uint32_t want = ((const volatile simd_fa_memo_t *)(a->arena + SIMD_FA_MEMO_OFF))->pending;
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_START);
+    uint32_t spins = 0;
+    while (snax_simd_finished() < want) {
+        if (++spins > SNAX_SIMD_DRAIN_SPINS) {
+            printf_safe("[Cluster %d Core %d]: simd_fa_wait timeout (want %d finished %d status %08x)\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx(), want, snax_simd_finished(),
+                        snax_read_simd_cfg_reg(SIMD_STATUS));
+            return BINGO_RET_FAIL;
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_END);
+    if (snax_simd_bad_config()) {
+        printf_safe("[Cluster %d Core %d]: simd_fa_wait: the block REFUSED a task as degenerate (bad-config "
+                    "sticky)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_RETURN_SUCC(sp, a->arena);
 }

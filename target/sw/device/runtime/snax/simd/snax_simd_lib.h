@@ -540,14 +540,21 @@ static inline __attribute__((always_inline)) void snax_simd_program_flat_next(
 // spatial stride, channel/byte masks and temporal dims 1+ are left exactly as an earlier
 // snax_simd_program_fast() set them -- so the caller MUST have run one, and every shape
 // since must have kept bound[1] == 1. 6 CSR writes instead of 21.
-static inline void snax_simd_program_1d(const snax_simd_shape_t *in,
-                                        const snax_simd_shape_t *out) {
-    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_LSB, (uint32_t)(uintptr_t)in->base);
-    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 0, in->bound[0]);
-    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, in->stride[0]);
-    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, (uint32_t)(uintptr_t)out->base);
-    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 0, out->bound[0]);
-    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 0, out->stride[0]);
+//
+// The six loads are all issued before the first write (the empty asm takes every value, and the
+// CSR writes are ordered after it): one after another they pipeline in the LSU, while a load
+// written straight to a CSR stalls the core for its whole TCDM latency, six times a task.
+static inline __attribute__((always_inline)) void snax_simd_program_1d(
+    const snax_simd_shape_t *in, const snax_simd_shape_t *out) {
+    const uint32_t ib = (uint32_t)(uintptr_t)in->base, in0 = in->bound[0], is0 = in->stride[0];
+    const uint32_t ob = (uint32_t)(uintptr_t)out->base, on0 = out->bound[0], os0 = out->stride[0];
+    __asm__ volatile("" ::"r"(ib), "r"(in0), "r"(is0), "r"(ob), "r"(on0), "r"(os0));
+    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_LSB, ib);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 0, in0);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, is0);
+    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, ob);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 0, on0);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 0, os0);
 }
 
 // ============================================================== launch and wait

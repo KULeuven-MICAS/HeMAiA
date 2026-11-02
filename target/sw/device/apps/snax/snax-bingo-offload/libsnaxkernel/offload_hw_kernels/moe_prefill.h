@@ -375,6 +375,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_gather_rows(void *arg) {
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_gather_rows_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    bingo_dma_drain();
     for (uint32_t i = 0; i < a->n; i++) {
         snrt_dma_start_1d_wideptr(dst + (uint64_t)i * a->dst_pitch,
                                   src + (uint64_t)ids[i] * a->row_bytes, a->row_bytes);

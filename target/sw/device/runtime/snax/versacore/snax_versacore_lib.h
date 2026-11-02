@@ -54,7 +54,10 @@ uint32_t gen_subtraction_config(int8_t subtraction_a, int8_t subtraction_b) {
     return (uint32_t)(((uint8_t)subtraction_b << 8) | (uint8_t)subtraction_a);
 }
 
-void set_versacore_streamer_csr(
+// Forced inline: its one BINGO caller (gemm_fa.h) passes compile-time sized arrays, which then stay in
+// registers and become immediate writes, where a call builds them on the stack, passes them by pointer and
+// reads every word back.
+static inline __attribute__((always_inline)) void set_versacore_streamer_csr(
     uint32_t A_addr, uint32_t* Aslstride, uint32_t* Atlbound,
     uint32_t* Atlstride, uint32_t set_addr_remap_index_A, uint32_t transpose_A,
     uint32_t* channel_en_A,

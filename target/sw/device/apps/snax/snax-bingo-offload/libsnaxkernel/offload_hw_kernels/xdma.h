@@ -321,7 +321,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_multicast(void *arg)
 // extensions off, configure, start, wait. It returns BINGO_RET_FAIL from the enclosing
 // kernel when the library refuses the descriptor (BINGO_XDMA_TRY, which needs the kernel
 // name as a literal, so this is a macro).
-#define BINGO_XDMA_ND_RUN(kname, src, dst, sss, ssd, dims, ts_src, tb_src, ts_dst, tb_dst)   \
+// The configuration half of BINGO_XDMA_ND_RUN: every register, nothing started.
+#define BINGO_XDMA_ND_CFG(kname, src, dst, sss, ssd, dims, ts_src, tb_src, ts_dst, tb_dst)   \
     do {                                                                                     \
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);                                      \
         xdma_disable_all_extensions();                                                       \
@@ -330,6 +331,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_multicast(void *arg)
                                                 (dims), (ts_dst), (tb_dst),                  \
                                                 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), kname); \
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);                                        \
+    } while (0)
+
+#define BINGO_XDMA_ND_RUN(kname, src, dst, sss, ssd, dims, ts_src, tb_src, ts_dst, tb_dst)   \
+    do {                                                                                     \
+        BINGO_XDMA_ND_CFG(kname, src, dst, sss, ssd, dims, ts_src, tb_src, ts_dst, tb_dst);  \
                                                                                              \
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);                                      \
         xdma_task_t _nd_task = xdma_start();                                                 \
@@ -378,11 +384,23 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
     BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_6d", "xDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t *a = (uint32_t *)arg;
+    // num_temporal_dims bits 9:8: the stage of a task split in two (the host's xdma cfg-ahead):
+    // 1 CONFIGURE writes every register and starts nothing, 2 START starts what CONFIGURE left
+    // and waits. The registers hold until the start, and the host orders CONFIGURE right
+    // before its START with no dependency, so it runs while START still waits for its operands.
+    const uint32_t stage = (a[6] >> 8) & 3u;
+    if (stage == 2u) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        xdma_task_t _task = xdma_start();
+        xdma_wait_task(_task);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_6d_args_t), a[3]);
+    }
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t spatial_stride_src = a[4];
     uint32_t spatial_stride_dst = a[5];
-    uint32_t num_dims = a[6];
+    uint32_t num_dims = a[6] & 0xFFu;
     uint32_t *t_strides_src = &a[7];
     uint32_t *t_bounds_src  = &a[12];
     uint32_t *t_strides_dst = &a[17];
@@ -390,6 +408,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_6d_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+    if (stage == 1u) {
+        BINGO_XDMA_ND_CFG("xdma_6d", src_addr, dst_addr, spatial_stride_src, spatial_stride_dst,
+                          num_dims, t_strides_src, t_bounds_src, t_strides_dst, t_bounds_dst);
+        BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
+    }
     BINGO_XDMA_ND_RUN("xdma_6d", src_addr, dst_addr, spatial_stride_src, spatial_stride_dst,
                       num_dims, t_strides_src, t_bounds_src, t_strides_dst, t_bounds_dst);
     BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);

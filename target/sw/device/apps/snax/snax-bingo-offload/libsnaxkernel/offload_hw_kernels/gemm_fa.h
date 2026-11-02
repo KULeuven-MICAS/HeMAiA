@@ -108,10 +108,25 @@
 //               tile writes INT32 and a separate pass would have to narrow 64 KiB of O
 //               (d = 512, Br = 32) before anything could normalise it. The score matmul's
 //               FP16 path is the same D walk and the same converter; only C differs: QK
-//               masks it, this reads it.
+//               masks it unless it is given a bias, this reads it.
 #define GEMM_FA_B_KMAJOR   1u
 #define GEMM_FA_C_COLSCALE 2u
 #define GEMM_FA_D_FP16     4u
+// REUSE (start kernels only, QK or PV): the cluster's previous VersaCore dispatch was this same
+// kernel with the same M, K, N, flags, d_shift and b_pitch, and a C of the same kind (NULL or
+// not). The streamer and VersaCore CSRs are sticky, so every one of them already holds this
+// dispatch's value except the four operand addresses, and the column factors a PV scales C by.
+// Only the host can assert it -- it is the one that knows what else the GEMM core ran
+// (passes/bingo_cfg_reuse.py).
+#define GEMM_FA_REUSE      8u
+// CONFIGURE / START (start kernels only, QK or PV): one dispatch as two tasks of the GEMM core's
+// program. CONFIGURE writes the configuration (REUSE's addresses, or all of it) and starts
+// nothing; START, the next task of the program, arms PV's column factors (data: the softmax
+// writes them) and starts. A CSR manager takes plain writes at any time and only the start
+// write waits for room in its queue, so the configure task can run while the array still runs
+// earlier dispatches and before this one's operands are ready (blocks/gemm_async.py cfg_ahead).
+#define GEMM_FA_CONFIGURE  16u
+#define GEMM_FA_START      32u
 
 // The scaler's window: one enable word, then N (its csr 0), then 32 FP16 factors packed two
 // per CSR, meshCol per column block -- byte for byte the softmax's corr beat(s), so they are
@@ -143,13 +158,49 @@
 // three orders of magnitude above that only fires when the engine is genuinely wedged.
 #define BINGO_GEMM_FA_SPIN_LIMIT 200000u
 
+#if BINGO_GEMM_FA_HAS_COLSCALE
+// Arm the C read path's column scaler for the next START: N column blocks and their FP16
+// factors at corr_addr, two a word. Staged like every other streamer CSR and latched at START,
+// so it applies to that dispatch only once the caller clears the enable again after START. N is
+// the output's column-block count: the scaler walks C in the same (m, n, chunk) order as the
+// C descriptor.
+static inline __attribute__((always_inline)) void __bingo_gemm_fa_arm_colscale(
+    uint32_t corr_addr, uint32_t N) {
+    const volatile uint32_t *f = (const volatile uint32_t *)(uintptr_t)corr_addr;
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 1, N);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 2, f[0]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 3, f[1]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 4, f[2]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 5, f[3]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 6, f[4]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 7, f[5]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 8, f[6]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 9, f[7]);
+    // The second column block's factors only when there is one: with N = 1 the corr
+    // beat is meshCol FP16 = 8 words, and the words after it are not corr.
+    if (N > 1u) {
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 10, f[8]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 11, f[9]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 12, f[10]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 13, f[11]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 14, f[12]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 15, f[13]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 16, f[14]);
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 17, f[15]);
+    }
+    csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 1u);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // One dispatch.
 //
 //   emit_fp16 = 1   S^T = K.Q^T. The result is consumed as FP16 by the SIMD block, so
 //                   the converter is armed and the tile reaches TCDM in HALF the beats an
-//                   INT32 tile would need. C is a zero bias. d_shift is the converter's
-//                   power-of-two scale: the tile is RNE(S * 2^-d_shift).
+//                   INT32 tile would need. C is a zero bias, or with a C_addr an INT32 bias
+//                   added before the converter (a causal prefill's mask: 0, or a large
+//                   negative where the key comes after the query). d_shift is the converter's
+//                   power-of-two scale: the tile is RNE((S + C) * 2^-d_shift).
 //   emit_fp16 = 0   O^T += V^T.P^T. The result accumulates IN PLACE: C and D are the same
 //                   buffer, so the matmul's own C input carries the running O across KV
 //                   tiles and the accumulation costs nothing extra. INT32, converter off.
@@ -175,6 +226,13 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
                     snrt_cluster_idx(), snrt_cluster_core_idx(), M, K, N);
         return BINGO_RET_FAIL;
     }
+    // A REUSE dispatch never comes here: the start kernels run it themselves
+    // (__bingo_gemm_fa_reuse), and a blocking kernel cannot carry it.
+    if (flags & GEMM_FA_REUSE) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa REUSE is for the start kernels\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
     if (meshRow != 16u || tileSize != 4u || meshCol != 16u) {
         printf_safe("[Cluster %d Core %d]: Error! gemm_fa is written for the (16, 4, 16) "
                     "array; shape 0 of this cluster is (%d, %d, %d)\r\n",
@@ -186,9 +244,11 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // channel and the array sees zeros), an INT32 accumulation (the QK score matmul never
     // takes it), no more column blocks than it holds factors for, and the extension itself.
     const uint32_t colscale = (flags & GEMM_FA_C_COLSCALE) != 0u;
+    // A configure task leaves the column factors and the start to its start task.
+    const uint32_t cfg_only = (flags & GEMM_FA_CONFIGURE) != 0u;
     // The D side's width: FP16 for the score matmul and for a PV that ends the recurrence
-    // (GEMM_FA_D_FP16), INT32 for a PV that accumulates in place. C's side is separate: the
-    // score matmul masks it (its C is a zero bias), every PV reads it unless C_addr is 0.
+    // (GEMM_FA_D_FP16), INT32 for a PV that accumulates in place. C's side is separate: every
+    // dispatch reads it unless C_addr is 0 (the score matmul's usual zero bias).
     const uint32_t d_fp16 = emit_fp16 || (flags & GEMM_FA_D_FP16) != 0u;
     if (colscale && (emit_fp16 || C_addr == 0u || corr_addr == 0u || N > 2u ||
                      !BINGO_GEMM_FA_HAS_COLSCALE)) {
@@ -317,13 +377,24 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // configurable_channel [1, 0], so only the READ slot has one and the library's write of
     // this array is compiled out.
     uint32_t chD[1] = { 0xffffffffu };
+    // The other three masks are shape 0's, constants of the generated gemm_shapes.h. Copied
+    // into locals they fold into immediates; handed over as pointers into the table they are
+    // read from .rodata, which links into L3, one fabric round trip each.
+    uint32_t chA[BINGO_A_CSR_NUM], chB[BINGO_B_CSR_NUM], chC[BINGO_C_CSR_NUM];
+    for (uint32_t i = 0; i < BINGO_A_CSR_NUM; i++)
+        chA[i] = bingo_gemm_shape_params[0].channel_en_A[i];
+    for (uint32_t i = 0; i < BINGO_B_CSR_NUM; i++)
+        chB[i] = bingo_gemm_shape_params[0].channel_en_B[i];
+    for (uint32_t i = 0; i < BINGO_C_CSR_NUM; i++)
+        chC[i] = C_addr == 0u ? bingo_channel_en_C_null[i]
+                              : bingo_gemm_shape_params[0].channel_en_C[i];
 
     // C is read in FULL, never broadcast: the port is serialised (meshRow*meshCol*
     // BINGO_C_ELEM_LEN / BINGO_SERIAL_C_D_WIDTH beats per block) and a broadcast operand
     // cannot be spread across a serialised input.
     //
-    // ...EXCEPT for the score matmul, whose C is a bias of zeros. That one masks every C
-    // channel off instead of streaming the zeros. A disabled channel is not skipped: the
+    // ...EXCEPT where C is a bias of zeros (the score matmul without a mask: C_addr 0). That
+    // one masks every C channel off instead of streaming the zeros. A disabled channel is not skipped: the
     // requestor still pops the address but suppresses tcdmReq.valid, and the responser
     // substitutes a zero beat (snax readerWriter/DataRequestor.scala, DataResponser.scala),
     // so the array sees the same C = 0 a streamed buffer of zeros would have given it.
@@ -336,16 +407,14 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     //
     // Quantisation has nowhere to go on a port carrying the converter alone, so it is off.
     set_versacore_streamer_csr(
-        A_addr, Asl, Atb, Ats, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_A,
-        B_addr, Bsl, Btb, Bts, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_B,
+        A_addr, Asl, Atb, Ats, 0, 0, chA,
+        B_addr, Bsl, Btb, Bts, 0, 0, chB,
         // A NULL C_addr is the caller saying "this dispatch has no bias" -- the same
-        // masking the score matmul gets, available to any dispatch whose C is known to be
-        // zero. With every channel masked no request is ever issued, so the pointer is
-        // never dereferenced; it is still pointed at something real rather than at 0.
-        C_addr ? C_addr : D_addr, Csl, Ctb, Cts, 0,
-        (emit_fp16 || C_addr == 0u)
-            ? (uint32_t *)bingo_channel_en_C_null
-            : (uint32_t *)bingo_gemm_shape_params[0].channel_en_C,
+        // masking the score matmul gets (chC is the all-off mask then), available to any
+        // dispatch whose C is known to be zero. With every channel masked no request is ever
+        // issued, so the pointer is never dereferenced; it is still pointed at something
+        // real rather than at 0.
+        C_addr ? C_addr : D_addr, Csl, Ctb, Cts, 0, chC,
         D_addr, Dsl, Dtb, Dts, 0, chD,
         /*array_shape=*/0, /*quantization_enable=*/0,
         /*shift_i=*/0, /*multiplier_i=*/0, /*input_zp_i=*/0, /*output_zp_i=*/0,
@@ -362,34 +431,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
 
 #if BINGO_GEMM_FA_HAS_COLSCALE
     // ---- the C read path's column scaler ---------------------------------------------
-    // Staged like every other streamer CSR and latched at START, so it applies to this
-    // dispatch only once the enable is cleared again below. N is the output's column-block
-    // count: the scaler walks C in the same (m, n, chunk) order as the descriptor above.
-    if (colscale) {
-        const volatile uint32_t *f = (const volatile uint32_t *)(uintptr_t)corr_addr;
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 1, N);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 2, f[0]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 3, f[1]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 4, f[2]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 5, f[3]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 6, f[4]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 7, f[5]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 8, f[6]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 9, f[7]);
-        // The second column block's factors only when there is one: with N = 1 the corr
-        // beat is meshCol FP16 = 8 words, and the words after it are not corr.
-        if (N > 1u) {
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 10, f[8]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 11, f[9]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 12, f[10]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 13, f[11]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 14, f[12]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 15, f[13]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 16, f[14]);
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 17, f[15]);
-        }
-        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 1u);
-    }
+    if (colscale && !cfg_only) __bingo_gemm_fa_arm_colscale(corr_addr, N);
 #endif
 
     // ---- the accelerator ---------------------------------------------------------------
@@ -401,6 +443,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_CFG_END,
                               BINGO_TRACE_GEMM_FA_PV_CFG_END);
 
+    if (start_seq != 0u && cfg_only) BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
     if (start_seq != 0u) {
         // START, then the streamer's START cleared at once, and return: the
         // dispatch is queued behind whatever the array still runs. The scaler's enable was
@@ -575,14 +618,67 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
                                a->b_pitch, 0u, sp);
 }
 
+// ---------------------------------------------------------------------------
+// A REUSE dispatch (GEMM_FA_REUSE). The cluster's previous dispatch left every CSR this one
+// needs but the four operand addresses and a PV's corr factors, and the host checked the rest
+// of the signature when it set the flag, so this writes those and starts. It stays out of
+// __bingo_gemm_fa_run so the start kernel reads each argument once and builds no descriptor.
+// ---------------------------------------------------------------------------
+static inline __attribute__((always_inline)) uint32_t __bingo_gemm_fa_reuse(
+    const __snax_bingo_kernel_gemm_fa_start_args_t *a, bingo_kernel_scratchpad_t *sp,
+    uint32_t is_qk) {
+    const uint32_t A_addr = a->input_A_addr, B_addr = a->input_B_addr;
+    const uint32_t C_addr = a->input_C_addr, D_addr = a->output_D_addr;
+    const uint32_t N = a->N;
+    BINGO_GEMM_REQUIRE_UNRETIRED(a->seq, "gemm_fa REUSE start");
+    BINGO_FA_MARK(is_qk, BINGO_TRACE_GEMM_FA_QK_CFG_START, BINGO_TRACE_GEMM_FA_PV_CFG_START);
+    // C is pointed at D when there is none, as the full configuration does.
+    set_minimal_streamer_cfg(A_addr, B_addr, C_addr ? C_addr : D_addr, D_addr);
+    if (a->flags & GEMM_FA_CONFIGURE) BINGO_RETURN_SUCC_N(sp, D_addr, a->M * N);
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    const uint32_t colscale = !is_qk && (a->flags & GEMM_FA_C_COLSCALE) != 0u;
+    if (colscale) __bingo_gemm_fa_arm_colscale(a->corr_addr, N);
+#endif
+    BINGO_FA_MARK(is_qk, BINGO_TRACE_GEMM_FA_QK_CFG_END, BINGO_TRACE_GEMM_FA_PV_CFG_END);
+    start_versacore_and_streamer_pulse();
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    if (colscale) csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 0u);
+#endif
+    BINGO_RETURN_SUCC_N(sp, D_addr, a->M * N);
+}
+
 // S^T = K.Q^T, queued: configure and start dispatch `seq` and return (see QUEUED DISPATCH).
+// The START task of a dispatch its CONFIGURE task configured (the task just before it in the
+// GEMM core's program): PV's column factors, then the start.
+static inline __attribute__((always_inline)) uint32_t __bingo_gemm_fa_start_only(
+    const __snax_bingo_kernel_gemm_fa_start_args_t *a, bingo_kernel_scratchpad_t *sp,
+    uint32_t is_qk) {
+    BINGO_GEMM_REQUIRE_UNRETIRED(a->seq, "gemm_fa START");
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    const uint32_t colscale = !is_qk && (a->flags & GEMM_FA_C_COLSCALE) != 0u;
+    if (colscale) __bingo_gemm_fa_arm_colscale(a->corr_addr, a->N);
+#endif
+    start_versacore_and_streamer_pulse();
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    if (colscale) csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 0u);
+#endif
+    BINGO_RETURN_SUCC_N(sp, a->output_D_addr, a->M * a->N);
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk_start(void *arg) {
     BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_start_args_t, "gemm_fa_qk_start");
+    if (a->flags & GEMM_FA_START) return __bingo_gemm_fa_start_only(a, sp, 1u);
+    if (a->flags & GEMM_FA_REUSE) return __bingo_gemm_fa_reuse(a, sp, 1u);
     BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_fa_qk_start");
-    BINGO_GEMM_FA_QK_NO_FLAGS(a, "gemm_fa_qk_start");
+    if ((a->flags & ~GEMM_FA_CONFIGURE) || a->b_pitch) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_qk_start takes no flags but CONFIGURE, and "
+                    "no b_pitch (got %d, %d)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    a->flags, a->b_pitch);
+        return BINGO_RET_FAIL;
+    }
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 1u,
-                               0u, 0u, 0u, a->d_shift, 0u, a->seq, sp);
+                               0u, a->flags & GEMM_FA_CONFIGURE, 0u, a->d_shift, 0u, a->seq, sp);
 }
 
 // O^T += V^T.P^T, queued: configure and start dispatch `seq` and return. The corr factors
@@ -590,6 +686,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk_start(void *arg) {
 // as for the blocking kernel; the result is there after the matching gemm_wait.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv_start(void *arg) {
     BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_fa_start_args_t, "gemm_fa_pv_start");
+    if (a->flags & GEMM_FA_START) return __bingo_gemm_fa_start_only(a, sp, 0u);
+    if (a->flags & GEMM_FA_REUSE) return __bingo_gemm_fa_reuse(a, sp, 0u);
     BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_fa_pv_start");
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 0u,

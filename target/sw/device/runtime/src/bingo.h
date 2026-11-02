@@ -394,6 +394,10 @@ inline int32_t bingo_hw_offload_manager(){
     const uint32_t gl_base = (gid_list && core < gl_ncores) ? gl_hdr[2u + core] : 0u;
     uint32_t gl_cur = gl_base;
     const uint32_t gl_end = (gid_list && core < gl_ncores) ? gl_hdr[3u + core] : 0u;
+    // The arg and kernel lists stay where the host put them for the whole run, as the gid list
+    // does, so their bases are read once here and each task reads only its own two entries.
+    const uintptr_t arg_list = u->dev_arg_list_ptr;
+    const uintptr_t kernel_list = u->dev_kernel_list_ptr;
     while(1){
         // Step 2: Reading the Ready Queue to get the task id
         // Using CSR to read the ready queue
@@ -414,8 +418,8 @@ inline int32_t bingo_hw_offload_manager(){
             err=1;
             break;
         }
-        cur_arg_ptr = bingo_hw_offload_get_arg_ptr(cur_dev_task_id);
-        cur_kernel_ptr = bingo_hw_offload_get_kernel_ptr(cur_dev_task_id);
+        cur_arg_ptr = readw(arg_list + (uint32_t)cur_dev_task_id * sizeof(uint32_t));
+        cur_kernel_ptr = readw(kernel_list + (uint32_t)cur_dev_task_id * sizeof(uint32_t));
         BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_END);
 
         BINGO_PRINTF(1, "[Cluster %d Core %d]: Task %d Info: Dev tid=%d, arg ptr=0x%x, kernel ptr=0x%x\r\n",

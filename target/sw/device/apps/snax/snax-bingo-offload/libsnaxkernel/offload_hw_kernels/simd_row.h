@@ -329,9 +329,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
                     (int)SIMD_BEAT_BYTES, (int)beats);
         return BINGO_RET_FAIL;
     }
-    snax_simd_shape_t in, out;
-    snax_simd_shape_broadcast(&in, (void *)l, 2u);
-    snax_simd_shape_flat(&out, (void *)latch, 1u);
+    // Both tasks programmed by value (snax_simd_program_flat): no shape structs to build on the
+    // stack and read back. 1: l twice (source stride 0) -> the latch beat.
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMMAP) |
                                                      (1u << SIMD_EXT_STREAMELEMENTWISE_1));
     snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, a->a_n_f32bits);
@@ -339,13 +338,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
     snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_RSQRT);
     snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 0, 2u);
     snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1, SIMD_EW_MUL);
-    snax_simd_program_fast(&in, &out);
+    snax_simd_program_flat(l, 2u, latch, 1u);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, 0u);
     snax_simd_fire();
-    snax_simd_shape_flat(&in, (void *)latch, 1u + beats);
-    snax_simd_shape_flat(&out, (void *)y, beats);
+    // 2: [latch][O16] -> o~, a beat a beat
     snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
                    SIMD_EW_MUL | SIMD_EW_STICKY_B);
-    snax_simd_program_fast(&in, &out);
+    snax_simd_program_flat_next(latch, 1u + beats, y, beats);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, SIMD_BEAT_BYTES);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
@@ -353,6 +353,75 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (bad) BINGO_SIMD_DRAIN_FAILED("simd_mla_normalise");
+    BINGO_RETURN_SUCC(sp, y);
+#endif
+}
+
+// ==========================================================================
+// simd_mla_normalise, then quantised in the same pass: task 2's EW1 MUL | STICKY_B feeds the
+// quantiser (scale inv_scale, no tail, INTERLEAVE4), which packs each four latents of a query
+// into one 32-bit atom: every 64 B written is a [16 queries x 4 latents] block, the A operand of
+// one 16-row tile with the latents along K. The quantiser takes the multiply's FP16 output, as
+// simd_fp16_to_int8 takes the stored o~.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise_q8(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_mla_normalise_q8_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_mla_normalise_q8", "SIMD");
+#if !(BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMELEMENTWISE && BINGO_SIMD_HAS_RSQRT && \
+      BINGO_HAS_FP16TOINT8 && BINGO_SIMD_HAS_QUANT_ILV4)
+    BINGO_SIMD_EXT_UNSUPPORTED("simd_mla_normalise_q8",
+                               "StreamMap RSQRT, post-map StreamElementwise and Fp16ToInt8 "
+                               "INTERLEAVE4");
+#else
+    const __snax_bingo_kernel_simd_mla_normalise_q8_args_t *a =
+        (const __snax_bingo_kernel_simd_mla_normalise_q8_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_mla_normalise_q8_args_t);
+    const uint32_t l = a->l_addr, latch = a->latch_addr, o = a->input_addr;
+    const uint32_t y = a->output_addr, beats = a->beats;
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
+    BINGO_SIMD_REQUIRE_LOCAL(l, "simd_mla_normalise_q8", "l");
+    BINGO_SIMD_REQUIRE_LOCAL(o, "simd_mla_normalise_q8", "O16");
+    BINGO_SIMD_REQUIRE_LOCAL(y, "simd_mla_normalise_q8", "output");
+    if (beats == 0u || (beats & 3u) || latch + SIMD_BEAT_BYTES != o ||
+        ((l | o | y) & (SIMD_BEAT_BYTES - 1u))) {
+        printf_safe("[Cluster %d Core %d]: Error! simd_mla_normalise_q8: the latch beat must "
+                    "sit directly below O16 (latch=0x%08x O16=0x%08x), every buffer aligned "
+                    "to the %d-B SIMD beat, beats=%d a positive multiple of 4.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), latch, o,
+                    (int)SIMD_BEAT_BYTES, (int)beats);
+        return BINGO_RET_FAIL;
+    }
+    // Both tasks programmed by value (snax_simd_program_flat): no shape structs to build on the
+    // stack and read back. 1: l twice (source stride 0) -> the latch beat.
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMMAP) |
+                                                     (1u << SIMD_EXT_STREAMELEMENTWISE_1));
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, a->a_n_f32bits);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_RSQRT);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 0, 2u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1, SIMD_EW_MUL);
+    snax_simd_program_flat(l, 2u, latch, 1u);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, 0u);
+    snax_simd_fire();
+    // 2: [latch][O16] -> o~, quantised two beats into one
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_1) |
+                                                     (1u << SIMD_EXT_FP16TOINT8));
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 0, 1u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1, SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_set_op_csr(SIMD_EXT_FP16TOINT8_CSR, 0, a->inv_scale_f32bits);
+    snax_simd_set_op_csr(SIMD_EXT_FP16TOINT8_CSR, 1, SIMD_QUANT_TAIL(0) | SIMD_QUANT_ILV4);
+    snax_simd_program_flat_next(latch, 1u + beats, y, beats / 2u);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, SIMD_BEAT_BYTES);
+    snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    const uint32_t bad = snax_simd_drain();
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
+    // csr(1) is sticky: a later task that arms the quantiser with snax_simd_use1() must not pack
+    snax_simd_set_op_csr(SIMD_EXT_FP16TOINT8_CSR, 1, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    if (bad) BINGO_SIMD_DRAIN_FAILED("simd_mla_normalise_q8");
     BINGO_RETURN_SUCC(sp, y);
 #endif
 }

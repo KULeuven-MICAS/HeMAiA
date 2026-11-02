@@ -227,7 +227,7 @@ static uint32_t __bingo_gemm_run(
     int32_t input_zp_i, int32_t output_zp_i, int32_t int32tofp16_enable,
     int32_t int4_a_enable, int32_t int4_b_enable, uint32_t d_shift,
     uint32_t a_pitch, uint32_t start_seq, const bingo_gemm_shape_l1_t *shape_l1,
-    bingo_kernel_scratchpad_t *sp)
+    uint32_t cfg_only, bingo_kernel_scratchpad_t *sp)
 {
     VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM run A=0x%08x B=0x%08x C=0x%08x D=0x%08x\r\n",
                           snrt_cluster_idx(), snrt_cluster_core_idx(),
@@ -765,8 +765,9 @@ static uint32_t __bingo_gemm_run(
     {
         // Both CSR managers queue the configuration (snax_cfg_queue_depth 2), so the start
         // writes retire while an earlier dispatch still runs; __snax_bingo_kernel_gemm_wait
-        // waits for this one by its number.
-        start_versacore_and_streamer_pulse();
+        // waits for this one by its number. A configure-only call (gemm_start stage 1) leaves
+        // the CSRs written for the start task that follows it in the GEMM core's program.
+        if (!cfg_only) start_versacore_and_streamer_pulse();
         BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
         BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
     }
@@ -832,6 +833,11 @@ static uint32_t __bingo_gemm_run(
     BINGO_RETURN_SUCC_N(sp, D_addr, M * N);
 }
 
+// gemm_start's `stage` (kernel_gemm.py SnaxBingoKernelGemmStartArgs): configure and start, configure
+// only, or start only.
+#define BINGO_GEMM_STAGE_CONFIGURE 1u
+#define BINGO_GEMM_STAGE_START     2u
+
 // A queued start numbers its dispatch from 1; 0 is the unset field.
 #define BINGO_GEMM_REQUIRE_SEQ(seq, kname)                                                     \
     do {                                                                                       \
@@ -855,15 +861,15 @@ static uint32_t __bingo_gemm_run(
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END)
 
 // The __bingo_gemm_run call for gemm_full's argument fields. `a` is the kernel's args struct
-// (gemm_start's is gemm_full's plus seq and shape_addr), `sp` its scratchpad.
-#define BINGO_GEMM_FULL_RUN(seq, shape_l1)                                                     \
+// (gemm_start's is gemm_full's plus seq, shape_addr, reuse and stage), `sp` its scratchpad.
+#define BINGO_GEMM_FULL_RUN(seq, shape_l1, cfg_only)                                           \
     __bingo_gemm_run(                                                                          \
         a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,                    \
         a->M, a->K, a->N, a->array_shape_idx,                                                   \
         a->transpose_A, a->transpose_B, a->accumPrevC,                                          \
         a->quantization_enable, a->shift_i, a->multiplier_i,                                    \
         a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,                                   \
-        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, (seq), (shape_l1), sp)
+        a->int4_a_enable, a->int4_b_enable, a->d_shift, a->a_pitch, (seq), (shape_l1), (cfg_only), sp)
 
 // -------------------------------------------------------------
 // gemm_full: low-level entry point exposing every precision/quant flag.
@@ -872,18 +878,34 @@ static uint32_t __bingo_gemm_run(
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 {
     BINGO_GEMM_PROLOGUE(__snax_bingo_kernel_gemm_full_args_t, "gemm_full");
-    return BINGO_GEMM_FULL_RUN(0u, 0);
+    return BINGO_GEMM_FULL_RUN(0u, 0, 0u);
 }
 
 // -------------------------------------------------------------
 // gemm_start / gemm_wait: one gemm_full split in two tasks, so the core programs the next
 // dispatch while the array still runs this one. gemm_start configures and starts and
-// returns; both CSR managers queue the configuration. gemm_wait returns once the array has
+// returns; both CSR managers queue the configuration. A gemm_start may itself be split
+// (`stage`): a CONFIGURE task writes every CSR and returns, and the START task after it in
+// the GEMM core's program only starts. Plain CSR writes go to the managers' register files
+// at any time (only a start write waits for room in the queue), so the configure task can
+// run as soon as the previous dispatch has started, before this one's operands are ready,
+// and the start that waits for them is a few instructions. gemm_wait returns once the array has
 // retired dispatch `seq`. `seq` numbers the cluster's VersaCore dispatches from 1 in the
 // order core 0 issues them, which the generator fixes; every dispatch on the cluster must
 // be numbered, synchronous ones included. The output is written when gemm_wait is done, so
 // a consumer depends on the wait, never on the start.
 // -------------------------------------------------------------
+// The full configuration of a gemm_start, out of line: its call of __bingo_gemm_run passes two
+// dozen arguments, and inlined it would make the kernel save registers on every entry, the
+// reuse path's too.
+static __attribute__((noinline)) uint32_t __bingo_gemm_start_full(
+    const __snax_bingo_kernel_gemm_start_args_t *a, bingo_kernel_scratchpad_t *sp)
+{
+    BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_start");
+    return BINGO_GEMM_FULL_RUN(a->seq, (const bingo_gemm_shape_l1_t *)(uintptr_t)a->shape_addr,
+                               a->stage == BINGO_GEMM_STAGE_CONFIGURE);
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_start(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_start_args_t);
@@ -891,8 +913,28 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_start(void *arg)
     const __snax_bingo_kernel_gemm_start_args_t *a =
         (const __snax_bingo_kernel_gemm_start_args_t *)arg;
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_start_args_t);
-    BINGO_GEMM_REQUIRE_SEQ(a->seq, "gemm_start");
-    return BINGO_GEMM_FULL_RUN(a->seq, (const bingo_gemm_shape_l1_t *)(uintptr_t)a->shape_addr);
+    if (a->stage == BINGO_GEMM_STAGE_START)
+    {
+        // The configure task just before this one in the program wrote every CSR; nothing
+        // else on the GEMM core touches them in between (the host's program order).
+        BINGO_GEMM_REQUIRE_UNRETIRED(a->seq, "gemm_start start-only");
+        start_versacore_and_streamer_pulse();
+        BINGO_RETURN_SUCC_N(sp, a->output_D_addr, a->M * a->N);
+    }
+    if (a->reuse)
+    {
+        // The cluster's previous dispatch configured every CSR this one needs but the four
+        // operand addresses, and the host checked the rest of the arguments when it set
+        // `reuse`: write those, and start unless this is a configure task.
+        const uint32_t D_addr = a->output_D_addr;
+        BINGO_GEMM_REQUIRE_UNRETIRED(a->seq, "gemm_start reuse");
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+        set_minimal_streamer_cfg(a->input_A_addr, a->input_B_addr, a->input_C_addr, D_addr);
+        if (a->stage != BINGO_GEMM_STAGE_CONFIGURE) start_versacore_and_streamer_pulse();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+        BINGO_RETURN_SUCC_N(sp, D_addr, a->M * a->N);
+    }
+    return __bingo_gemm_start_full(a, sp);
 }
 
 // Copies shape shape_idx of bingo_gemm_shape_params, and the C reader's all-off mask, into the
@@ -961,7 +1003,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_wait(void *arg)
     __bingo_gemm_run(a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,       \
                      a->M, a->K, a->N, a->array_shape_idx,                                      \
                      a->transpose_A, a->transpose_B, a->accumPrevC,                             \
-                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), 0u, 0u, 0u, 0, sp)
+                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), 0u, 0u, 0u, 0, 0u, sp)
 
 // int8 x int8 -> int32 (baseline).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i32(void *arg)
@@ -1009,7 +1051,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i8(void *arg)
         a->transpose_A, a->transpose_B, a->accumPrevC,
         /*quant*/ 1, a->shift_i, a->multiplier_i, a->input_zp_i, a->output_zp_i,
         /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, /*d_shift*/ 0u, /*a_pitch*/ 0u,
-        /*start_seq*/ 0u, /*shape_l1*/ 0, sp);
+        /*start_seq*/ 0u, /*shape_l1*/ 0, /*cfg_only*/ 0u, sp);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)

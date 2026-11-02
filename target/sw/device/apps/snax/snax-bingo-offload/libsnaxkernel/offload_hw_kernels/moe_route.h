@@ -153,6 +153,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
     // (U transfers of 64 B); each further token's record takes all U entries from token 0's
     // in ONE 2-D transfer. Measured at 4 tokens, 22 slots: the core copying the entries word
     // by word, 55 us; 88 transfers of 64 B, 45 us (the iDMA's short queue serialises them).
+    bingo_dma_drain();
     for (uint32_t s = 0; s < U; s++)
         snrt_dma_start_1d_wideptr(
             chiplet_addr_transform((uint64_t)(uint32_t)(
