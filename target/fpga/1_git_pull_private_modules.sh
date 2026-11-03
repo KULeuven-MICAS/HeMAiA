@@ -4,8 +4,8 @@
 #         Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # FPGA-chip private-module setup.
-# This intentionally does not clone or override tech_cells_tsmc16: the FPGA flow
-# should use the public tech_cells_generic dependency instead of the ASIC SRAMs.
+# This does not clone tech_cells_tsmc16. Use the public tech_cells_generic dependency
+# unless an existing local tech_cells_tsmc16 override provides FPGA mappings.
 
 set -euo pipefail
 
@@ -19,11 +19,11 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --d2d=*) FPGA_WITH_D2D="${1#*=}"; shift ;;
         --pll=*) FPGA_WITH_PLL="${1#*=}"; shift ;;
-        --macro=*) echo "Ignoring $1: FPGA setup does not use tech_cells_tsmc16"; shift ;;
+        --macro=*) echo "Ignoring $1: FPGA setup does not clone tech_cells_tsmc16"; shift ;;
         -h|--help)
             echo "Usage: $0 [--d2d=0|1] [--pll=0|1]"
             echo "Defaults: d2d=1, pll=1"
-            echo "FPGA setup always leaves tech_cells_generic on the public dependency."
+            echo "Keeps an existing tech_cells_tsmc16 override if it provides FPGA mappings."
             exit 0
             ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -76,11 +76,16 @@ upsert_override() {
 
 tech_cells_generic_fpga='  tech_cells_generic: { git: https://github.com/KULeuven-MICAS/tech_cells_generic.git, rev    : master }'
 
-# Restore the public KULeuven-MICAS tech_cells override if the tapeout setup replaced it
-# with the ASIC checkout. Preserve any other preexisting tech_cells_generic override.
+# Keep the local checkout when it supports FPGA SRAMs. Otherwise restore the public
+# dependency if the tapeout setup selected an ASIC-only checkout.
 if grep -q '^[[:space:]]*tech_cells_generic:.*tech_cells_tsmc16' "$bender_local_file"; then
-    upsert_override "tech_cells_generic" "$tech_cells_generic_fpga"
-    echo "Restored Bender.local tech_cells_generic override to KULeuven-MICAS"
+    if [ -f "$repo_root/hw/hemaia/tech_cells_tsmc16/src/fpga/tc_sram_xilinx.sv" ] &&
+       grep -q 'src/fpga/tc_sram_xilinx.sv' "$repo_root/hw/hemaia/tech_cells_tsmc16/Bender.yml"; then
+        echo "Keeping Bender.local tech_cells_tsmc16 override with FPGA SRAM support"
+    else
+        upsert_override "tech_cells_generic" "$tech_cells_generic_fpga"
+        echo "Restored Bender.local tech_cells_generic override to KULeuven-MICAS"
+    fi
 elif grep -q '^[[:space:]]*tech_cells_generic:' "$bender_local_file"; then
     echo "Keeping existing Bender.local tech_cells_generic override"
 else

@@ -1,4 +1,7 @@
 # Support for local override
+# Regenerate scripts when target flags or local technology mappings change.
+.PHONY: define-sources.tcl define_defines_includes_no_simset.tcl
+
 BENDER		   ?= bender
 DASM 	       ?= spike-dasm
 VLT			   ?= verilator
