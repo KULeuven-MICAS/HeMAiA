@@ -397,7 +397,9 @@ class BingoDFGTransformsMixin:
         gathers = []
         unknown = []
         for n in sorted(self.nodes(), key=lambda n: n.node_id):
-            if not (n.kernel_name or "").endswith("xdma_chain_gather") or n.kernel_args is None:
+            # a gather split into tasks (libs/blocks/gather.py chain_gather) is its start here
+            if not (n.kernel_name or "").endswith(("xdma_chain_gather", "xdma_chain_start")) \
+                    or n.kernel_args is None:
                 continue
             hops = self._chain_gather_hops(n.kernel_args)
             if hops is None:
@@ -416,7 +418,7 @@ class BingoDFGTransformsMixin:
                 if nx.has_path(self, a, b) or nx.has_path(self, b, a):
                     continue
                 first, then = (b, a) if nx.has_path(self.bingo_order_view(), b, a) else (a, b)
-                self.bingo_add_edge(first, then)
+                self.bingo_add_edge(getattr(first, "operands_held_by", first), then)
                 added.append((first.node_name, then.node_name))
         if len(gathers) > 1:
             print(f"[bingo] ChainGather crossing check: {len(gathers)} gathers, {sharing} pair(s) "

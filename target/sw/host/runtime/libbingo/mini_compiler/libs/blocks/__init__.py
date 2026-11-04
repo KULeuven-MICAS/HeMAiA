@@ -24,7 +24,7 @@ from .fa_sweep import FaSweepBufs, FaSweepCfg, fa_sweep, fa_sweep_alloc
 from .flash_attention import FaCfg, FlashAttention
 from .gemm_async import GemmQueue
 from .linear import Linear, LinearCfg, LoadStream, WeightRings, record_spec
-from .gather import fa_gather
+from .gather import chain_gather, chain_gather_teardown, fa_gather
 from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, MlaDimOut, MlaDimPV,
                   MlaDimPVCfg, MlaRowMax, MlaRowMaxCfg, MlaShardCfg, MlaShardOut, MlaShardP,
                   MlaShardPV, MlaShardScores, QAssemble, QAssembleCfg, RopeRows, RopeRowsCfg)
@@ -38,7 +38,7 @@ from .simd import (AddRow, AddRowCfg, ARowPack, ARowPackCfg, NormCfg, NormRowCfg
                    ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                    SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
-__all__ = ["collective", "FaCfg", "FlashAttention", "fa_gather", "GemmQueue",
+__all__ = ["chain_gather", "chain_gather_teardown", "collective", "FaCfg", "FlashAttention", "fa_gather", "GemmQueue",
            "FaSweepBufs", "FaSweepCfg", "fa_sweep", "fa_sweep_alloc", "Gather", "Linear",
            "LinearCfg", "LoadStream", "WeightRings", "record_spec",
            "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",

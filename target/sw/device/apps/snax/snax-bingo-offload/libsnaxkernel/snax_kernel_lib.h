@@ -100,6 +100,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_dispatch),
     // CERF gates on a device core, and their cost micro-benchmark (offload_hw_kernels/cerf.h).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_tiles),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_mask),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_static),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_cerf_cost),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_gather_rows),
@@ -141,6 +142,10 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_gather_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_pack_fa_partial),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_gather),
+    // The same gather as a configure, a start and a wait task.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_cfg),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_start),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_wait),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
     /// Core-level SIMD Kernels  (offload_hw_kernels/simd.h)          ///

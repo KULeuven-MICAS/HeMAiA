@@ -39,6 +39,57 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_cerf_tiles(void *arg){
     BINGO_RETURN_SUCC(sp, 0);
 }
 
+// Mask gate (a 'tiles' fork of one-tile slots whose source wrote the selection as a bitmask, as a top-k
+// router produces it): slot s runs if bit s % 32 of mask word s / 32 is set; slot s is CERF group
+// group_base + s. Only the CERF words those groups occupy are written, a clear and a set store each, and
+// only those are waited for. The host side of these args is the workload's (workloads/cerf_moe).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_cerf_mask_args {
+  uint32_t mask_addr;     // uint32_t[ceil(num_slots / 32)]: the selection, readable by this core
+  uint32_t num_slots;
+  uint32_t group_base;    // CERF group of slot 0
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_cerf_mask_args_t;
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_cerf_mask(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_cerf_mask_args_t *a = (__snax_bingo_kernel_cerf_mask_args_t *)arg;
+    const volatile uint32_t *mask = (const volatile uint32_t *)(uintptr_t)a->mask_addr;
+    const uint32_t n = a->num_slots, base = a->group_base;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_cerf_mask_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    const uint32_t first = base / 32u, last = (base + n - 1u) / 32u, words = (n + 31u) / 32u;
+    uint32_t ctrl[BINGO_CERF_WORDS], state[BINGO_CERF_WORDS];
+    for (uint32_t w = first; w <= last; w++) {
+        // CERF word w holds groups 32 w .. 32 w + 31, which are slots s0 .. s0 + 31 (s0 < 0 below slot 0)
+        const int32_t s0 = (int32_t)(32u * w) - (int32_t)base;
+        uint32_t c = ~0u, bits;
+        if (s0 < 0) {
+            c <<= (uint32_t)-s0;
+            bits = mask[0] << (uint32_t)-s0;
+        } else {
+            const uint32_t q = (uint32_t)s0 / 32u, r = (uint32_t)s0 % 32u;
+            bits = mask[q] >> r;
+            if (r && q + 1u < words) bits |= mask[q + 1u] << (32u - r);
+        }
+        const int32_t end = (int32_t)n - s0;
+        if (end < 32) c &= (1u << end) - 1u;
+        ctrl[w] = c;
+        state[w] = bits & c;
+    }
+    for (uint32_t w = first; w <= last; w++) {
+        if (ctrl[w] & ~state[w]) *(volatile uint32_t *)quad_ctrl_cerf_clr_addr(w) = ctrl[w] & ~state[w];
+        if (ctrl[w] & state[w]) *(volatile uint32_t *)quad_ctrl_cerf_set_addr(w) = ctrl[w] & state[w];
+    }
+    for (uint32_t w = first; w <= last; w++) {
+        while ((*(volatile uint32_t *)quad_ctrl_cerf_status_addr(w) & ctrl[w]) != state[w]) {
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_RETURN_SUCC(sp, 0);
+}
+
 // Static gate on a device core (a 'static' fork whose source runs on a device core): give the groups
 // in cerf_ctrl the values in cerf_state, word by word, and leave every other group alone.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_cerf_static(void *arg){

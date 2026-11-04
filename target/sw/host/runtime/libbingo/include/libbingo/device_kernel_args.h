@@ -970,6 +970,28 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_gather_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_chain_gather_args_t;
 
+// The same gather as three tasks, so its software runs beside another transfer instead of between
+// two: xdma_chain_cfg programs the CSRs (the args above) and starts nothing, xdma_chain_start waits
+// for the operands and starts, xdma_chain_wait returns once the folded data has landed.
+//
+//   dst_hi/lo : the collector's dst buffer, chain[chain_num - 1]
+//   junction  : as above
+//   teardown  : 1 leaves the xDMA's CSRs clean for the next task; 0 only when the core's next task
+//               is an xdma_chain_cfg, which rewrites them
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_start_args {
+  uint32_t dst_hi;
+  uint32_t dst_lo;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_chain_start_args_t;
+
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_wait_args {
+  uint32_t dst_hi;
+  uint32_t dst_lo;
+  uint32_t junction;
+  uint32_t teardown;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_chain_wait_args_t;
+
 // BINGO XDMA ElementwiseAdd AB (two-operand) (convenience: dst = a + b, int32).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
   uint32_t src_a_addr_hi;

@@ -43,15 +43,12 @@
 // that programs its CSRs longhand -- __snax_bingo_kernel_xdma_memset below is the one that
 // matters -- writes only slot 0 and relies on the rest being zero.
 
-// Callers invoke it AFTER their wait, so it costs nothing the transfer was not paying.
-static inline void bingo_xdma_disarm_multicast_slots(uint32_t armed)
+// Callers invoke it AFTER their wait but INSIDE their task, so every successor of the task waits
+// for it. Every slot, at a constant CSR address, so each write is one posted csrw: a runtime slot
+// index goes through a jump table in L3 for every write.
+static inline void bingo_xdma_disarm_multicast_slots(void)
 {
-    const uint32_t n = (armed == 0u || armed > XDMA_MAX_DST_COUNT)
-                           ? XDMA_MAX_DST_COUNT : armed;
-    for (uint32_t i = 1; i < n; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
-    }
+    XDMA_ZERO_DST_SLOTS_FROM_1();
 }
 
 // Fill a local L1 region with a repeating 32-bit pattern, on the xDMA's writer path.
@@ -65,7 +62,7 @@ static inline void bingo_xdma_disarm_multicast_slots(uint32_t armed)
 //
 // THAT LAST SENTENCE IS AN INVARIANT THIS KERNEL DEPENDS ON, not just an observation:
 // skipping those 30 writes is only safe while slots 1..15 are zero on entry. Anything that
-// arms them must call bingo_xdma_disarm_multicast_slots(n) before it yields the core --
+// arms them must call bingo_xdma_disarm_multicast_slots() before it yields the core --
 // see that function for what happens when it does not.
 //
 // The reader channels are disabled deliberately. A disabled channel issues NO TCDM request
@@ -306,7 +303,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_multicast(void *arg)
     xdma_wait_task(task);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
-    bingo_xdma_disarm_multicast_slots(dst_num);
+    bingo_xdma_disarm_multicast_slots();
 
     BINGO_RETURN_SUCC(sp, (uint32_t)dst[0]);
 }
@@ -731,7 +728,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
                         "no folded beat arrived\r\n", snrt_cluster_idx(),
                         snrt_cluster_core_idx(), dst_addr);
             xdma_disable_dst_junction((uint8_t)a->junction);
-            bingo_xdma_disarm_multicast_slots(0);   // 0 = sweep all; see below
+            bingo_xdma_disarm_multicast_slots();
             return BINGO_RET_FAIL;
         }
     }
@@ -740,15 +737,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
     xdma_disable_dst_junction((uint8_t)a->junction);
     // The gather arms the SAME destination slots the multicast does (the library calls it
     // "the mirror of multicast" and routes it through xdma_multicast_1d_full_address), so
-    // it owes the same disarm. It has never been caught by this only because it is the
-    // last xDMA task in its workload -- an accident of scheduling, not a property.
-    //
-    // SWEEPS ALL 15 ON PURPOSE. The multicast kernel passes its own dst_num because it
-    // knows it; how many slots the gather's chain arms is a property of the chain
-    // geometry rather than of anything in scope here, and guessing it low would leave a
-    // slot armed -- the exact bug this function exists to prevent. Being the last xDMA
-    // task in its workload, its teardown is not on anyone's critical path.
-    bingo_xdma_disarm_multicast_slots(0);
+    // it owes the same disarm.
+    bingo_xdma_disarm_multicast_slots();
     BINGO_RETURN_SUCC(sp, dst_addr);
 #else
     // Refuse at CALL time, not compile time: the junctions are an optional part of the
@@ -757,6 +747,146 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
     (void)arg;
     BINGO_EXT_UNSUPPORTED("xdma_chain_gather", "a writer junction (HasElementwiseJunction / "
                                                "HasSoftmaxStatsJunction)");
+#endif  // XDMA_DST_JCT_ENABLE_PTR
+}
+
+// The ChainGather as three tasks. __snax_bingo_kernel_xdma_chain_gather runs its software in
+// line with the transfer, so all of it sits between two reductions. Split, a core configures
+// its next gather while the other cluster's gather runs: chain_cfg writes plain CSRs, which
+// reach the datapath only in the frame the start write submits, so it needs no operand and
+// disturbs nothing. chain_start is what waits for the operands. chain_wait is what releases
+// the next gather, and it leaves the CSR clean-up to the chain_cfg behind it, which rewrites
+// every destination slot and clears the junctions anyway.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_cfg(void *arg)
+{
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_chain_gather_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_chain_cfg", "xDMA");
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_xdma_chain_gather_args_t *a =
+        (__snax_bingo_kernel_xdma_chain_gather_args_t *)arg;
+    uint64_t local_src = make_u64(a->local_src_hi, a->local_src_lo);
+    uint32_t chain_num = a->chain_num;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_chain_gather_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    if (chain_num < 2 || chain_num > BINGO_XDMA_CHAIN_MAX ||
+        chain_num > XDMA_MAX_DST_COUNT) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_cfg chain_num=%u must be "
+                    "2..%u (arg struct) and <= %u (HW)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), chain_num,
+                    (unsigned)BINGO_XDMA_CHAIN_MAX, (unsigned)XDMA_MAX_DST_COUNT);
+        return BINGO_RET_FAIL;
+    }
+
+    uint64_t chain[BINGO_XDMA_CHAIN_MAX];
+    for (uint32_t i = 0; i < chain_num; i++) {
+        chain[i] = make_u64(a->chain_hi[i], a->chain_lo[i]);
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    xdma_disable_all_extensions();
+    for (uint8_t j = 0; j < XDMA_DST_JCT_NUM; j++) xdma_disable_dst_junction(j);
+
+    uint32_t jct_csr[XDMA_DST_JCT_CSR_NUM] = {0};
+    jct_csr[0] = a->jct_csr0;
+    if (XDMA_DST_JCT_CSR_NUM > 1) jct_csr[1] = a->jct_csr1;
+    BINGO_XDMA_TRY(xdma_chain_gather_1d_full_address_csrs(local_src, chain, chain_num,
+                                                          a->size, (uint8_t)a->junction,
+                                                          jct_csr),
+                   "xdma_chain_cfg");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_RETURN_SUCC(sp, (uint32_t)chain[chain_num - 1]);
+#else
+    (void)arg;
+    BINGO_EXT_UNSUPPORTED("xdma_chain_cfg", "a writer junction (HasElementwiseJunction / "
+                                            "HasSoftmaxStatsJunction)");
+#endif  // XDMA_DST_JCT_ENABLE_PTR
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_start(void *arg)
+{
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_chain_start_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_chain_start", "xDMA");
+    __snax_bingo_kernel_xdma_chain_start_args_t *a =
+        (__snax_bingo_kernel_xdma_chain_start_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_chain_start_args_t);
+
+    // The sentinel chain_wait watches, and the standing-finish check: see
+    // __snax_bingo_kernel_xdma_chain_gather, points (2) and (3). It is written here and not in
+    // chain_cfg because the buffer is only free once this task's dependencies are met.
+    *(volatile uint32_t *)(uintptr_t)a->dst_lo = 0xDEADBEEFu;
+    __asm__ volatile("fence" ::: "memory");
+    uint32_t finish_before = snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR);
+    uint32_t commit_before = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task = xdma_start();
+    if (task.remote && finish_before > commit_before) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_start saw a standing "
+                    "finish (remote finish=%u > commit=%u) before task %u; the gather "
+                    "would return without moving data\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), finish_before, commit_before, task.task_id);
+        return BINGO_RET_FAIL;
+    }
+    BINGO_RETURN_SUCC(sp, a->dst_lo);
+#else
+    (void)arg;
+    BINGO_EXT_UNSUPPORTED("xdma_chain_start", "a writer junction (HasElementwiseJunction / "
+                                              "HasSoftmaxStatsJunction)");
+#endif  // XDMA_DST_JCT_ENABLE_PTR
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_wait(void *arg)
+{
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_chain_wait_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_chain_wait", "xDMA");
+    __snax_bingo_kernel_xdma_chain_wait_args_t *a =
+        (__snax_bingo_kernel_xdma_chain_wait_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_chain_wait_args_t);
+    uint32_t dst_addr = a->dst_lo;
+
+    // The gather is the only transfer this core has in flight, since its tasks run in order, so
+    // the commit counters hold its id. Equality, because the counters are 8 bits wide and a
+    // finish counter just below a wrap reads as past its commit counter.
+    xdma_local_wait(snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR));
+    const uint32_t gather_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+    while (snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR) != gather_id) {
+    }
+
+    // The finish counter is no data barrier: see __snax_bingo_kernel_xdma_chain_gather, point (4).
+    volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)dst_addr;
+    uint32_t s = 0;
+    for (; s < BINGO_XDMA_GATHER_SETTLE_SPINS; s++) {
+        if (settle[0] != 0xDEADBEEFu) break;
+        __asm__ volatile("fence" ::: "memory");
+    }
+    __asm__ volatile("fence" ::: "memory");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    if (s == BINGO_XDMA_GATHER_SETTLE_SPINS) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_wait destination 0x%x still "
+                    "holds the sentinel after the transfer finished; no folded beat "
+                    "arrived\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dst_addr);
+        xdma_disable_dst_junction((uint8_t)a->junction);
+        XDMA_ZERO_DST_SLOTS_FROM_1();
+        return BINGO_RET_FAIL;
+    }
+
+    // Constant CSR addresses, so each write is one posted csrw: a runtime slot index goes through
+    // a jump table in L3 for every write.
+    if (a->teardown) {
+        xdma_disable_dst_junction((uint8_t)a->junction);
+        XDMA_ZERO_DST_SLOTS_FROM_1();
+    }
+    BINGO_RETURN_SUCC(sp, dst_addr);
+#else
+    (void)arg;
+    BINGO_EXT_UNSUPPORTED("xdma_chain_wait", "a writer junction (HasElementwiseJunction / "
+                                             "HasSoftmaxStatsJunction)");
 #endif  // XDMA_DST_JCT_ENABLE_PTR
 }
 

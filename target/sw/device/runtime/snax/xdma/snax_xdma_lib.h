@@ -589,21 +589,16 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
 // XDMA_DST_JCT_CUSTOM_CSR_NUM, an enable bitmask at XDMA_DST_JCT_ENABLE_PTR, and the param CSRs from
 // XDMA_DST_JCT_CSR_PTR. Guarded on the generated header so a cfg without junctions still compiles.
 #ifdef XDMA_DST_JCT_ENABLE_PTR
-#define BINGO_XDMA_JCT_CSR_CASE(base, k) \
-    case (k): snax_write_xdma_cfg_reg((base) + (k), val); break
-
-static inline void xdma_dst_jct_csr_write(uint32_t slot, uint32_t val) {
-    _Static_assert(XDMA_DST_JCT_CSR_NUM <= 8,
-        "dst junction CSRs exceed the 8-slot dispatch cap; extend the case list below.");
-    switch (slot) {
-        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 0); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 1);
-        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 2); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 3);
-        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 4); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 5);
-        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 6); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 7);
-        default: break;
-    }
-}
-#undef BINGO_XDMA_JCT_CSR_CASE
+// Slot k of the junction CSRs, if it is one of the n from `first`. The address stays a literal, so
+// the write is one csrw: a runtime slot index goes through a jump table in L3 for every write.
+#define XDMA_JCT_CSR_SLOT(k, first, n, vals)                                           \
+    do {                                                                               \
+        if ((k) < XDMA_DST_JCT_CSR_NUM && (k) >= (first) && (k) < (first) + (n)) {     \
+            snax_write_xdma_cfg_reg(XDMA_DST_JCT_CSR_PTR + (k), (vals)[(k) - (first)]);\
+        }                                                                              \
+    } while (0)
+_Static_assert(XDMA_DST_JCT_CSR_NUM <= 8,
+               "junction CSR slots are unrolled to 8; extend xdma_enable_dst_junction");
 
 // Arms junction `jct` with its param CSRs: csr_value must hold as many words as the junction
 // declares in XDMA_DST_JCT_CUSTOM_CSR_NUM.
@@ -614,10 +609,18 @@ inline int32_t xdma_enable_dst_junction(uint8_t jct, uint32_t* csr_value) {
     snax_write_xdma_cfg_reg(
         XDMA_DST_JCT_ENABLE_PTR,
         snax_read_xdma_cfg_reg(XDMA_DST_JCT_ENABLE_PTR) | (1 << jct));
+    // The junction is a run-time value: a fixed trip count lets the counts fold into immediates, so
+    // nothing here reads .rodata.
     const uint8_t counts[XDMA_DST_JCT_NUM] = XDMA_DST_JCT_CUSTOM_CSR_NUM;
-    uint32_t slot = 0;
-    for (uint8_t e = 0; e < jct; e++) slot += counts[e];
-    for (uint8_t i = 0; i < counts[jct]; i++) xdma_dst_jct_csr_write(slot + i, csr_value[i]);
+    uint32_t first = 0, n = 0;
+    for (uint8_t e = 0; e < XDMA_DST_JCT_NUM; e++) {
+        if (e < jct) first += counts[e];
+        if (e == jct) n = counts[e];
+    }
+    XDMA_JCT_CSR_SLOT(0, first, n, csr_value); XDMA_JCT_CSR_SLOT(1, first, n, csr_value);
+    XDMA_JCT_CSR_SLOT(2, first, n, csr_value); XDMA_JCT_CSR_SLOT(3, first, n, csr_value);
+    XDMA_JCT_CSR_SLOT(4, first, n, csr_value); XDMA_JCT_CSR_SLOT(5, first, n, csr_value);
+    XDMA_JCT_CSR_SLOT(6, first, n, csr_value); XDMA_JCT_CSR_SLOT(7, first, n, csr_value);
     return 0;
 }
 

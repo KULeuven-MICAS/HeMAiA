@@ -48,6 +48,8 @@ from bingo_kernel_args import (
     SnaxBingoKernelPackFaPartialArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelXdmaChainGatherArgs,
+    SnaxBingoKernelXdmaChainStartArgs,
+    SnaxBingoKernelXdmaChainWaitArgs,
     XDMA_SSJ_IDENTITY,
     XDMA_SSJ_ROWS,
     xdma_softmax_stats_csrs,
@@ -57,6 +59,53 @@ from bingo_mem_handle import BingoMemAlloc
 from bingo_platform import writer_junction_index
 
 from ..verify import checks
+
+CHAIN_GATHER = "__snax_bingo_kernel_xdma_chain_gather"
+CHAIN_CFG = "__snax_bingo_kernel_xdma_chain_cfg"
+
+
+def chain_gather(add, name, args, after=(), cfg_ahead=False, cfg_after=()):
+    """One ChainGather, `add(name, kernel, args, deps)` making each task on the collector's xDMA core.
+    Returns the task the gather's output is ready after and its operands are free after.
+
+    With `cfg_ahead` it is a configure, a start and a wait task. The configure task has no dependency,
+    so the core runs it as soon as it gets there, while the start still waits for `after` or the other
+    cluster's gather runs; it names the operands without touching them (`config_only`). The transfer
+    reads its operands until the wait, so the wait holds the start's (`operands_held_by`). The wait
+    takes the gather's name, which is what a graph's consumers look up. Call chain_gather_teardown
+    once the graph is complete.
+
+    `cfg_after`: the core's previous gather. The configure task rewrites the CSRs that gather's start
+    reads, so it must stay behind it: a generator whose cores do not run in creation order
+    (chain_program_order) has to name it here."""
+    if not cfg_ahead:
+        return add(name, CHAIN_GATHER, args, list(after))
+    cf = add(f"{name}_cfg", CHAIN_CFG, args, list(cfg_after))
+    cf.config_only = True
+    start = SnaxBingoKernelXdmaChainStartArgs(args)
+    st = add(f"{name}_st", start.KERNEL_NAME, start, list(after) + [cf])
+    wait = SnaxBingoKernelXdmaChainWaitArgs(args)
+    wt = add(name, wait.KERNEL_NAME, wait, [st])
+    st.operands_held_by = wt
+    return wt
+
+
+def chain_gather_teardown(dfg, xdma_core):
+    """Skip a wait's CSR clean-up where its core's next task is a configure task, which rewrites every
+    destination slot and clears the junctions: the clean-up then runs beside the other cluster's gather
+    instead of before the next one is released. Returns the waits changed."""
+    groups = {}
+    for t in dfg.node_list:
+        if t.assigned_core_id == xdma_core:
+            groups.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id), []).append(t)
+    n = 0
+    for ts in groups.values():
+        ts.sort(key=lambda t: (getattr(t, "order_key", t.node_id), t.node_id))
+        for a, b in zip(ts, ts[1:]):
+            if isinstance(a.kernel_args, SnaxBingoKernelXdmaChainWaitArgs) and b.kernel_name == CHAIN_CFG:
+                a.kernel_args.teardown = False
+                n += 1
+    return n
 
 
 def merged_golden(cfg, m_c, l_c):

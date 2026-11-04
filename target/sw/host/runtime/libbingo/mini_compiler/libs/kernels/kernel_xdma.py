@@ -513,6 +513,54 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         return a
 
 
+class SnaxBingoKernelXdmaChainStartArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_xdma_chain_start: the start of the gather `gather` (its chain args), whose
+    CSRs an xdma_chain_cfg task has programmed. Only `dst` reaches the device. The gather's chain and
+    source stay here because this is the task that puts them to use: liveness and the crossing check
+    read them from the start, not from the configure task."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_chain_start"
+
+    def __init__(self, gather: SnaxBingoKernelXdmaChainGatherArgs):
+        self.dst = gather.chain[-1]
+        self.local_src = gather.local_src
+        self.chain = gather.chain
+        self.hops = gather.hops
+        if hasattr(gather, "holds"):
+            self.holds = gather.holds
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_chain_start_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.dst, "dst", a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaChainWaitArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_xdma_chain_wait: return once the gather `gather` has landed. `teardown`
+    leaves the xDMA's CSRs clean; chain_gather_teardown clears it where the core's next task is an
+    xdma_chain_cfg."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_chain_wait"
+
+    def __init__(self, gather: SnaxBingoKernelXdmaChainGatherArgs, teardown: bool = True):
+        self.dst = gather.chain[-1]
+        self.junction = gather.junction
+        self.teardown = bool(teardown)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_chain_wait_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.dst, "dst", a, handle_name_map)
+        a["junction"] = self.junction
+        a["teardown"] = "1" if self.teardown else "0"
+        return a
+
+
 # BINGO XDMA ElementwiseAdd AB (two-operand) (convenience: dst = a + b, int32).
 class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
     def __init__(self, src_a_addr: Union[BingoMemAlloc, int], src_b_addr: Union[BingoMemAlloc, int],

@@ -1524,6 +1524,11 @@ class BingoDFGEmitMixin:
                             f"return kernel_execution_chip_{chiplet_id:02x}();\n")
                     if per_chip:
                         f.write("#endif\n")
+                idle = list(getattr(self, "idle_chiplet_ids", None) or ())
+                if idle:
+                    # the platform's chiplets outside this graph (a workload on part of the package, idle_chiplet_ids):
+                    # nothing to run, and a success status for the testharness, which waits for every compute chip
+                    f.write("    if (" + " || ".join(f"current_chip_id == 0x{c:02x}" for c in idle) + ") return 0;\n")
                 if per_chip:
                     # a per-chiplet image on another chiplet (or built without BINGO_ONLY_CHIP) fails at once
                     f.write("    printf(\"Chip(%x, %x): [Host] this host image does not hold this chiplet's tasks "
