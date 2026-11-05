@@ -112,7 +112,7 @@ sw: $(CFG)
 # - HOST_APP_TYPE: The category of the host application.
 #   Options: host_only, offload_legacy, offload_bingo_sw, offload_bingo_hw
 # - CHIP_TYPE: The target platform configuration.
-#   Options: single_chip, multi_chip
+#   Options: single_chip, multi_chip, fpga_two_chip (offload_legacy only)
 # - WORKLOAD: The specific workload or application name.
 #   Note: Set to 'None' for offload_legacy as it does not have workloads, it only has device applications.
 # - DEV_APP: The target device-side accelerator/application.

@@ -58,6 +58,11 @@ endif
 # Validation of input variables
 ALLOWED_HOST_APP_TYPES = host_only offload_legacy offload_bingo_sw offload_bingo_hw
 ALLOWED_CHIP_TYPES     = single_chip multi_chip
+# The two-board FPGA launcher is an explicit legacy-only build target. It must
+# not enter the generic multi-chip fleet, whose topology may include memory chips.
+ifeq ($(HOST_APP_TYPE),offload_legacy)
+ALLOWED_CHIP_TYPES += fpga_two_chip
+endif
 
 # Skip validation for clean target
 ifneq ($(MAKECMDGOALS),clean)

@@ -1,0 +1,9 @@
+{
+  // Tile counts, per FPGA. Actual local matrix dimensions are
+  // (M * meshRow) x (K * tileSize) times (K * tileSize) x (N * meshCol).
+  // The complete GEMM has twice as many rows; both FPGAs use the same B.
+  M: 2,
+  K: 2,
+  N: 2,
+  array_shape: 1,
+}

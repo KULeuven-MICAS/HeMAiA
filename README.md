@@ -54,7 +54,7 @@ make single-sw HOST_APP_TYPE=<TYPE> CHIP_TYPE=<CHIP> WORKLOAD=<WORKLOAD> DEV_APP
 
 The parameters for `single-sw` (and `apps`) are:
 - `HOST_APP_TYPE`: The category of the host application (`host_only`, `offload_legacy`, `offload_bingo_sw`, `offload_bingo_hw`).
-- `CHIP_TYPE`: The target platform configuration (`single_chip`, `multi_chip`).
+- `CHIP_TYPE`: The target platform configuration (`single_chip`, `multi_chip`, or `fpga_two_chip` for `offload_legacy`).
 - `WORKLOAD`: The specific workload name (e.g., `gemm_tiled`).
 - `DEV_APP`: The target device-side accelerator (e.g., `snax-bingo-offload`).
 

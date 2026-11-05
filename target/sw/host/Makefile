@@ -14,6 +14,8 @@ HOST_ONLY_SUBDIRS = apps/host_only/multi_chip apps/host_only/single_chip
 OFFLOAD_BINGO_HW_SUBDIRS = apps/offload_bingo_hw/multi_chip apps/offload_bingo_hw/single_chip
 OFFLOAD_BINGO_SW_SUBDIRS = apps/offload_bingo_sw/multi_chip apps/offload_bingo_sw/single_chip
 OFFLOAD_LEGACY_SUBDIRS = apps/offload_legacy/multi_chip apps/offload_legacy/single_chip
+# apps/offload_legacy/fpga_two_chip is opt-in through single_sw. Its two-board
+# topology and FPGA clock setup do not belong in the generic software fleet.
 
 SUBDIRS = $(HOST_ONLY_SUBDIRS) $(OFFLOAD_BINGO_HW_SUBDIRS) $(OFFLOAD_BINGO_SW_SUBDIRS) $(OFFLOAD_LEGACY_SUBDIRS)
 
