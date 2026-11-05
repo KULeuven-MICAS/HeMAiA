@@ -466,8 +466,15 @@ void enable_fpu() {
     asm volatile("csrw mstatus, %[mstatus]" : : [mstatus] "r"(mstatus));
 }
 
+// CVA6's CSR_DCACHE is 0x7c1 in the current RTL.
+static inline uint16_t get_d_cache_enable(void) {
+    uint64_t enabled;
+    asm volatile("csrr %0, 0x7c1" : "=r"(enabled) :: "memory");
+    return (uint16_t)enabled;
+}
+
 void set_d_cache_enable(uint16_t ena) {
-    asm volatile("csrw 0x701, %0" ::"r"(ena));
+    asm volatile("csrw 0x7c1, %0" :: "r"(ena) : "memory");
 }
 
 //===============================================================

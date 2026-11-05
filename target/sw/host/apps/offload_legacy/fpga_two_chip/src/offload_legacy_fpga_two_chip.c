@@ -38,24 +38,6 @@ static volatile fpga_boot_mailbox_t *mailbox_on(uint8_t chip_id) {
         chiplet_addr_transform_full(chip_id, offset);
 }
 
-static void configure_fpga_link(uint8_t chip_id) {
-    uint32_t link = 1u << (chip_id == FPGA_EAST_CHIP ? D2D_DIRECTION_EAST
-                                                  : D2D_DIRECTION_WEST);
-
-    // Program LOCAL routing only. The ASIC grid initializer can contact a
-    // memory chip; there is no memory chip in this prototype. Write the mask
-    // directly so the connected port is never briefly marked unavailable.
-    *hemaia_d2d_link_reg(chip_id,
-        HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET) = link;
-    *hemaia_d2d_link_reg(chip_id,
-        HEMAIA_D2D_LINK_MULTICAST_FENCE_REGISTER_REG_OFFSET) =
-        link | (1u << D2D_DIRECTION_THIS_CHIP);
-    asm volatile("fence iorw, iorw" ::: "memory");
-
-    // Keep the FPGA/boot-ROM clock and PHY settings. In particular, do not
-    // reset a link here: the other board may already have sent its READY.
-}
-
 static void wait_for_peer(uint8_t chip_id) {
     volatile fpga_boot_mailbox_t *local = mailbox_on(chip_id);
     uint8_t peer_id = chip_id == FPGA_EAST_CHIP ? FPGA_WEST_CHIP
@@ -93,31 +75,36 @@ static void wait_for_peer(uint8_t chip_id) {
 
 int main(void) {
     uint8_t chip_id = get_current_chip_id();
-
-    // L3 and narrow SPM are cacheable on CVA6. Volatile alone cannot make
-    // incoming D2D writes visible; poll the mailbox with the D-cache disabled.
-    asm volatile("fence iorw, iorw" ::: "memory");
-    set_d_cache_enable(0);
-    asm volatile("fence iorw, iorw" ::: "memory");
-
-    init_uart(get_current_chip_baseaddress(), 32, 1);
     printf("[HeMAiA] Two-FPGA legacy offload, chip %02x\r\n", chip_id);
+
     if (chip_id != FPGA_EAST_CHIP && chip_id != FPGA_WEST_CHIP) {
         printf("[FPGA] Expected EAST board ID 00 or WEST board ID 10\r\n");
         return 1;
     }
 
-    configure_fpga_link(chip_id);
+    printf("[FPGA %02x] Using existing UART/D2D setup\r\n", chip_id);
 
     volatile comm_buffer_t *comm_buffer = (volatile comm_buffer_t *)(uintptr_t)
         chiplet_addr_transform((uint64_t)(uintptr_t)&__narrow_spm_start);
+    printf("[FPGA %02x] Preparing local Snitch launch\r\n", chip_id);
     initialize_comm_buffer((comm_buffer_t *)comm_buffer);
     comm_buffer->chip_id = chip_id;
     enable_sw_interrupts();
     program_snitches(chip_id, comm_buffer);
     asm volatile("fence iorw, iorw" ::: "memory");
 
+    // Both SPM regions are cached in occamy_cva6.sv. Preserve the boot flow's
+    // cache state and bypass cached mailbox reads only for the host handshake.
+    printf("[FPGA %02x] Entering host handshake\r\n", chip_id);
+    uint16_t dcache_enabled = get_d_cache_enable();
+    set_d_cache_enable(0);
+    asm volatile("fence iorw, iorw" ::: "memory");
     wait_for_peer(chip_id);
+    asm volatile("fence iorw, iorw" ::: "memory");
+    set_d_cache_enable(dcache_enabled);
+    asm volatile("fence iorw, iorw" ::: "memory");
+    printf("[FPGA %02x] Host handshake complete; D-cache state restored\r\n",
+           chip_id);
     printf("[FPGA %02x] Both hosts ready; starting local Snitch workload\r\n",
            chip_id);
     wakeup_snitches_cl(chip_id);

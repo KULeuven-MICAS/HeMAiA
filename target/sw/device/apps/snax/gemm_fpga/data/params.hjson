@@ -5,5 +5,6 @@
   M: 2,
   K: 2,
   N: 2,
-  array_shape: 1,
+  // Shape 2 is bank-aligned on both split and tapeout VersaCore clusters.
+  array_shape: 2,
 }

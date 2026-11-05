@@ -15,9 +15,11 @@ wait in the runtime's exit reduction.
 All inputs, the independent golden result, receive buffers and result buffers
 are embedded in the image. The data is in the accelerator's blocked format:
 `A[m,k,row,inner]`, `B[n,k,col,inner]`, `D[m,n,row,col]`. `data/params.hjson`
-contains **tile counts per FPGA**. With the default shape `(1,16,32)` and
-`M=N=K=2`, the complete GEMM is `(4 x 32) * (32 x 64)`; each FPGA produces a
-`2 x 64` INT32 result from INT8 inputs. C is zero and its streamer is disabled.
+contains **tile counts per FPGA**. The default `array_shape=2` is bank-aligned
+on both split and tapeout VersaCore clusters. On `snax_split_cluster`, its shape
+is `(4,4,32)`; with `M=N=K=2`, the complete GEMM is `(16 x 8) * (8 x 64)` and
+each FPGA produces an `8 x 64` INT32 result from INT8 inputs. Matrix dimensions
+follow the selected cluster's shape table. C is zero and its streamer is disabled.
 The UART log prints the local L3 output address, comparison result and cycles.
 
 The device handshake exchanges READY, B_SENT/B_ACK, then one-word final status.

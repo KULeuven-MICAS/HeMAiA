@@ -32,6 +32,7 @@ APPDIR += apps/snax/versacore-matmul-profile-2cluster-4chip-d2d
 APPDIR += apps/snax/versacore-matadd-profile-1cluster-4chip
 APPDIR += apps/snax/gemm-msplit-1cluster-4chip
 APPDIR += apps/snax/gemm-msplit-4cluster-1chip
+APPDIR += apps/snax/gemm_fpga
 # In the future we only need this offload bingo app
 APPDIR += apps/snax/snax-bingo-offload
 

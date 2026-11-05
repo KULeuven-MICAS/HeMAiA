@@ -59,8 +59,10 @@ def make_data(sw, hw):
     rw = streamer["data_reader_writer_params"]
     if rd["temporal_dim"][0] < 3 or rd["temporal_dim"][1] < 3:
         raise ValueError("A and B need at least three temporal loops")
-    if any(dim < 4 for dim in rw["temporal_dim"]):
-        raise ValueError("C and D need at least four temporal loops")
+    # C/D walk serializer beats, N tiles and M tiles. Extra hardware loops are
+    # initialized to bound 1 by run_gemm(), so three loops suffice on split clusters.
+    if any(dim < 3 for dim in rw["temporal_dim"]):
+        raise ValueError("C and D need at least three temporal loops")
 
     # Build logical row-major matrices first; the golden does not depend on the
     # streamer's blocked indexing. Values avoid the -128 receive-buffer sentinel.

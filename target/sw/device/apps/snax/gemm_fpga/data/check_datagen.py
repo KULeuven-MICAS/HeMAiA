@@ -65,7 +65,7 @@ def main():
     parser.add_argument("--hwcfg", required=True, type=Path)
     args = parser.parse_args()
     hw = hjson.loads(args.hwcfg.read_text())
-    sw = {"M": 2, "K": 2, "N": 2, "array_shape": 1}
+    sw = hjson.loads(Path(__file__).with_name("params.hjson").read_text())
     check_stream_walk(hw, sw)
     shapes = hw["snax_versacore_core_template"]["snax_acc_cfg"][0]["snax_versacore_spatial_unrolling"][0]
     checked = 0
@@ -97,6 +97,13 @@ def main():
     arrays = check_stream_walk(split, sw)
     assert arrays["b_spatial"] == [8, 64]
     assert arrays["c_spatial"] == arrays["d_spatial"] == [8, 32]
+
+    # The split cluster has exactly the three C/D loops used by run_gemm().
+    rw["temporal_dim"] = [3, 3]
+    check_stream_walk(split, sw)
+    for dims in ([2, 3], [3, 2]):
+        rw["temporal_dim"] = dims
+        expect_rejection(split, sw, "C and D need at least three temporal loops")
 
     expect_rejection(hw, {**sw, "M": 0}, "positive tile counts")
     expect_rejection(hw, {**sw, "array_shape": len(shapes)}, "absent")
