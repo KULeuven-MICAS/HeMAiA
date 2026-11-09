@@ -353,6 +353,13 @@ def run_in_container(
     if shutil.which("podman") is not None:
         runner_cmd: List[str] = ["podman", "run", "--rm",
                                  "-v", f"{repo_root}:{repo_root}:z"]
+        # Optional memory cap of the container (HEMAIA_CONTAINER_MEM, podman's size syntax) and the systemd slice it
+        # runs in (HEMAIA_SLICE): a generator or compile over the cap is killed alone instead of exhausting the host.
+        mem = os.environ.get("HEMAIA_CONTAINER_MEM", "")
+        if mem and mem != "0":
+            runner_cmd += ["--memory", mem, "--memory-swap", mem]
+        if os.environ.get("HEMAIA_SLICE"):
+            runner_cmd += ["--cgroup-parent", os.environ["HEMAIA_SLICE"]]
         for mount in extra_mounts:
             runner_cmd += ["-v", f"{mount}:{mount}:z"]
         runner_cmd += ["-w", str(working_dir), docker_image]
