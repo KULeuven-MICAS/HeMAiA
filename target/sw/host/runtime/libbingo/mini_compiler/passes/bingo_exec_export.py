@@ -96,9 +96,8 @@ def ring_table(rings, chip: int, mem: int, engine: int) -> dict:
            "slot_bytes": rings.slot_bytes, "split": bool(getattr(rings, "split", False)),
            "n_clusters": getattr(rings, "n_clusters", rings.n_rings), "rings": []}
     for r, entries in enumerate(rings.entries):
-        metas = rings.entry_meta[r] if hasattr(rings, "entry_meta") else [{}] * len(entries)
         chunks, sid, prev = [], 0, None
-        for (src, kind, off, nbytes), m in zip(entries, metas):
+        for src, kind, off, nbytes in entries:
             routed = bool(kind & 1)
             # the prefetcher's run rule (host_kernel_lib.h weight_prefetch_run_of): a run goes on
             # only within one source stream -- the same kind, and the next byte of the same range
@@ -110,9 +109,10 @@ def ring_table(rings, chip: int, mem: int, engine: int) -> dict:
                                        else src + off == ps + po + pn)
                 sid += 0 if cont else 1
             prev = (src, kind, off, nbytes)
-            chunks.append({"nbytes": int(nbytes), "raw_bytes": int(m.get("raw", nbytes)),
-                           "routed": routed, "trailer": bool(kind & 2),
-                           "compressed": bool(m.get("compressed", False)),
+            # raw_bytes and compressed stay in the schema the framework's parser reads: a chunk is pushed
+            # as it is stored
+            chunks.append({"nbytes": int(nbytes), "raw_bytes": int(nbytes),
+                           "routed": routed, "trailer": bool(kind & 2), "compressed": False,
                            "stream": [sid, int(kind)]})
         n_cl = out["n_clusters"]
         out["rings"].append({"rid": r, "cluster": r % n_cl,

@@ -705,6 +705,7 @@ class BingoDFGTransformsMixin:
                         if a != b and before(es[a][1], es[b][0]):
                             g.add_edge(a, n + b)
                 m = nx.algorithms.bipartite.hopcroft_karp_matching(g, top_nodes=list(range(n)))
+                g.clear()    # freed now, not by the cycle collector (see the fast path of the tag allocation)
                 return n - sum(1 for k in m if k < n)
 
             added = 0
@@ -1217,6 +1218,10 @@ class BingoDFGTransformsMixin:
                 match = (nx.algorithms.bipartite.hopcroft_karp_matching(
                              B, top_nodes=list(range(n)))
                          if B.number_of_edges() else {})
+                # A matched networkx graph sits in a reference cycle (its cached views), so dropping it leaves its
+                # edges to the cycle collector, which rarely runs a full pass over a graph this size: every cell's
+                # bipartite graph would stay allocated. Clearing it frees the edges now.
+                B.clear()
                 succ, has_pred = {}, set()
                 for node in sorted(match):
                     if node < n:

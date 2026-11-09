@@ -110,6 +110,17 @@ def _c_max(exprs):
     return out
 
 
+# PAGED TASK LISTS (the DFG's `list_phases`, shared/runtime/bingo_paged_lists.h). With gid_lists a cluster's L1 holds
+# three words of every one of its device tasks for the whole run. With list_phases the per-task words follow the
+# args phases: each cluster's entries of phase p (its global id, then its args address with its kernel's index in
+# the low bits) are copied into one of two L1 windows (p % 2) by a DM task of the graph (PhaseListLoadArgs) right
+# before the phase's args load, which then depends on it alone; the resident tasks' entries stay in L1. Needs
+# gid_lists, args phases with ping-pong regions and the compile-time L1 addresses, and the device app
+# snax-bingo-offload-paged, whose manager reads these lists (the host refuses any other at init).
+def _list_phases_on(dfg) -> bool:
+    return bool(getattr(dfg, "list_phases", False))
+
+
 def _snax_symbol_sig(name: str) -> int:
     """host.h snax_symbol_sig_of_cstr: bytes [20, 28) of the name, little-endian, zero past its
     end."""
@@ -535,8 +546,9 @@ class BingoDFGEmitMixin:
                     block = (["BINGO_GID_LIST_MAGIC", ncores] + core_base +
                              [n.node_id for n in mine])
                     words += block + [0] * (len(block) % 2)
-                mapping_str += _c_static_list(f"__bingo_gid_lists_chip_{chiplet_id:02x}",
-                                              "uint32_t", words)
+                if not _list_phases_on(self):
+                    mapping_str += _c_static_list(f"__bingo_gid_lists_chip_{chiplet_id:02x}",
+                                                  "uint32_t", words)
                 mapping_str += (f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {bases[-1]};\n")
                 mapping_str += (f"uint32_t cluster_dev_base_chip_{chiplet_id:02x}[{len(bases)}] = "
                                 f"{{{', '.join(str(b) for b in bases)}}};\n")
@@ -674,6 +686,8 @@ class BingoDFGEmitMixin:
         f.write("#pragma once\n")
         f.write('#include "libbingo/bingo_api.h"\n')
         f.write('#include "host.h"\n')
+        if _list_phases_on(self):
+            f.write('#include "libbingo/bingo_list_phases.h"\n')
         # bingo_compile_dfg types this `list[str] | None`, and a workload with no data
         # header passes None, which emits no extra include.
         for include in (extra_include_header_list or ()):
@@ -814,7 +828,8 @@ class BingoDFGEmitMixin:
         # With compile-time L1 addresses the device arg list is static data (3e)
         if not self._l1_at_on:
             f.write(f"        uint32_t* device_arg_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
-        f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        if not _list_phases_on(self):
+            f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
         f.write(f"        uint64_t* host_arg_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n")
         f.write(f"        uint64_t* host_kernel_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n\n")
 
@@ -899,6 +914,11 @@ class BingoDFGEmitMixin:
 
         if any(set(g) != {0} for g in args_terms.values()):
             f.write(_ARGS_MAX)
+        # The windows of the paged lists come before the arenas: an allocation's address macro holds the size expression
+        # of the one before it, and an arena's is a term a task, which every list load would then repeat
+        paged = _list_phases_on(self)
+        if paged:
+            self._emit_list_phase_windows(f, chiplet_id, local_nodes)
         f.write("        // 3a. One arena per memory for scratchpads and device args (bump-sliced)\n")
         self._arena_off = {}   # cluster -> the arena's bump offset, as a constant expression
         for cl in sorted(l1_terms):
@@ -1024,6 +1044,8 @@ class BingoDFGEmitMixin:
         host_task_idx = 0
         image_member = self._emit_device_args_images(f, chiplet_id, local_nodes, handle_name_map,
                                                      sp_packed)
+        if paged:
+            self._emit_list_phase_tables(f, chiplet_id, image_member, dev_kernel_names)
         # With compile-time L1 addresses every device arg pointer is a constant: the list is
         # static data (3e) instead of one store a task
         arg_entries = {} if self._l1_at_on else None
@@ -1144,6 +1166,9 @@ class BingoDFGEmitMixin:
                             f.write(f"        __cerf_gids_{node.node_id}[{expert_idx}] = {cerf_gid};\n")
 
         num_dev = dev_bases[-1] if dev_bases is not None else len(kernel_idx)
+        if paged:
+            # the paged lists (_emit_list_phase_tables) hold every device task's args address and kernel
+            arg_entries, kernel_idx = None, {}
         if kernel_idx or arg_entries:
             f.write("\n        // 3e. Device arg and kernel lists\n")
         if arg_entries is not None:
@@ -1174,6 +1199,148 @@ class BingoDFGEmitMixin:
                         f"                           chiplet_addr_transform_full(0x{chiplet_id:02x}, "
                         f"(uint64_t)(uintptr_t)&{img_var}),\n"
                         f"                           sizeof({img_t}));\n")
+
+    def _list_phase_layout(self, chiplet_id, local_nodes):
+        """PAGED TASK LISTS: {cluster: (phases, resident)} of this chiplet, `phases[p][r]` the device tasks of args
+        phase p on core r and `resident[r]` core r's resident ones, each in dispatch order (bingo_stream_order).
+        Checks that every core's tasks run in phase order and that every phase-p args load depends on its list
+        load alone, so the args checks (_check_args_phase_order) hold for the windows too."""
+        if not (getattr(self, "gid_lists", False) and getattr(self, "compact_task_tables", False)
+                and self._l1_at_on and getattr(self, "args_pingpong", False)):
+            raise ValueError("list_phases needs gid_lists, compact_task_tables, the compile-time L1 addresses "
+                             "(static_l1 with packed slots, static_args_image, fast_host_init) and ping-pong "
+                             "args phases")
+        pos = {n.node_id: i for i, n in enumerate(self.bingo_stream_order())}
+        phased = _args_phased(local_nodes)
+        k = self.num_cores_per_cluster
+        dev = sorted((n for n in local_nodes if (n.kernel_name or "").startswith("__snax")),
+                     key=lambda n: pos[n.node_id])
+        out = {}
+        for cl in range(self.num_clusters_per_chiplet):
+            mine = [n for n in dev if n.assigned_cluster_id == cl]
+            groups = [_args_group(n, phased) for n in mine]
+            nph = max([g for g in groups if g != "r"], default=0) + 1
+            phases = [[[] for _ in range(k)] for _ in range(nph)]
+            resident = [[] for _ in range(k)]
+            last = {}
+            for n, g in zip(mine, groups):
+                r = n.assigned_core_id
+                if not 0 <= r < k:
+                    raise ValueError(f"list_phases: {n.node_name} on core {r} of a {k}-core cluster")
+                if g == "r":
+                    resident[r].append(n)
+                    continue
+                if g < last.get(r, 0):
+                    raise ValueError(f"list_phases: on cluster {cl} core {r}, {n.node_name} (phase {g}) runs after "
+                                     f"a task of phase {last[r]}")
+                last[r] = g
+                phases[g][r].append(n)
+            out[cl] = (phases, resident)
+        loads = {}
+        for n in local_nodes:
+            ka = getattr(n, "kernel_args", None)
+            if hasattr(ka, "list_phase"):
+                loads[("l", n.assigned_cluster_id, ka.list_phase)] = n
+            elif getattr(n, "args_resident", False) and hasattr(ka, "phase") and hasattr(ka, "cluster"):
+                loads[("a", n.assigned_cluster_id, int(ka.phase))] = n
+        for cl, (phases, _) in out.items():
+            for p in range(1, len(phases)):
+                ld, lld = loads.get(("a", cl, p)), loads.get(("l", cl, p))
+                if ld is None or lld is None:
+                    raise ValueError(f"list_phases: cluster {cl} phase {p} has no "
+                                     f"{'args' if ld is None else 'list'} load")
+                if set(self.predecessors(ld)) != {lld}:
+                    raise ValueError(f"list_phases: {ld.node_name} must depend on {lld.node_name} alone")
+        return out
+
+    def _emit_list_phase_windows(self, f, chiplet_id, local_nodes):
+        """PAGED TASK LISTS: each cluster's two windows in its L1, and the place and size of each phase's
+        entries in the chiplet's list table (macros the list loads' args are initialised with)."""
+        cid = f"{chiplet_id:02x}"
+        self._lp_layout = self._list_phase_layout(chiplet_id, local_nodes)
+        f.write("        // 3c-0. Paged task lists: the two windows of each cluster, each phase's entries\n")
+        off = 0
+        self._lp_offsets = {}
+        for cl, (phases, resident) in sorted(self._lp_layout.items()):
+            counts = [sum(len(x) for x in ph) for ph in phases]
+            for p, c in enumerate(counts):
+                bytes_ = c * 4 * 2
+                self._lp_offsets[(cl, p)] = (off, bytes_)
+                for mac, v in ((f"__bingo_lp_off_chip{cid}_cl{cl}_p{p}", off),
+                               (f"__bingo_lp_bytes_chip{cid}_cl{cl}_p{p}", bytes_)):
+                    f.write(f"#define {mac} {v}u\n")
+                    self._l1_at_names.add(mac)
+                off += 2 * c
+            for w in (0, 1):
+                size = max([8] + [counts[p] * 8 for p in range(w, len(counts), 2)])
+                self._emit_l1_alloc(f, chiplet_id, cl, f"__bingo_lp_win_chip{cid}_cl{cl}_w{w}", size,
+                                    f"  // phases {w}, {w + 2}, ...: {size} B")
+        self._lp_words = off
+        f.write("\n")
+
+    def _emit_list_phase_tables(self, f, chiplet_id, image_member, dev_kernel_names):
+        """PAGED TASK LISTS: the chiplet's list table (every cluster's phases, back to back), the headers the
+        host copies into each cluster's L1 at init (bingo_hw_scheduler_init_list_phases; their kernel table is
+        filled there) and where each cluster's header and phase 0 are."""
+        cid = f"{chiplet_id:02x}"
+        n_fn = len(dev_kernel_names)
+        if n_fn > 64:
+            raise ValueError(f"list_phases: {n_fn} device kernels on chiplet 0x{cid}, an entry holds 64")
+        self._lp_n_fn = max(n_fn, 1)
+
+        def entry(n):
+            kidx = dev_kernel_names.index(n.kernel_name)
+            if n.node_id in image_member:
+                img_var, img_t, member, _, l1_var, l1_at = image_member[n.node_id]
+                arg = f"(uint32_t)({l1_at} + __builtin_offsetof({img_t}, {member}))"
+            elif n.kernel_args or "exit" in (n.kernel_name or ""):
+                raise ValueError(f"list_phases: {n.node_name} has args outside the static images")
+            else:
+                arg = "0u"
+            return [str(n.node_id), f"({arg} | {kidx}u)"]
+
+        lists = []
+        hdr, info = [], []
+        k = self.num_cores_per_cluster
+        for cl, (phases, resident) in sorted(self._lp_layout.items()):
+            for ph in phases:
+                for r in range(k):
+                    for n in ph[r]:
+                        lists += entry(n)
+            nph = len(phases)
+            block = ["BINGO_GID_LIST_PAGED_MAGIC", k, nph, n_fn,
+                     f"(uint32_t)(__bingo_lp_win_chip{cid}_cl{cl}_w0_at)",
+                     f"(uint32_t)(__bingo_lp_win_chip{cid}_cl{cl}_w1_at)"]
+            block += [sum(len(resident[x]) for x in range(r)) for r in range(k + 1)]
+            for ph in phases:
+                block += [sum(len(ph[x]) for x in range(r)) for r in range(k + 1)]
+            block += [0] * n_fn
+            for r in range(k):
+                for n in resident[r]:
+                    block += entry(n)
+            block += [0] * (len(block) % 2)
+            p0_off, p0_bytes = self._lp_offsets[(cl, 0)]
+            info.append(f"{{{len(hdr)}u, {len(block)}u, {p0_off}u, {p0_bytes // 4}u}}")
+            hdr += block
+        if len(lists) != self._lp_words:
+            raise AssertionError("list_phases: the list table and its offsets disagree")
+        f.write("        // 3c-1. Paged task lists: the entries of every phase, the clusters' headers\n")
+        f.write(_c_static_list(f"__bingo_lp_lists_chip_{cid}", "uint32_t", lists, per_line=2))
+        sec = ', section(".bingo_chip.data")' if getattr(self, "per_chip_image", False) else ""
+        vals = [str(v) for v in hdr]
+        rows = [", ".join(vals[i:i + 8]) for i in range(0, len(vals), 8)]
+        f.write(f"static uint32_t __bingo_lp_hdr_chip_{cid}[{len(vals)}] __attribute__((aligned(8){sec})) = {{\n    " +
+                ",\n    ".join(rows) + "\n};\n")
+        f.write(f"static const bingo_lp_cluster_t __bingo_lp_cl_chip_{cid}[{len(info)}] = {{" +
+                ", ".join(info) + "};\n")
+        f.write(f"        const uint64_t __bingo_lp_win0_chip_{cid}[{len(info)}] = {{" +
+                ", ".join(f"__bingo_lp_win_chip{cid}_cl{cl}_w0" for cl in sorted(self._lp_layout)) + "};\n")
+        # an entry's low six bits are its kernel index: every args image lands 64-byte aligned
+        for l1_var in sorted({v[4] for v in image_member.values()}):
+            f.write(f"        if ({l1_var} & {64 - 1}u) host_abort(BINGO_EXIT_LAYOUT);\n")
+        if not n_fn:
+            f.write(f"        const uint32_t __bingo_fn_addrs_chip{cid}[1] = {{0u}};\n")
+        f.write("\n")
 
     def _check_args_phase_order(self, local_nodes):
         """ARGS PHASES: the region of a cluster's phase-p args is taken by the next phase's load,
@@ -1377,7 +1544,13 @@ class BingoDFGEmitMixin:
         f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        if getattr(self, "gid_lists", False):
+        if _list_phases_on(self):
+            f.write(f"        bingo_hw_scheduler_init_list_phases(__bingo_lp_hdr_chip_{cid}, __bingo_lp_cl_chip_{cid},\n"
+                    f"                                __bingo_lp_win0_chip_{cid}, __bingo_lp_lists_chip_{cid},\n"
+                    f"                                __bingo_fn_addrs_chip{cid}, {self._lp_n_fn}u,\n"
+                    f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{cid},\n"
+                    f"                                {n_launch});\n\n")
+        elif getattr(self, "gid_lists", False):
             f.write(f"        bingo_hw_scheduler_init_gid_lists((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
             f.write(f"                                cluster_dev_base_chip_{chiplet_id:02x},\n")
