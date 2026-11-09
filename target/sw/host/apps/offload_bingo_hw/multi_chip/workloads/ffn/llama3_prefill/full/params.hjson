@@ -32,7 +32,6 @@
     head: 4
     batch_head: 1
   }
-  weight_crest: false
   bcast: bcast_l1
   reduce: chain
   sync: edge

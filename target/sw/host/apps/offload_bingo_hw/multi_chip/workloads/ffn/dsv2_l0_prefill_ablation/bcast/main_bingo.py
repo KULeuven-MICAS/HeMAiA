@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""The FFN ablation ladder, rung bcast: DeepSeek-V2-Lite's dense FFN (layer 0), 256 tokens in two passes, X from HBM
+"""The FFN ablation ladder at 64 tokens, rung bcast: DeepSeek-V2-Lite's dense FFN (layer 0), one pass on 16 chiplets, X from HBM
 (params.hjson); the driver is ../../common/ffn_stages_mc.py."""
 
 import os

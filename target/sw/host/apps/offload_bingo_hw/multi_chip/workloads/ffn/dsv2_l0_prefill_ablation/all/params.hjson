@@ -1,15 +1,15 @@
-// all: R4, fused with per-edge synchronisation: every cross-chip dependency a BINGO hardware edge, no barrier (sync
-// edge); the params of ../../dsv2_l0_prefill/full. DeepSeek-V2-Lite's dense FFN (layer 0: 2,048 -> 10,944 -> 2,048),
-// the checkpoint's weights in INT4, a fresh 256-token prompt in two passes of 128 rows on 16 + 4 chiplets, X from the
-// root memory chip's HBM; the mapping, chunks, slices and buffers of ../../dsv2_l0_prefill/full.
+// all: the paper's FFN ablation at 64 tokens on 16 chips, R3, every mechanism: X by one multicast, one ChainGather of 8
+// slices a cluster, per-edge BINGO sync. DeepSeek-V2-Lite's dense FFN (layer 0: 2,048 -> 10,944 -> 2,048), the
+// checkpoint's weights in INT4, a fresh 64-token prompt in one pass of 64 rows, X from the root memory chip's HBM. The
+// same params as ../../scaling/all_n16, whose run stg_poc64_g8 is the paper's R3.
 {
   stage: "full"
   num_chiplets: 16
   num_clusters: 2
   model: dsv2-lite-l0
   seed: 1
-  tokens: 256
-  rows: 128
+  tokens: 64
+  rows: 64
   wbits: 4
   blocks: 3
   dn_cols: 128
@@ -24,7 +24,6 @@
     head: 4
     batch_head: 1
   }
-  weight_crest: false
   bcast: bcast_l1
   reduce: chain
   sync: edge
@@ -59,4 +58,14 @@
   // every cluster's args in phases of 10,000 B, two alternating L1 regions (workloads/common/args_phases.py): at
   // T = 256 the root's args, beside its static buffers, leave no room for the SIMD kernels' scratch pools
   args_phase_bytes: 10000
+  // GEMMs (../../common/ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each
+  // configured ahead of its operands, a start that repeats its cluster's previous configuration writing only
+  // addresses (gemm_reuse), the configure ahead of the waits before its start (gemm_cfg_hoist)
+  gemm_async: true
+  gemm_shape_l1: true
+  gemm_cfg_ahead: true
+  gemm_cfg_hoist: true
+  // one ChainGather a cluster: chain_group = out_slots = every slice
+  chain_group: 8
+  out_slots: 8
 }

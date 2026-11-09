@@ -39,17 +39,16 @@ OFFLOAD_H = $(MK_DIR)offload_bingo_hw.h
 HBM_MANIFEST = $(MK_DIR)build/hbm/manifest.txt
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
-# snax_cluster's DeepSeek-V2-Lite package: the device-arithmetic models the golden uses
-DSV2_DIR = $(SNITCH_ROOT)/target/snitch_cluster/sw/apps/dsv2
 PLATFORM_H = $(REPO_ROOT)/target/sw/shared/platform/generated/occamy.h
 WEIGHTS_MANIFEST = $(REPO_ROOT)/target/sim/automation/sweep/llm_blocks/ffn/cache/manifest.json
 
 BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h \
-                 $(wildcard $(DSV2_DIR)/util/*.py) \
                  $(wildcard $(FFN_ROOT)/common/*.py) \
-                 $(wildcard $(APP_ROOT)/workloads/common/*.py) \
+                 $(wildcard $(REPO_ROOT)/util/sim/multichip/*.py $(REPO_ROOT)/util/sim/llm/*.py) \
+                 $(addprefix $(REPO_ROOT)/util/sim/common/,driver.py fp.py hwmodel.py layout.py pack.py) \
+                 $(REPO_ROOT)/util/sim/simd/simd.py $(REPO_ROOT)/util/sim/llm/config.json $(REPO_ROOT)/util/sim/gemm/gemv_utils.py \
                  $(WEIGHTS_MANIFEST)
 
 # ONE run makes all three: a grouped target (&:, GNU make >= 4.3)
@@ -59,8 +58,7 @@ $(DATA_H) $(OFFLOAD_H) $(HBM_MANIFEST) &: $(MK_DIR)main_bingo.py $(DATA_CFG) $(P
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
 		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_split_cluster.hjson \
-		--platformcfg $(PLATFORM_H) \
-		--dsv2_dir $(DSV2_DIR)
+		--platformcfg $(PLATFORM_H)
 
 INCDIRS += $(MK_DIR)
 PARTIAL_OUTPUTS += $(DATA_H)

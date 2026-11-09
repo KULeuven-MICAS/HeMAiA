@@ -6,7 +6,7 @@
 """Data of the ffn workloads: one LLM's dense SwiGLU FFN at its real size, from its checkpoint.
 
 THE WEIGHTS are the checkpoint's own (sweep/llm_blocks/ffn/fetch_weights.py caches them as stored, BF16),
-quantised with snax_cluster's util/pack.py: symmetric INT4 per output column. Unlike the dsv2
+quantised with util/sim/common/pack.py: symmetric INT4 per output column. Unlike the dsv2
 golden, the RMSNorm gain in front of the FFN is NOT folded into the rows of gate and up: a
 real checkpoint's gain spans 30x across channels, so folded, a few rows set every column's
 scale and most weights round to zero. The gain is applied to the normed input instead, before
@@ -17,8 +17,8 @@ are the calibration samples; T tokens are T rows of every activation below. Ever
 calibration samples' absolute maximum mapped onto 127 (util/calib.py): the normed input hq and
 the SwiGLU output a8.
 
-THE GOLDEN is the device's own arithmetic (util/hwmodel.py, util/fp.py; its GEMVs on float64 BLAS, exact_gemv), stage by stage, for the
-tensor-parallel mapping the driver builds (ffn_prefill_mc.py):
+THE GOLDEN is the device's own arithmetic (util/sim/common/hwmodel.py and fp.py; its GEMVs on float64 BLAS, gemv_utils.exact_gemv), stage by
+stage, for the tensor-parallel mapping the driver builds (ffn_prefill_mc.py):
 
     hq        = quant_i8(rmsnorm(x16) (.) gain, s_h)       on the root, staged
     g16[g]    = d_port(hq @ Wgu[:, cols g], k_x) (.) s_gu   every cluster g its columns
@@ -40,41 +40,10 @@ import sys
 
 import numpy as np
 
-RMS_EPS = 1e-6
-
-
-def import_util(dsv2_dir):
-    """snax_cluster's dsv2 golden package (`util`): fp, hwmodel, layout, pack, reference."""
-    dsv2_dir = os.path.abspath(dsv2_dir)
-    if dsv2_dir not in sys.path:
-        sys.path.insert(0, dsv2_dir)
-    import util
-    from util import fp, hwmodel, layout, pack, reference
-    where = os.path.dirname(os.path.abspath(util.__file__))
-    if where != os.path.join(dsv2_dir, "util"):
-        raise ImportError(f"imported `util` from {where}, not from {dsv2_dir}/util")
-    return fp, hwmodel, layout, pack, reference
-
-
-def exact_gemv(fp, xq, Wq, k):
-    """util/hwmodel.gemv on float64 BLAS (numpy has no BLAS for integers): every product and partial sum of INT8 x
-    INT4/INT8 over the model's depths is an integer far below 2^53, so the result is the INT32 accumulation bit for bit;
-    a bound at or above that falls back to the integer product."""
-    x, w = np.asarray(xq), np.asarray(Wq)
-    bound = float(np.max(np.abs(x), initial=0)) * float(np.max(np.abs(w), initial=0)) * x.shape[-1]
-    if bound >= 2.0 ** 52:
-        acc = x.astype(np.int64) @ w.astype(np.int64)
-    else:
-        acc = np.rint(x.astype(np.float64) @ w.astype(np.float64)).astype(np.int64)
-    return fp.d_port(acc, k), acc
-
-
-def _bf16(path, shape):
-    u = np.fromfile(path, dtype="<u2")
-    if u.size != int(np.prod(shape)):
-        raise ValueError(f"{path}: {u.size} values, expected {shape}")
-    return (u.astype(np.uint32) << 16).view(np.float32).reshape(shape)
-
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "llm"))
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "gemm"))
+from gemv_utils import a_row_bytes, exact_gemv  # noqa: E402
+from model_data import RMS_EPS, import_golden, read_bf16  # noqa: E402
 
 # Synthetic models (no checkpoint): name -> builder(inter) returning load_weights' dict. A workload registers its own
 # (workloads/llama3/common/llama3_data.py) before the driver reads its params' `model`.
@@ -100,7 +69,7 @@ def load_weights(cache_dir, model, inter=None):
     for role, d in t.items():
         if d["dtype"] != "BF16":
             raise ValueError(f"{model}: {d['name']} is {d['dtype']}, the FFN data reads BF16")
-    rd = lambda role, shape: _bf16(os.path.join(base, t[role]["name"] + ".bin"), shape)
+    rd = lambda role, shape: read_bf16(os.path.join(base, t[role]["name"] + ".bin"), shape)
     n = I if inter is None else int(inter)
     if not 0 < n <= I:
         raise ValueError(f"params inter={inter}: {model} has {I} intermediate columns")
@@ -112,14 +81,6 @@ def load_weights(cache_dir, model, inter=None):
                 gain=rd("gain", (H,)))
 
 
-def a_row_bytes(v):
-    """int8 values as a_row: value c at (c // 4) * 8 + c % 4, the rest 0 (the GEMV's x)."""
-    v = np.asarray(v, dtype=np.int8).reshape(-1)
-    o = np.zeros(2 * v.size, dtype=np.int8)
-    o.reshape(-1, 8)[:, :4] = v.reshape(-1, 4)
-    return o
-
-
 class FfnData:
     """The FFN's weights packed for the device, its scales, and the golden of one token.
 
@@ -127,10 +88,10 @@ class FfnData:
     same rows of down. `chips`: per chip index its clusters (global numbers). `order`: the chip
     indices in the order the reduce folds them into the root's (the root first)."""
 
-    def __init__(self, cache_dir, model, dsv2_dir, seed=1, n_calib=8, wbits=4, tokens=1, inter=None, rows=None):
+    def __init__(self, cache_dir, model, seed=1, n_calib=8, wbits=4, tokens=1, inter=None, rows=None):
         """`rows` (a block of a whole layer): {x16, cal} -- the tokens [T, H] FP16 the FFN runs on and the rows its static
         scales are calibrated on -- instead of seeded draws."""
-        fp, hm, layout, pack, ref = import_util(dsv2_dir)
+        fp, hm, layout, pack, ref = import_golden()
         self.fp, self.hm, self.layout, self.packmod = fp, hm, layout, pack
         if wbits != 4:
             raise ValueError(f"params wbits={wbits}: the FFN streams INT4 weights")
