@@ -10,7 +10,7 @@
 #   ./run.sh validate              chain, P = 2,4,8,16, 128 KiB            -> logs/validate.log
 #   ./run.sh run <tag> <plusargs>  any point, e.g. ./run.sh run p4_32k +BYTES=32768 +PLIST=4
 #   ./run.sh table [log...]        the [REDUCE] lines of logs as a table
-#   ./run.sh sweep                 every arm x payload, all P (M7), JOBS at a time -> results/logs/
+#   ./run.sh sweep                 every arm x payload, all P, JOBS at a time -> results/logs/
 #   ./run.sh parse                 results/logs -> results/reduce.csv
 #
 # Environment

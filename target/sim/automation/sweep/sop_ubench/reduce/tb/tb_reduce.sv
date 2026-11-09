@@ -46,10 +46,10 @@ module tb_reduce
   /// 0: every narrow access is granted at once.
   parameter bit TcdmBanked = 1'b1,
   /// hemaia_d2d_link FramerTxWBufBeats of every link. 64 is the RTL default, which occamy_chip and
-  /// hemaia_mem_chip use; 0 (the framer before 2026-10-13) is a diagnostic only.
+  /// hemaia_mem_chip use; 0 (a framer that forwards a write burst as it comes) is a diagnostic only.
   parameter int unsigned LinkTxWBufBeats = 64,
   /// Software cost of one hand-off in the software arms, in cluster cycles, paid by the waiting
-  /// side after the flag has landed (the archived full-package runs: ~250 per tree level).
+  /// side after the flag has landed.
   parameter int unsigned SwHandoffCc = 250,
   /// BINGO manager internal latencies, in its 1 GHz clock cycles, measured on its RTL
   /// (sched/tb_sched_latency.sv, sched/sched_latency.log):
