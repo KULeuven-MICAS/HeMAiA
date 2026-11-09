@@ -7,5 +7,6 @@
     // Largest participant count to sweep. Rectangles above this are skipped, so the
     // same source gives a small smoke build (4) or the full sweep (16).
     max_p: 16
-    num_clusters: 1
+    // The platform's clusters per chiplet (16c4m: 2); every probe runs on cluster 0.
+    num_clusters: 2
 }

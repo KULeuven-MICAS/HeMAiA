@@ -67,10 +67,13 @@ DMA_CORE = _ROLES["dm"]
 HOST_CORE = _ROLES["host"]
 
 # Rectangle bottom-right per P; also the furthest chiplet from 0x00 in that rectangle,
-# since chip_id = (x << 4) | y and both coordinates are maximal there.
+# since chip_id = (x << 4) | y and both coordinates are maximal there. P counts the
+# rectangle's COMPUTE chips: a memory chip inside it (16c4m's middle column, x = 2) runs no
+# code and gets no task. None = the whole grid.
 #   P=2 -> 0x01 (1x2), 1 hop     P=8  -> 0x13 (2x4), 4 hops
-#   P=4 -> 0x11 (2x2), 2 hops    P=16 -> 0x33 (4x4), 6 hops
-RECT_BR = [0x01, 0x11, 0x13, 0x33]
+#   P=4 -> 0x11 (2x2), 2 hops    P=16 -> the whole grid: 0x33 (4x4), 6 hops;
+#                                        0x43 on 16c4m (5x4), 7 hops
+RECT_BR = [0x01, 0x11, 0x13, None]
 
 KIND_WARMUP, KIND_LOCAL, KIND_1TO1, KIND_1TOALL = 0, 1, 2, 3
 
@@ -107,12 +110,24 @@ def main():
     if not guard_cluster_count(param, platform, args.output_dir, args.output_offload_file_name):
         return
     available = set(platform["chiplet_ids"])
+    full_br = (max(c >> 4 for c in available) << 4) | max(c & 0x0F for c in available)
+
+    def participants(br):
+        return [c for c in rect_chips(br) if c in available]
 
     # Rectangles this platform can express, up to the cap.
-    rects = [br for br in RECT_BR
-             if len(rect_chips(br)) <= max_p and set(rect_chips(br)) <= available]
+    rects = []
+    for br in RECT_BR:
+        br = full_br if br is None else br
+        if ((br >> 4) <= (full_br >> 4) and (br & 0x0F) <= (full_br & 0x0F)
+                and len(participants(br)) <= max_p and br not in rects):
+            rects.append(br)
     if not rects:
         raise ValueError(f"{APP_NAME}: no rectangle fits platform {sorted(available)}")
+    for br in rects:
+        if br not in available:
+            raise ValueError(f"{APP_NAME}: rectangle corner {br:#04x}, the one-to-one target, "
+                             f"is not a compute chip")
     warm_br = rects[-1]
 
     dfg = BingoDFG(
@@ -172,13 +187,13 @@ def main():
 
     # phase 0: untimed warm-up over the largest rectangle -- every participating chiplet
     # touched once, so no later phase pays a first-touch cost.
-    warm_chips = [c for c in rect_chips(warm_br) if c != SRC_CHIP]
-    emit_phase(KIND_WARMUP, warm_chips, len(rect_chips(warm_br)), 0, "warmup")
+    warm_chips = [c for c in participants(warm_br) if c != SRC_CHIP]
+    emit_phase(KIND_WARMUP, warm_chips, len(participants(warm_br)), 0, "warmup")
 
     for br in rects:
-        p = len(rect_chips(br))
+        p = len(participants(br))
         emit_phase(KIND_1TO1, [br], p, hops(br), f"1to1_p{p}")
-        others = [c for c in rect_chips(br) if c != SRC_CHIP]
+        others = [c for c in participants(br) if c != SRC_CHIP]
         emit_phase(KIND_1TOALL, others, p, hops(br), f"1toall_p{p}")
 
     # local control, last (see the header note on phase ordering)

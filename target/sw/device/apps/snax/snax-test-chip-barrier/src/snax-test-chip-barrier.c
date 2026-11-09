@@ -74,18 +74,21 @@
 // non-participant must skip.
 #define BARRIERS_PER_RECT (N_WARMUP + N_LAT_ITERS + N_ROUNDS * 2u)
 
-// Rectangles tried, smallest first. Each is anchored at chip 0x00, so chip 0x00 is the
-// master throughout and never changes role.
-//   0x01 -> 1 x 2 = 2      0x11 -> 2 x 2 = 4
-//   0x13 -> 2 x 4 = 8      0x33 -> 4 x 4 = 16
-// Entries that do not fit the grid this binary was built for are skipped at run time, so
-// the same source runs on a 2x2 cfg (P = 2, 4) and a 4x4 one (P = 2, 4, 8, 16).
-#define MAX_RECTS 4u
-static const uint8_t RECT_BR[MAX_RECTS] = {0x01, 0x11, 0x13, 0x33};
-#define RECT_TL ((uint8_t)0x00)
-
-// The rendezvous rectangle: the whole compute grid, so every chip takes part.
+// The whole compute grid, so every chip takes part: the rendezvous rectangle and the
+// largest one swept.
 #define FULL_BR ((uint8_t)((((N_CHIPLETS_X)-1) << 4) | (((N_CHIPLETS_Y)-1) & 0x0F)))
+
+// Rectangles tried, smallest first. Each is anchored at chip 0x00, so chip 0x00 is the
+// master throughout and never changes role. P counts the COMPUTE chips of a rectangle: a
+// memory chip inside one (16c4m's middle column, x = 2) runs no code and takes no part.
+//   0x01 -> 1 x 2 = 2      0x11 -> 2 x 2 = 4
+//   0x13 -> 2 x 4 = 8      FULL_BR -> the whole grid: 0x33 on a 4x4 cfg, 0x43 on 16c4m = 16
+// Entries that do not fit the grid this binary was built for, or repeat an earlier one, are
+// skipped at run time, so the same source runs on a 2x2 cfg (P = 2, 4), a 4x4 one and
+// 16c4m (P = 2, 4, 8, 16).
+#define MAX_RECTS 4u
+static const uint8_t RECT_BR[MAX_RECTS] = {0x01, 0x11, 0x13, FULL_BR};
+#define RECT_TL ((uint8_t)0x00)
 
 // Cross-chip flag slots, one word per participant, at a fixed TCDM offset. Every chip has
 // an identical TCDM layout, so participant k's slot is at the same address everywhere and
@@ -138,6 +141,23 @@ static inline int in_rect(uint8_t chip_id, uint8_t tl, uint8_t br) {
            (chip_id & 0x0F) >= (tl & 0x0F) && (chip_id & 0x0F) <= (br & 0x0F);
 }
 
+static inline int is_compute_chip(uint8_t chip_id) {
+#ifdef HEMAIA_IS_COMPUTE_CHIP
+    return HEMAIA_IS_COMPUTE_CHIP(chip_id);
+#else
+    return 1;
+#endif
+}
+
+// The participants of the rectangle (tl, br): its compute chips.
+static inline uint32_t rect_compute_count(uint8_t tl, uint8_t br) {
+    const uint32_t cells = sw_barrier_participant_count(tl, br);
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < cells; i++)
+        n += is_compute_chip(sw_barrier_chip_of_index(i, tl, br));
+    return n;
+}
+
 // Widen to the full grid and re-join every chip. Always the broadcast barrier -- see the
 // aliasing note in the file header.
 static inline void rendezvous(void) {
@@ -165,12 +185,18 @@ static int sweep_mechanism(bool use_sw, uint32_t phase) {
             res->lat_max = 0;
         }
 
-        // Skip rectangles that do not fit this grid.
+        // Skip rectangles that do not fit this grid, and repeats (a 2x2 grid's FULL_BR is
+        // 0x11).
         if ((br >> 4) >= (uint8_t)(N_CHIPLETS_X) ||
             (br & 0x0F) >= (uint8_t)(N_CHIPLETS_Y)) {
             continue;
         }
-        const uint32_t p_count = sw_barrier_participant_count(RECT_TL, br);
+        bool repeat = false;
+        for (uint32_t q = 0; q < r; q++) repeat |= RECT_BR[q] == br;
+        if (repeat) continue;
+        // Cells of the rectangle, memory chips included: the slot indices run over these.
+        const uint32_t cells = sw_barrier_participant_count(RECT_TL, br);
+        const uint32_t p_count = rect_compute_count(RECT_TL, br);
 
         // Every chip is here, in lockstep. Now narrow the rectangle.
         snrt_chip_barrier_set_rect(RECT_TL, br);
@@ -216,8 +242,9 @@ static int sweep_mechanism(bool use_sw, uint32_t phase) {
                 const uint32_t tag = sweep_tag(phase, r, round);
 
                 if (snrt_global_core_idx() == 0) {
-                    for (uint32_t p = 0; p < p_count; p++) {
+                    for (uint32_t p = 0; p < cells; p++) {
                         uint8_t target = sw_barrier_chip_of_index(p, RECT_TL, br);
+                        if (!is_compute_chip(target)) continue;
                         if (target == chip_id) {
                             flags[my_idx] = tag;
                         } else {
@@ -232,7 +259,9 @@ static int sweep_mechanism(bool use_sw, uint32_t phase) {
                     // Tags increase strictly across the whole run, so a slot left over
                     // from an earlier rectangle holds a different value and is caught
                     // here rather than passing by coincidence.
-                    for (uint32_t p = 0; p < p_count; p++) {
+                    for (uint32_t p = 0; p < cells; p++) {
+                        if (!is_compute_chip(sw_barrier_chip_of_index(p, RECT_TL, br)))
+                            continue;
                         if (flags[p] != tag) err++;
                     }
                 }

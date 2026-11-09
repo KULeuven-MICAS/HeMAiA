@@ -113,11 +113,15 @@
 #define SYNC_SRC_CHIP ((uint8_t)0x00)  // source, and where every timestamp lives
 
 // Rectangle bottom-right per P. Also the furthest chiplet from 0x00 in that rectangle,
-// since chip_id = (x << 4) | y and both coordinates are maximal there.
+// since chip_id = (x << 4) | y and both coordinates are maximal there. P counts the
+// rectangle's COMPUTE chips: a memory chip inside it (16c4m's middle column, x = 2) runs no
+// code and gets no task.
 //   P = 2  -> 0x01 (1x2), 1 hop      P = 8  -> 0x13 (2x4), 4 hops
-//   P = 4  -> 0x11 (2x2), 2 hops     P = 16 -> 0x33 (4x4), 6 hops
+//   P = 4  -> 0x11 (2x2), 2 hops     P = 16 -> the whole grid: 0x33 (4x4), 6 hops;
+//                                              0x43 on 16c4m (5x4), 7 hops
 #define SYNC_NUM_RECTS 4u
-static const uint8_t SYNC_RECT_BR[SYNC_NUM_RECTS] = {0x01, 0x11, 0x13, 0x33};
+#define SYNC_FULL_BR ((uint8_t)((((N_CHIPLETS_X)-1) << 4) | (((N_CHIPLETS_Y)-1) & 0x0F)))
+static const uint8_t SYNC_RECT_BR[SYNC_NUM_RECTS] = {0x01, 0x11, 0x13, SYNC_FULL_BR};
 
 #define SYNC_MODE_ONE_TO_ONE 0u
 #define SYNC_MODE_ONE_TO_ALL 1u
@@ -145,8 +149,25 @@ typedef struct {
 static inline uint8_t sync_chip_at(uint32_t x, uint32_t y) {
     return (uint8_t)((x << 4) | (y & 0x0Fu));
 }
-static inline uint32_t sync_rect_count(uint8_t br) {
-    return ((uint32_t)(br >> 4) + 1u) * ((uint32_t)(br & 0x0Fu) + 1u);
+static inline int sync_is_compute(uint8_t chip) {
+#ifdef HEMAIA_IS_COMPUTE_CHIP
+    return HEMAIA_IS_COMPUTE_CHIP(chip);
+#else
+    return 1;
+#endif
+}
+static inline uint32_t sync_rect_count(uint8_t br) {  // compute chips in the rectangle
+    uint32_t n = 0;
+    for (uint32_t x = 0; x <= (uint32_t)(br >> 4); x++)
+        for (uint32_t y = 0; y <= (uint32_t)(br & 0x0Fu); y++)
+            n += sync_is_compute(sync_chip_at(x, y));
+    return n;
+}
+// A rectangle listed before position r (a 2x2 grid's SYNC_FULL_BR is 0x11).
+static inline int sync_rect_repeat(uint32_t r) {
+    for (uint32_t q = 0; q < r; q++)
+        if (SYNC_RECT_BR[q] == SYNC_RECT_BR[r]) return 1;
+    return 0;
 }
 static inline uint32_t sync_hops(uint8_t chip) {  // Manhattan distance from 0x00
     return (uint32_t)(chip >> 4) + (uint32_t)(chip & 0x0Fu);
@@ -245,7 +266,7 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
             for (uint32_t x = 0; x <= (uint32_t)(warm_br >> 4); x++) {
                 for (uint32_t y = 0; y <= (uint32_t)(warm_br & 0x0Fu); y++) {
                     uint8_t chip = sync_chip_at(x, y);
-                    if (chip == SYNC_SRC_CHIP) continue;
+                    if (chip == SYNC_SRC_CHIP || !sync_is_compute(chip)) continue;
                     bingo_task_t *mid = sync_probe_task(chip, NULL);
                     g_build_err |= sync_depend(mid, anchor);
                     g_build_err |= sync_depend(next, mid);
@@ -267,6 +288,7 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
         const uint8_t br = SYNC_RECT_BR[r];
         if (!sync_rect_fits(br)) continue;             // larger than this cfg's grid
         if (sync_rect_count(br) > SYNC_MAX_P) continue;  // above this build's cap
+        if (sync_rect_repeat(r)) continue;
 
         for (uint32_t mode = SYNC_MODE_ONE_TO_ONE; mode <= SYNC_MODE_ONE_TO_ALL; mode++) {
             const uint32_t p = sync_rect_count(br);
@@ -289,7 +311,7 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
                 for (uint32_t x = 0; x <= (uint32_t)(br >> 4); x++) {
                     for (uint32_t y = 0; y <= (uint32_t)(br & 0x0Fu); y++) {
                         uint8_t chip = sync_chip_at(x, y);
-                        if (chip == SYNC_SRC_CHIP) continue;
+                        if (chip == SYNC_SRC_CHIP || !sync_is_compute(chip)) continue;
                         bingo_task_t *mid = sync_probe_task(chip, NULL);
                         g_build_err |= sync_depend(mid, anchor);
                         g_build_err |= sync_depend(next, mid);
