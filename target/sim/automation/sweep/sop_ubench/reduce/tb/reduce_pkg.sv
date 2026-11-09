@@ -201,6 +201,22 @@ package reduce_pkg;
   localparam int unsigned JctElementwise      = 0;    // WRITER_JCT_ELEMENTWISEJUNCTION
   // ElementwiseJunction CSR(0): [3:0] op ADD = 0, [6:4] fmt FP16 = 0 (snax-coll-reduce.c)
   localparam logic [31:0] JctCsrAddFp16       = 32'h0000_0000;
+  // +OP (chain arm only): the nonlinear junctions of the generated bank, in its order
+  localparam int unsigned JctSoftmaxStats     = 1;    // user CSRs 1, 2 (CSR_DST_JCT_CSR + 1, + 2)
+  localparam int unsigned JctTopK             = 2;    // user CSR 3
+  // SoftmaxStatsJunction CSR(0) [7:0] nValid = 32 rows; CSR(1) the FP32 scale a = 1.0
+  localparam logic [31:0] JctCsrSmxNValid     = 32'd32;
+  localparam logic [31:0] JctCsrSmxScale      = 32'h3F80_0000;
+  // TopKJunction (k = 8) CSR(0) [7:0] nValid = 8, [28] keyPol = 0 (keep the k largest)
+  localparam logic [31:0] JctCsrTopK8Max      = 32'd8;
+  // One software merge of two partials on one cluster, measured on the cluster RTL
+  // (snax_cluster sw/apps/snax-sw-merge, warm; paper exp/eval2_reduce/sw_merge.csv): smx on the
+  // SIMD, its datapath cycles (four tasks, their programming not counted, as the add model's is
+  // not); topk on the four cores, wall cycles. The software arms' folds last at least this long.
+  localparam int unsigned MergeN = 7;
+  localparam int unsigned MergeBytes  [MergeN] = '{256, 1024, 4096, 16384, 32768, 65536, 131072};
+  localparam int unsigned MergeSmxCc  [MergeN] = '{116, 236, 716, 2636, 5196, 10316, 20556};
+  localparam int unsigned MergeTopkCc [MergeN] = '{222, 744, 2820, 11159, 22200, 44355, 88363};
 
   // ------------------------------------------------------------------------------------------
   // D2D link registers (hemaia_d2d_link_peripheral.h)

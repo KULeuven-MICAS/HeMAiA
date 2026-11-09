@@ -17,6 +17,12 @@
 #   VCS          the vcs binary (default: the W-2024.09-SP2 install)
 #   TCDM_BANKED  1 (default): 32-bank TCDM arbitration; 0: every TCDM access granted at once
 #   LINK_TXWBUF  FramerTxWBufBeats of every link (default 64, the RTL's; 0 = diagnostic only)
+#   XDMA_WHOLEBURST  1 (default, the RTL's): the xDMA's remote data bursts leave whole
+#                (xdma_axi_adapter_top RemoteWriteWholeBurst); 0 = diagnostic, from a patched copy
+#   XDMA_ADAPTER_DIR  a local xdma_axi_adapter checkout whose src/ replaces the pinned one
+#                (to test an adapter change before it is locked in Bender.lock)
+#   XDMA_PAGE    the xDMA burst reshaper's page in bytes (default 4096, the RTL's; a burst never
+#                crosses it); smaller = diagnostic, from a patched copy of xdma_burst_reshaper
 #   WORK, LOGS   build and log directories (default work/, logs/), for side-by-side builds
 #   PHY_BEHAVIORAL=1  simulate the PHY's RX clock delay line behaviourally
 #                     (+define+HEMAIA_D2D_PHY_BEHAVIORAL, as target/sim's SIM_D2D_PHY_BEHAVIORAL);
@@ -37,6 +43,9 @@ BENDER=${BENDER:-bender}
 TCDM_BANKED=${TCDM_BANKED:-1}
 PHY_BEHAVIORAL=${PHY_BEHAVIORAL:-0}
 LINK_TXWBUF=${LINK_TXWBUF:-64}
+XDMA_WHOLEBURST=${XDMA_WHOLEBURST:-1}
+XDMA_PAGE=${XDMA_PAGE:-4096}
+XDMA_ADAPTER_DIR=${XDMA_ADAPTER_DIR:-}
 export VCS_TARGET_ARCH=${VCS_TARGET_ARCH:-linux64}
 
 SC=$ROOT/deps/snitch_cluster
@@ -65,13 +74,30 @@ flist() {
     echo "$D/tb/reduce_simd_model.sv"
     echo "$D/tb/tb_reduce.sv"
   } > "$W/files.f"
+  # A local adapter checkout instead of the pinned one: every one of its src/ files.
+  if [ -n "$XDMA_ADAPTER_DIR" ]; then
+    sed -i -E "s#^.*/xdma_axi_adapter-[0-9a-f]+/src/#$XDMA_ADAPTER_DIR/src/#" "$W/files.f"
+    grep -q "^$XDMA_ADAPTER_DIR/src/xdma_axi_adapter_top.sv\$" "$W/files.f" || { echo 'XDMA_ADAPTER_DIR: no adapter top'; exit 1; }
+  fi
+  # Diagnostic xDMA variants: patched copies under $W/patched, never the checkout itself.
+  if [ "$XDMA_WHOLEBURST" != 1 ] || [ "$XDMA_PAGE" != 4096 ]; then
+    mkdir -p "$W/patched"
+    local top rsh
+    top=$(grep -m1 '/xdma_axi_adapter_top.sv$' "$W/files.f")
+    rsh=$(grep -m1 '/xdma_burst_reshaper.sv$' "$W/files.f")
+    sed -E "s/(parameter bit +RemoteWriteWholeBurst += )1'b1/\\11'b$XDMA_WHOLEBURST/" "$top" > "$W/patched/xdma_axi_adapter_top.sv"
+    sed -E "s/(parameter addr_t +PageSize += ).*,( *\/\/.*)?$/\\1$XDMA_PAGE,/" "$rsh" > "$W/patched/xdma_burst_reshaper.sv"
+    grep -q "RemoteWriteWholeBurst *= 1'b$XDMA_WHOLEBURST" "$W/patched/xdma_axi_adapter_top.sv" || { echo 'patch failed: RemoteWriteWholeBurst'; exit 1; }
+    grep -q "PageSize *= $XDMA_PAGE," "$W/patched/xdma_burst_reshaper.sv" || { echo 'patch failed: PageSize'; exit 1; }
+    sed -i "s#^$top\$#$W/patched/xdma_axi_adapter_top.sv#; s#^$rsh\$#$W/patched/xdma_burst_reshaper.sv#" "$W/files.f"
+  fi
 }
 
 build() {
   flist
   local defs=""
   [ "$PHY_BEHAVIORAL" = 1 ] && defs="+define+HEMAIA_D2D_PHY_BEHAVIORAL"
-  echo "TCDM_BANKED=$TCDM_BANKED PHY_BEHAVIORAL=$PHY_BEHAVIORAL LINK_TXWBUF=$LINK_TXWBUF" > "$W/build.cfg"
+  echo "TCDM_BANKED=$TCDM_BANKED PHY_BEHAVIORAL=$PHY_BEHAVIORAL LINK_TXWBUF=$LINK_TXWBUF XDMA_WHOLEBURST=$XDMA_WHOLEBURST XDMA_PAGE=$XDMA_PAGE XDMA_ADAPTER_DIR=$XDMA_ADAPTER_DIR" > "$W/build.cfg"
   # The analysis and elaboration flags of target/sim's VCS flow (sim.mk / Makefile).
   (cd "$W" && "$VCS" -full64 -sverilog \
       -timescale=1ns/1ps -override_timescale=1ns/1ps \

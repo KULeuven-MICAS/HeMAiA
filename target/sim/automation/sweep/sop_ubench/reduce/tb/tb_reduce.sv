@@ -20,11 +20,16 @@
 //     instruction interface, the SIMD through the model, flags as real stores over the links.
 //
 // Plusargs
-//   +ARM=<arm>        chain | two | binomial | pull | swchain | swtree
+//   +ARM=<arm>        chain | two | binomial | pull | swchain | swtree | rt_flag | rt_sched
+//   +TURN_CC=<n>      rt_*: cluster cycles a core takes to act on a dependency (default 4)
+//   +BCAST=<0|1>      rt_flag: chip 00's one-to-all flag as one broadcast store
 //   +BYTES=<n>        payload per chip, FP16 (multiple of 256, <= 256 KiB)
 //   +PLIST=<p,p,..>   participant counts, prefixes of the snake (default 2,4,8,16)
 //   +VERBOSE=<n>      1: per-chip details of every run
 //   +TIMEOUT_US=<n>   simulation-time watchdog (default 20000 us)
+//   +OP=<op>          add (default) | smx (online-softmax (m, l) merge) | topk (top-8). chain, two:
+//                     the junction folds; pull, swchain, swtree: the sum's payload with every fold
+//                     lasting the merge's measured cycles on one cluster (MergeBytes in reduce_pkg)
 //
 // Every run prints one machine-readable [REDUCE] line (see run_point's report). Latency
 // `lat_prog_cc` runs from the first programming action of the reduction (the first CSR write,
@@ -1077,6 +1082,129 @@ module tb_reduce
     return g;
   endfunction
 
+  // ---- +OP: the nonlinear operators (chain arm only) ----
+  // smx: a group is two beats (16 words), the keys m[0..31] then the values l[0..31], FP16,
+  //      lane r = row r (SoftmaxStatsJunction.scala); m in 0..7 and l in 1..7, small integers,
+  //      so the golden m* is exact and l* = sum l_k exp(m_k - m*) is checked to 2 %.
+  // topk: a beat (8 words) is one list, FP32 lanes 0..7 the values (descending), lanes 8..15
+  //      the payloads (TopKJunction.scala, k = 8). Values are distinct over all chips and lists,
+  //      so the golden (the 8 largest of the union, with their payloads) is exact.
+  string op = "add";
+  // The software arms (pull, swchain, swtree) with +OP=smx|topk keep the sum's payload, so every
+  // byte movement and flag is still checked, and each fold lasts at least the cycles the merge
+  // of that operator takes on one cluster (MergeBytes / MergeSmxCc / MergeTopkCc, reduce_pkg):
+  // fold_op names it; op_disp is what the report prints.
+  string fold_op = "add";
+  string op_disp = "add";
+
+  // the measured merge cycles at n bytes: piecewise linear between the measured sizes,
+  // extrapolated from the last two beyond them
+  function automatic int unsigned merge_cc(input string o, input int unsigned n);
+    automatic int unsigned i = 1;
+    automatic real x0, x1, y0, y1;
+    if (o == "add") return 0;
+    while (i < MergeN - 1 && MergeBytes[i] < n) i++;
+    x0 = MergeBytes[i-1]; x1 = MergeBytes[i];
+    y0 = (o == "smx") ? MergeSmxCc[i-1] : MergeTopkCc[i-1];
+    y1 = (o == "smx") ? MergeSmxCc[i]   : MergeTopkCc[i];
+    return int'(y0 + (y1 - y0) * (real'(n) - x0) / (x1 - x0));
+  endfunction
+
+  function automatic int unsigned smx_m(input int unsigned s, input int unsigned g,
+                                        input int unsigned r);
+    return (5 * s + r + 3 * g) % 8;
+  endfunction
+  function automatic int unsigned smx_l(input int unsigned s, input int unsigned g,
+                                        input int unsigned r);
+    return (r + s + 2 * g) % 7 + 1;
+  endfunction
+  function automatic real fp16_to_real(input logic [15:0] h);
+    automatic int unsigned e = h[14:10];
+    automatic real mant = real'(h[9:0]) / 1024.0;
+    automatic real v = (e == 0) ? mant * (2.0 ** -14) : (1.0 + mant) * (2.0 ** (int'(e) - 15));
+    return h[15] ? -v : v;
+  endfunction
+
+  // the 8 values of chip s's list q, descending; each value v in 1..128 is unique per list q
+  function automatic void topk_list(input int unsigned s, input int unsigned q,
+                                    output int unsigned v[8], output int unsigned pl[8]);
+    int unsigned t[$];
+    for (int unsigned j = 0; j < 8; j++) t.push_back(1 + ((8 * s + j) * 37 + 11 * q) % 128);
+    t.rsort();
+    for (int unsigned j = 0; j < 8; j++) begin
+      v[j]  = t[j];
+      pl[j] = 32'hA000_0000 | (s << 16) | (q << 4) | j;
+    end
+  endfunction
+  function automatic logic [31:0] fp32_of(input int unsigned n);
+    return $shortrealtobits(shortreal'(n));
+  endfunction
+
+  function automatic logic [63:0] op_word_of(input int unsigned s, input int unsigned w);
+    logic [63:0] d;
+    case (op)
+      "smx": begin
+        automatic int unsigned g = w / 16, b = (w % 16) / 8, r0 = 4 * (w % 8);
+        for (int unsigned l = 0; l < 4; l++)
+          d[16*l+:16] = fp16_of(b ? smx_l(s, g, r0 + l) : smx_m(s, g, r0 + l));
+      end
+      "topk": begin
+        int unsigned v[8], pl[8];
+        automatic int unsigned j0 = 2 * (w % 8);
+        topk_list(s, w / 8, v, pl);
+        for (int unsigned l = 0; l < 2; l++) begin
+          automatic int unsigned lane = j0 + l;
+          d[32*l+:32] = (lane < 8) ? fp32_of(v[lane]) : pl[lane-8];
+        end
+      end
+      default: d = word_of(s, w);
+    endcase
+    return d;
+  endfunction
+
+  // topk: the golden word w of the fold over the set (exact)
+  function automatic logic [63:0] topk_golden(input logic [15:0] set, input int unsigned w);
+    int unsigned v[8], pl[8];
+    longint unsigned all[$];          // {value, payload}, sorted on the value
+    logic [63:0] g;
+    for (int unsigned s = 0; s < NumCompute; s++) if (set[s]) begin
+      topk_list(s, w / 8, v, pl);
+      for (int unsigned j = 0; j < 8; j++) all.push_back({32'(v[j]), 32'(pl[j])});
+    end
+    all.rsort();
+    for (int unsigned l = 0; l < 2; l++) begin
+      automatic int unsigned lane = 2 * (w % 8) + l;
+      g[32*l+:32] = (lane < 8) ? fp32_of(all[lane][63:32]) : all[lane-8][31:0];
+    end
+    return g;
+  endfunction
+
+  // smx: check word w of the fold over the set; returns 1 if every lane is right
+  function automatic bit smx_ok(input logic [15:0] set, input int unsigned w,
+                                input logic [63:0] got, output string why);
+    automatic int unsigned g = w / 16, b = (w % 16) / 8, r0 = 4 * (w % 8);
+    for (int unsigned l = 0; l < 4; l++) begin
+      automatic int unsigned r = r0 + l, mx = 0;
+      automatic real lsum = 0.0, gl;
+      for (int unsigned s = 0; s < NumCompute; s++) if (set[s] && smx_m(s, g, r) > mx) mx = smx_m(s, g, r);
+      if (!b) begin
+        if (got[16*l+:16] !== fp16_of(mx)) begin
+          why = $sformatf("row %0d m: got %04x want %04x", r, got[16*l+:16], fp16_of(mx));
+          return 1'b0;
+        end
+      end else begin
+        for (int unsigned s = 0; s < NumCompute; s++)
+          if (set[s]) lsum += real'(smx_l(s, g, r)) * $exp(real'(smx_m(s, g, r)) - real'(mx));
+        gl = fp16_to_real(got[16*l+:16]);
+        if (gl < 0.98 * lsum || gl > 1.02 * lsum) begin
+          why = $sformatf("row %0d l: got %f want %f", r, gl, lsum);
+          return 1'b0;
+        end
+      end
+    end
+    return 1'b1;
+  endfunction
+
   function automatic int unsigned ci_of_pos(input int unsigned s);
     return cidx_of_chip(Snake[s]);
   endfunction
@@ -1092,10 +1220,18 @@ module tb_reduce
     automatic int unsigned nb = 0;
     for (int unsigned w = 0; w < bytes / 8; w++) begin
       automatic logic [63:0] got = mem[c][(off >> 3) + w];
-      automatic logic [63:0] exp = golden_set(set, w);
-      if (got !== exp) begin
-        if (nb < 3) $display("   [check] %s word %0d: got %016x want %016x", what, w, got, exp);
-        nb++;
+      if (op == "smx") begin
+        string why;
+        if (!smx_ok(set, w, got, why)) begin
+          if (nb < 3) $display("   [check] %s word %0d: %s", what, w, why);
+          nb++;
+        end
+      end else begin
+        automatic logic [63:0] exp = (op == "topk") ? topk_golden(set, w) : golden_set(set, w);
+        if (got !== exp) begin
+          if (nb < 3) $display("   [check] %s word %0d: got %016x want %016x", what, w, got, exp);
+          nb++;
+        end
       end
     end
     if (nb != 0) fail($sformatf("%s: %0d of %0d words wrong", what, nb, bytes / 8));
@@ -1114,7 +1250,7 @@ module tb_reduce
     for (int unsigned s = 0; s < NumCompute; s++) begin
       automatic int unsigned c = ci_of_pos(s);
       for (int unsigned w = 0; w < bytes / 8; w++) begin
-        mem[c][(InOff >> 3) + w]           = word_of(s, w);
+        mem[c][(InOff >> 3) + w]           = op_word_of(s, w);
         mem[c][(out_off(bytes) >> 3) + w]  = Sentinel;
         mem[c][(tmp_off(bytes) >> 3) + w]  = Sentinel;
       end
@@ -1228,6 +1364,7 @@ module tb_reduce
   // out = a + b on the SIMD (snax-coll-reduce.c simd_add), blocking until done
   task automatic simd_add(input int unsigned c, input int unsigned o, input int unsigned a,
                           input int unsigned b, input int unsigned n);
+    realtime t0;
     @(negedge clk_cl);
     simd_a[c]     = TcdmAddrWidth'(a);
     simd_b[c]     = TcdmAddrWidth'(b);
@@ -1236,11 +1373,14 @@ module tb_reduce
     simd_start[c] = 1'b1;
     @(posedge clk_cl);
     note_act($realtime);
+    t0 = $realtime;
     @(negedge clk_cl);
     simd_start[c] = 1'b0;
     do @(posedge clk_cl); while (simd_busy[c]);
     if (simd_err[c]) fail($sformatf("chip %02x: SIMD operand not a small FP16 integer",
                                     chip_of_cidx(c)));
+    // a nonlinear software merge: at least its measured cycles on one cluster
+    while ($realtime < t0 + merge_cc(fold_op, n) * ClusterPeriod - 0.01) @(posedge clk_cl);
   endtask
 
   // wait_eq on a flag word in this chip's TCDM, then the software cost of the hand-off
@@ -1287,7 +1427,7 @@ module tb_reduce
     automatic int unsigned wf    = dst_off >> 3;
     automatic int unsigned wl    = (dst_off + bytes - 8) >> 3;
     logic [31:0] r, cl0, cr0, cl1, cr1, fin, want, jct_st;
-    int unsigned guard;
+    int unsigned guard, jct;
     bit          is_local;
 
     ok = 1'b1;
@@ -1319,10 +1459,18 @@ module tb_reduce
     csr_wr(coll, CSR_SRC_ENAB_CHAN, 32'hFFFF_FFFF);
     csr_wr(coll, CSR_DST_ENAB_CHAN, 32'hFFFF_FFFF);
     csr_wr(coll, CSR_DST_ENAB_BYTE, 32'hFFFF_FFFF);
-    // ... then xdma_enable_dst_junction(ELEMENTWISE, {ADD | FP16})
+    // ... then xdma_enable_dst_junction(ELEMENTWISE, {ADD | FP16}), or +OP's junction
+    jct = (op == "smx") ? JctSoftmaxStats : (op == "topk") ? JctTopK : JctElementwise;
     csr_rd(coll, CSR_DST_JCT_ENABLE, r);
-    csr_wr(coll, CSR_DST_JCT_ENABLE, r | (32'd1 << JctElementwise));
-    csr_wr(coll, CSR_DST_JCT_CSR + 0, JctCsrAddFp16);
+    csr_wr(coll, CSR_DST_JCT_ENABLE, r | (32'd1 << jct));
+    case (op)
+      "smx": begin
+        csr_wr(coll, CSR_DST_JCT_CSR + 1, JctCsrSmxNValid);
+        csr_wr(coll, CSR_DST_JCT_CSR + 2, JctCsrSmxScale);
+      end
+      "topk":  csr_wr(coll, CSR_DST_JCT_CSR + 3, JctCsrTopK8Max);
+      default: csr_wr(coll, CSR_DST_JCT_CSR + 0, JctCsrAddFp16);
+    endcase
     // the app reads the remote counters before starting (standing-finish check)
     csr_rd(coll, CSR_FINISH_REMOTE, fin);
     csr_rd(coll, CSR_COMMIT_REMOTE, r);
@@ -1378,7 +1526,7 @@ module tb_reduce
     if (jct_st[1:0] != 2'b00) fail($sformatf("chip %02x: JCT_STATUS=0x%08x", Snake[cs], jct_st));
     // the app's clean-up: disable the junction, clear slots 1..15
     csr_rd(coll, CSR_DST_JCT_ENABLE, r);
-    csr_wr(coll, CSR_DST_JCT_ENABLE, r & ~(32'd1 << JctElementwise));
+    csr_wr(coll, CSR_DST_JCT_ENABLE, r & ~(32'd1 << jct));
     for (int unsigned k = 1; k < 16; k++) csr_wr64(coll, CSR_DST_ADDR + 2 * k, '0);
   endtask
 
@@ -1756,13 +1904,174 @@ module tb_reduce
       end
     end
     same = ((arm == "two" && P <= Group) || (arm == "binomial" && P == 2)) ? "chain" : "-";
-    $display("[REDUCE] arm=%s P=%0d bytes=%0d lat_prog_cc=%0d lat_cc=%0d sram_total=%0d sram_max=%0d busiest=%02x check=%s levels=%0d lvl=%s edges=%0d handoffs=%0d same_as=%s",
-             arm, P, bytes, int'((t_result - t_first_act) / ClusterPeriod),
+    $display("[REDUCE] op=%s arm=%s P=%0d bytes=%0d lat_prog_cc=%0d lat_cc=%0d sram_total=%0d sram_max=%0d busiest=%02x check=%s levels=%0d lvl=%s edges=%0d handoffs=%0d same_as=%s",
+             op_disp, arm, P, bytes, int'((t_result - t_first_act) / ClusterPeriod),
              int'((t_result - t_first_start) / ClusterPeriod), tot, mx, chip_of_cidx(busiest),
              (run_ok && bad_words == 0 && t_result > 0) ? "PASS" : "FAIL", nlev, lv, edges_sent,
              handoffs, same);
   endtask
 
+  // ==========================================================================================
+  // Round trips: one synchronisation out to the participants and back, timed on chip 00 as the
+  // E3 four-arm experiment times its hardware-scheduler arm (dev_docs/hemaiaV2/
+  // 07-four-arm-sync-comparison.md). Participants: the rectangle of compute chips from 00
+  // (P = 2: 1x2, 4: 2x2, 8: 2x4, 16: all); one-to-one goes to its far corner, one-to-all to
+  // every other participant, each of which answers chip 00.
+  //   rt_flag:  flags placed by hand. A 32-bit store (snrt_xchip_writew) into the consumer's
+  //             TCDM, which its core polls; chip 00 scans its answer slots in order. +BCAST=1:
+  //             chip 00's one-to-all flag is one broadcast store (chip id 0xFF), else one store
+  //             per participant.
+  //   rt_sched: the BINGO manager model: a done CSR, the dep-set write over the links (one-to-
+  //             all: one broadcast write), the consumer's ready-queue CSR read.
+  // In both, a core acts +TURN_CC cluster cycles after it learns of its dependency (flag: after
+  // the poll that sees the flag; scheduler: after its CSR read is answered). Times in 500 MHz
+  // cluster cycles, from the root's first action to the root learning of the last answer.
+  // ==========================================================================================
+  localparam int unsigned CRtOut = 32'h0_2C00;   // the out flag, at each participant
+  localparam int unsigned CRtIn  = 32'h0_2D00;   // the answer slots at chip 00, 8 B each
+  int unsigned rt_turn_cc = 4;
+  bit          rt_bcast = 1'b0;
+  int unsigned errors_before_rt;
+
+  function automatic int unsigned pos_of_chip(input chip_id_t c);
+    for (int unsigned s = 0; s < NumCompute; s++) if (Snake[s] == c) return s;
+    return 0;
+  endfunction
+
+  // the participants of P, chip 00 first; the far corner last
+  function automatic void rt_members(input int unsigned P, output chip_id_t m[$]);
+    int unsigned nx, ny;
+    m.delete();
+    case (P)
+      2:       begin nx = 1; ny = 2; end
+      4:       begin nx = 2; ny = 2; end
+      8:       begin nx = 2; ny = 4; end
+      default: begin nx = 4; ny = 4; end
+    endcase
+    for (int unsigned i = 0; i < nx; i++)
+      for (int unsigned y = 0; y < ny; y++) m.push_back(chip_of_cidx(i * GridY + y));
+  endfunction
+
+  function automatic int unsigned hops_of(input chip_id_t a, input chip_id_t b);
+    automatic int dx = int'(a[7:4]) - int'(b[7:4]);
+    automatic int dy = int'(a[3:0]) - int'(b[3:0]);
+    return ((dx < 0) ? -dx : dx) + ((dy < 0) ? -dy : dy);
+  endfunction
+
+  // a 32-bit store from chip position s_from to chip id `to` (0xFF: broadcast)
+  task automatic rt_store(input int unsigned s_from, input chip_id_t to, input int unsigned off,
+                          input logic [31:0] d);
+    automatic int unsigned c = ci_of_pos(s_from);
+    automatic addr_t a = cluster_base(to) + off;
+    bit aw_done, w_done;
+    @(negedge clk_cl);
+    core_req[c].aw         = '0;
+    core_req[c].aw.addr    = a;
+    core_req[c].aw.size    = 3'd2;
+    core_req[c].aw.burst   = axi_pkg::BURST_INCR;
+    core_req[c].aw.cache   = axi_pkg::CACHE_MODIFIABLE;
+    core_req[c].aw_valid   = 1'b1;
+    core_req[c].w          = '0;
+    core_req[c].w.data     = {2{d}};
+    core_req[c].w.strb     = 8'h0F << a[2:0];
+    core_req[c].w.last     = 1'b1;
+    core_req[c].w_valid    = 1'b1;
+    core_req[c].b_ready    = 1'b1;
+    aw_done = 1'b0;
+    w_done  = 1'b0;
+    while (!(aw_done && w_done)) begin
+      @(posedge clk_cl);
+      if (core_req[c].aw_valid && core_rsp[c].aw_ready) aw_done = 1'b1;
+      if (core_req[c].w_valid && core_rsp[c].w_ready) w_done = 1'b1;
+      @(negedge clk_cl);
+      if (aw_done) core_req[c].aw_valid = 1'b0;
+      if (w_done) core_req[c].w_valid = 1'b0;
+    end
+  endtask
+
+  // a core polling one flag word of its TCDM: returns at the end of the poll iteration that
+  // sees it (one per cycle here), then +TURN_CC
+  task automatic rt_poll(input int unsigned s, input int unsigned off, input logic [31:0] k,
+                         output realtime t_land);
+    automatic int unsigned c = ci_of_pos(s);
+    automatic int unsigned guard = 0;
+    while (mem[c][off >> 3][32*off[2]+:32] !== k) begin
+      @(posedge clk_cl);
+      if (++guard > 4000000) begin
+        fail($sformatf("chip %02x: round-trip flag at 0x%05x never reached %0d", Snake[s], off, k));
+        break;
+      end
+    end
+    t_land = lw_t[c][off >> 3];
+    repeat (rt_turn_cc) @(posedge clk_cl);
+  endtask
+
+  task automatic run_rt(input string arm, input string edge_kind, input int unsigned P);
+    chip_id_t    m[$];
+    realtime     t0, t1, t_land, t_last_land;
+    int unsigned n_ans, hops;
+    point_k++;
+    rt_members(P, m);
+    for (int unsigned i = 0; i < m.size(); i++) begin
+      automatic int unsigned c = cidx_of_chip(m[i]);
+      mem[c][CRtOut >> 3] = '0;
+      for (int unsigned j = 0; j < 16; j++) mem[c][(CRtIn >> 3) + j] = '0;
+      dep_q[c].delete();
+    end
+    n_ans = (edge_kind == "1to1") ? 1 : m.size() - 1;
+    hops  = hops_of(m[0], m[m.size() - 1]);
+    errors_before_rt = errors;
+    repeat (20) @(posedge clk_cl);
+    @(negedge clk_cl);
+    t0 = $realtime;
+    t_last_land = 0;
+    fork
+      // the participants: wait for chip 00, then answer it
+      for (int unsigned i = 1; i < m.size(); i++) begin
+        if (edge_kind == "1to1" && i != m.size() - 1) continue;
+        fork
+          automatic int unsigned ii = i;
+          begin
+            automatic int unsigned s = pos_of_chip(m[ii]);
+            realtime tl;
+            if (arm == "rt_flag") begin
+              rt_poll(s, CRtOut, point_k, tl);
+              rt_store(s, m[0], CRtIn + 8 * (ii - 1), point_k);
+            end else begin
+              sched_read(ci_of_pos(s), 1);
+              repeat (rt_turn_cc) @(posedge clk_cl);
+              sched_done(ci_of_pos(s), 1'b0, 1'b1, m[0]);
+            end
+          end
+        join_none
+      end
+      // chip 00: send, then wait for every answer
+      begin
+        if (arm == "rt_flag") begin
+          if (edge_kind == "1to1") rt_store(0, m[m.size() - 1], CRtOut, point_k);
+          else if (rt_bcast) rt_store(0, 8'hFF, CRtOut, point_k);
+          else for (int unsigned i = 1; i < m.size(); i++) rt_store(0, m[i], CRtOut, point_k);
+          // scan the answer slots in order, one poll iteration each
+          for (int unsigned i = 1; i < m.size(); i++) begin
+            if (edge_kind == "1to1" && i != m.size() - 1) continue;
+            rt_poll(0, CRtIn + 8 * (i - 1), point_k, t_land);
+            if (t_land > t_last_land) t_last_land = t_land;
+          end
+          t1 = $realtime;
+        end else begin
+          sched_done(ci_of_pos(0), 1'b0, 1'b1,
+                     (edge_kind == "1to1") ? m[m.size() - 1] : 8'hFF);
+          sched_read(ci_of_pos(0), n_ans);
+          t1 = $realtime;
+        end
+      end
+    join
+    wait fork;
+    $display("[RT] arm=%s edge=%s P=%0d hops=%0d answers=%0d turn_cc=%0d bcast=%0d rt_cc=%0d last_land_cc=%0d check=%s",
+             arm, edge_kind, P, hops, n_ans, rt_turn_cc, rt_bcast, int'((t1 - t0) / ClusterPeriod),
+             (t_last_land > 0) ? int'((t_last_land - t0) / ClusterPeriod) : -1,
+             (errors == errors_before_rt) ? "PASS" : "FAIL");
+  endtask
   // ==========================================================================================
   // Main
   // ==========================================================================================
@@ -1822,6 +2131,14 @@ module tb_reduce
     if (!$value$plusargs("BYTES=%d", bytes)) bytes = 131072;
     if (!$value$plusargs("PLIST=%s", pl)) pl = "2,4,8,16";
     if (!$value$plusargs("VERBOSE=%d", verbose)) verbose = 0;
+    if (!$value$plusargs("OP=%s", op)) op = "add";
+    if (op != "add" && op != "smx" && op != "topk") $fatal(1, "[tb_reduce] OP=%s: add, smx or topk", op);
+    if (op != "add" && arm == "binomial") $fatal(1, "[tb_reduce] OP=%s: not on the binomial arm", op);
+    op_disp = op;
+    if (op != "add" && (arm == "pull" || arm == "swchain" || arm == "swtree")) begin
+      fold_op = op;  // the merge time of op, on the sum's payload
+      op      = "add";
+    end
     parse_plist(pl);
 
     if (bytes % 256 != 0 || bytes == 0 || bytes > 262144)
@@ -1831,8 +2148,8 @@ module tb_reduce
         $fatal(1, "[tb_reduce] P=%0d: must be 2, 4, 8 or 16", plist[i]);
     end
 
-    $display("[tb_reduce] arm=%s bytes=%0d P=%p TcdmBanked=%0d LinkTxWBufBeats=%0d SwHandoffCc=%0d Sched(tx,rx,local,rsp)=(%0d,%0d,%0d,%0d)",
-             arm, bytes, plist, TcdmBanked, LinkTxWBufBeats, SwHandoffCc, SchedTxCc,
+    $display("[tb_reduce] op=%s arm=%s bytes=%0d P=%p TcdmBanked=%0d LinkTxWBufBeats=%0d SwHandoffCc=%0d Sched(tx,rx,local,rsp)=(%0d,%0d,%0d,%0d)",
+             op_disp, arm, bytes, plist, TcdmBanked, LinkTxWBufBeats, SwHandoffCc, SchedTxCc,
              SchedRxReadyCc, SchedLocalReadyCc, SchedReadyRspCc);
 
     @(posedge rst_n);
@@ -1841,9 +2158,25 @@ module tb_reduce
     $display("[tb_reduce] links up (DDR) at %0t", $realtime);
     repeat (200) @(posedge clk_cl);
 
-    foreach (plist[i]) begin
-      run_point(arm, plist[i], bytes, verbose);
-      repeat (100) @(posedge clk_cl);
+    if (arm == "rt_flag" || arm == "rt_sched") begin
+      string edges[$];
+      edges = '{"1to1", "1toall"};
+      if (!$value$plusargs("TURN_CC=%d", rt_turn_cc)) rt_turn_cc = 4;
+      if (!$value$plusargs("BCAST=%d", rt_bcast)) rt_bcast = 1'b0;
+      // an untimed warm-up of every link the points use
+      run_rt(arm, "1toall", 16);
+      repeat (200) @(posedge clk_cl);
+      foreach (plist[i]) begin
+        foreach (edges[e]) begin
+          run_rt(arm, edges[e], plist[i]);
+          repeat (200) @(posedge clk_cl);
+        end
+      end
+    end else begin
+      foreach (plist[i]) begin
+        run_point(arm, plist[i], bytes, verbose);
+        repeat (100) @(posedge clk_cl);
+      end
     end
 
     if (errors == 0) $display("[tb_reduce] RESULT: PASS");
