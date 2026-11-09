@@ -136,7 +136,7 @@ class FfnPart(fpm.PBuild):
 
     def _data(self, args, p):
         L = self.layer
-        return ffn_data.FfnData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
+        return ffn_data.FFNData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
                                 tokens=self.T, inter=p.get("inter"), rows=dict(x16=L.h16, cal=L.h16))
 
     def setup(self, extra=None):

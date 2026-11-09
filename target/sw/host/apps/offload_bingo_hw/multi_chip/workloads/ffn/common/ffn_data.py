@@ -81,7 +81,7 @@ def load_weights(cache_dir, model, inter=None):
                 gain=rd("gain", (H,)))
 
 
-class FfnData:
+class FFNData:
     """The FFN's weights packed for the device, its scales, and the golden of one token.
 
     `cols`: per global cluster (c0, n), its intermediate columns -- of gate and of up -- and the

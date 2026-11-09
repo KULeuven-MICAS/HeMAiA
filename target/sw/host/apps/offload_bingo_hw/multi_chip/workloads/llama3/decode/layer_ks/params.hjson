@@ -55,23 +55,12 @@
     w_chunk_bytes: 98304
     w_buffers: 2
     weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
-    mapping: single_pass
-    dn_split: cols
     x_row: true
-    store_lag: 1
-    gemm_reuse: true
-    root_light: true
-    sym_zero: false
-    col_unit: 16
     dn_load_early: true
-    relay_on_simd: true
-    first_gather_waits_copies: false
     out_slots: 16
     start_per_chip: true
     gather_relay_only: true
     chain_group: 16
-    relay_per_gather: true
-    w4_paired: true
     dn_gemv: true
     gu_gemv: true
     chains_after_stream: true

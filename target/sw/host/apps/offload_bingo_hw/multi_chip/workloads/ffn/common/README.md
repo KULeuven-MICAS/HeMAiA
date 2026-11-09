@@ -8,12 +8,11 @@ workload directories under `../` (and the decode FFNs under `../../dsv2` and `..
 ```
 ffn/common/
   ffn_prefill_mc.py   PBuild: the prefill block, T tokens in passes of `rows`. Its docstring explains the mapping;
-                      every parameter is explained where __init__ reads it
-  ffn_stages_mc.py    FStages(PBuild): the block as stage apps (params stage: 0, 123, 45, full). run() is the entry
-                      point of every workload under ../
+                      every parameter is explained where __init__ reads it. run() is the entry point of the
+                      whole-block workloads under ../ (the stage apps' main_bingo.py are standalone)
   ffn_decode_mc.py    DBuild(PBuild): one token on the prefill's mapping, one 16-row tile (GEMM or GEMV forms).
                       run() is the entry point of the decode FFN workloads
-  ffn_data.py         FfnData: the weights packed for the device, the static scales and the golden of the device's
+  ffn_data.py         FFNData: the weights packed for the device, the static scales and the golden of the device's
                       arithmetic; load_weights and the SYNTHETIC registry of models without a checkpoint
   ffn.mk              the build a DeepSeek FFN variant's Makefile includes (Llama variants: ../../llama3/common/llama3.mk)
 ```
@@ -36,8 +35,8 @@ util/sim/multichip/
 fabric.FabricBase                       util/sim/multichip/fabric.py
   chiplet_mc.ChipletBuild               util/sim/multichip/chiplet_mc.py
     ffn_prefill_mc.PBuild               the prefill block
-      ffn_stages_mc.FStages             a stage of it, or the whole block
       ffn_decode_mc.DBuild              one token
+    ../<model>_prefill/stage*/          one stage alone (Stage0, Stage123, Stage45 in each main_bingo.py)
 ```
 
 A build runs `__init__` (params, data, golden, staging, rings, buffers), then `build()` (the task graph), then
@@ -45,21 +44,22 @@ A build runs `__init__` (params, data, golden, staging, rings, buffers), then `b
 
 | section of `ffn_prefill_mc.py` | what it makes |
 |---|---|
-| `__init__` | the params, `FfnData` and its golden, the column split over the clusters (`cols`, `kcols`), the down slices |
+| `__init__` | the params, `FFNData` and its golden, the column split over the clusters (`cols`, `kcols`), the down slices |
 | the plan | the gate\|up chunks of a cluster (`_gu_chunks`, `_gu_cols`) |
 | data | the HBM images of the weights and of X, the scales, every cluster's L1 buffers (`_stage`, `_buffers`) |
 | helpers | per-core program order, one GEMM (blocking or queued), one ChainGather, one weight-chunk load |
 | X | X from HBM: the multicast into every chip's L3 and each cluster's copy into L1 |
 | gate\|up and the A8 | the GEMMs over the weight stream, dequantise and SwiGLU, the D -> A reshape, the quantise and the A8 exchange |
 | the prefill | `build()`: the passes, the down slices, the ChainGathers into the root and the stores; `_passes_kernel` for the ablation's kernel-by-kernel rung |
-| checks | the window, the symmetric buffers, the golden checks (`_checks`, or `_stage_checks` with params `check_stages`), the hazard check |
+| checks | the window, the symmetric buffers, the golden checks (`_checks`), the hazard check |
 
 ## Who uses it
 
 | user | through |
 |---|---|
-| `../<model>_prefill*/`, `../scaling/` | `ffn_stages_mc.run` |
-| the Llama prefill layer (`../../llama3/common/llama3_prefill_mc.py`, `../../llama3/full_layer_prefill/common/llama3_layer_mc.py`) and DeepSeek layer 0 (`../../dsv2/common/dsv2_layer_prefill_mc.py`) | `PBuild` inside the layer, `FfnData` on the layer's rows |
+| `../<model>_prefill/full`, `../llama3_prefill/t64`, `../dsv2_l0_prefill_ablation/`, `../scaling/` | `ffn_prefill_mc.run` |
+| `../<model>_prefill/stage*/` | their own standalone `main_bingo.py` (`ChipletBuild` and `FFNData`) |
+| the Llama prefill layer (`../../llama3/full_layer_prefill/common/llama3_layer_mc.py`) and DeepSeek layer 0 (`../../dsv2/common/dsv2_layer_prefill_mc.py`) | `PBuild` inside the layer, `FFNData` on the layer's rows |
 | the decode layers (`../../dsv2/common/dsv2_decode_mc.py`, `../../llama3/common/llama3_decode_layer_mc.py`) | `DBuild` |
 | `../../llama3/common/llama3_data.py` | registers its synthetic FFNs in `ffn_data.SYNTHETIC` (`register_ffn`, `register_ffn_shape`) |
 
@@ -75,8 +75,8 @@ Each is explained where it is read:
   `reduce`, `sync`, `barrier_mode`, `chip_rows`, `weight_ring`, `w_chunk_bytes`, `w_buffers`, `gid_lists`,
   `list_phases`, `per_chip_image`, `static_l1`, `l1_capacity`, ...).
 - `ffn_prefill_mc.py`, `PBuild.__init__`: the mapping and the ablation switches (`rows`, `blocks`, `dn_cols`, `x_cast`,
-  `barrier_at`, `gemm_async`, `chain_group`, `out_slots`, `root_cols`, `restream`, `x_hbm`, `x_device`, ...).
-- `ffn_stages_mc.py`: `stage`. `ffn_decode_mc.py`: the decode's own (`x_row`, `dn_gemv`, `gu_gemv`, ...).
+  `gemm_async`, `chain_group`, `out_slots`, `root_cols`, `restream`, ...).
+- `ffn_decode_mc.py`: the decode's own (`x_row`, `dn_gemv`, `gu_gemv`, ...).
 
 ## Generating and building
 

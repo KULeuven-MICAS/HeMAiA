@@ -10,7 +10,7 @@
 #                       12, 16 chips)
 #   llama3_t64          workloads/ffn/llama3_prefill/t64: Llama-3-8B's FFN, one pass of 64 tokens
 #   dsv2_<app>, llama3_<app>  workloads/ffn/{dsv2_l0_prefill,llama3_prefill}/<app>: DeepSeek-V2-Lite's or Llama-3-8B's
-#                       FFN, one stage alone (stage0, stage123, stage45; ffn_stages_mc.py) or full (the 256-token block)
+#                       FFN, one stage alone (stage0, stage123, stage45: each its own main_bingo.py) or full (the 256-token block)
 # TIMEOUT_H is the runner's wall-clock limit.
 # What it does: refuses to start while another simulator of this user runs; launches the run through
 # common/launch.sh (the runner's event log); arms common/sim_watchdog.py with the ffn_prefill profile (it

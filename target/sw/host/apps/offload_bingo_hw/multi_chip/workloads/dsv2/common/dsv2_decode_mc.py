@@ -355,7 +355,7 @@ class FfnPart(ffd.DBuild):
 
     def _data(self, args, p):
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
-        return ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
+        return ffn_data.FFNData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
                                 wbits=self.wbits, tokens=1, inter=p.get("inter"), rows=self.layer.mlp_rows)
 
     def setup(self, extra=None):
@@ -1150,9 +1150,8 @@ class LayerBuild(cm.ChipletBuild):
             print(f"[{self.TAG}] attention gemm_reuse: {reuse_gemm_start_config(nodes, [self.roles['gemm']])} "
                   f"gemm_start configurations reuse")
         if self.mlp_kind == "ffn" and M is not None:
-            if M.p.get("gemm_reuse"):
-                nodes = _Nodes(t for t in self.dfg.node_list if self.mlp_ids[0] <= t.node_id < self.mlp_ids[1])
-                print(f"[{self.TAG}] FFN gemm_reuse: {reuse_gemm_config(nodes)} GEMMs run as gemm_minimal")
+            nodes = _Nodes(t for t in self.dfg.node_list if self.mlp_ids[0] <= t.node_id < self.mlp_ids[1])
+            print(f"[{self.TAG}] FFN gemm_reuse: {reuse_gemm_config(nodes)} GEMMs run as gemm_minimal")
             bad = M.check_hazards()
             if bad:
                 raise ValueError(f"FFN: {len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))

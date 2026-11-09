@@ -21,7 +21,6 @@
   fast_host_init: true
   d2d_ddr: true
   d2d_rx_yield: [255, 0]
-  relay_per_gather: true
   // every cluster's device args in phases of at most this many bytes, two alternating L1 regions, over the whole layer
   args_phase_bytes: 24000
   // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
@@ -133,7 +132,6 @@
     dn_cols: 128
     w_chunk_bytes: 98304
     w_buffers: 2
-    x_buffers: 1
     weight_ring:
     {
       slots: 16
@@ -146,32 +144,22 @@
     reduce: chain
     sync: edge
     l3_overlay: true
-    mapping: single_pass
     deq_per_row: true
     x_blocks: 4
-    store_lag: 1
     // GEMMs (ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
     // ahead of its operands and of the waits before its start, a start that repeats its cluster's previous
-    // configuration writing only addresses (gemm_reuse)
+    // configuration writing only addresses
     gemm_async: true
     gemm_shape_l1: true
     gemm_cfg_ahead: true
     gemm_cfg_hoist: true
-    gemm_reuse: true
     post_blocks: 4
-    root_light: true
     first_blocks: 2
     split_last: true
-    sym_zero: false
-    dn_split: cols
     split_first_dn: true
-    col_unit: 16
     dn_balance: true
     root_cols: [320, 304]
     chain_alt: true
     dn_load_early: true
-    relay_on_simd: true
-    first_gather_waits_copies: false
-    w4_paired: true
   }
 }

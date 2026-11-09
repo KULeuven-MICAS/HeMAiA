@@ -26,7 +26,7 @@ synthetic INT4 weights of the model's shapes), one pass of 64 tokens with every 
 
 ## The ladder (16 chips)
 
-| rung | workload | X to every chip (`x_cast`) | reduce (`reduce`) | sync (`sync`, `barrier_at`) |
+| rung | workload | X to every chip (`x_cast`) | reduce (`reduce`) | sync (`sync`) |
 |---|---|---|---|---|
 | R0 `base` | `dsv2_l0_prefill_ablation/base` | unicast: one copy a chip | root fold | point-to-point chip barrier after every kernel |
 | R1 `bcast` | `dsv2_l0_prefill_ablation/bcast` | multicast | root fold | barrier after every kernel |

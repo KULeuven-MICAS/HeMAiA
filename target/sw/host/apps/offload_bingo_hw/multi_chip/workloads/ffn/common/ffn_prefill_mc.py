@@ -6,8 +6,9 @@
 """The shared driver of the ffn prefill workloads (workloads/ffn/<model>_prefill/<variant>/): one LLM's dense SwiGLU
 FFN over a prompt of T tokens, on the (16, 4, 16) GEMM shape with INT4 weights, tensor-parallel over every cluster of
 the 16 + 4 chiplet platform. The platform, the weight rings, the stamps and the setup are chiplet_mc.py's; the data and
-the golden are ffn_data.py's. ffn_stages_mc.py runs the block stage by stage; llama3/common/llama3_prefill_mc.py runs it
-inside a whole layer.
+the golden are ffn_data.py's. ffn_decode_mc.py runs it for one token; the whole-layer drivers
+(dsv2/common/dsv2_layer_prefill_mc.py, llama3/full_layer_prefill/common/llama3_layer_mc.py) run it inside a layer. The
+stage apps (<model>_prefill/stage*/main_bingo.py) are standalone programs of its stages.
 
 THE MAPPING. Cluster g takes the intermediate columns J_g (whole column blocks), the same columns of gate and of up. The
 tokens run in passes of `rows` (T / rows passes). In a pass, every cluster holds the pass's X in L1, and each gate|up
@@ -26,12 +27,11 @@ by a ChainGather into the root. Per pass:
     reduce      per slice (or group of slices): one ChainGather through every chip, each hop's xDMA adding its partial
                 in transit, into the root's fold buffer; the root stores it to L3
 
-X COMES FROM HBM (params x_hbm, the default): every pass's X sits in the HBM of the root's memory chip; the root's host
+X COMES FROM HBM: every pass's X sits in the HBM of the root's memory chip; the root's host
 queues that memory chip's push engine (the root's own prefetch engine), which multicasts X a tile at a time into every
 chip's L3, each tile behind a flag (__host_bingo_kernel_hbm_bcast). Every pass's X is multicast at the start, ahead of
 the root's weight prefetcher, which drives the same engine and holds the host for the whole window. Every cluster
-copies a pass's X from its own L3 into L1 once the pass's flags have landed. params x_device (a block of a layer): X is
-made on the device into the root's L3 (x_ready says when), and the root's iDMA multicasts it from there.
+copies a pass's X from its own L3 into L1 once the pass's flags have landed.
 
 THE WEIGHTS. Each cluster's gate|up and down chunks sit in its memory chip's HBM; the memory chip pushes them into the
 chip's L3 ring and the DM core loads each into an L1 slab behind its landed flag. The first pass loads them from the
@@ -61,15 +61,15 @@ import _bingo_paths  # noqa: F401,E402
 from bingo_cfg_reuse import reuse_gemm_start_config  # noqa: E402
 from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
-    INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs,
-    SnaxBingoKernelChipBarrierArgs, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmShapeInitArgs,
+    INT4_B_LAYOUT_PAIRED, HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs,
+    SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmShapeInitArgs,
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdmaFetchFlaggedArgs,
     SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args,
     SnaxBingoKernelSimdMulF16Args, SnaxBingoKernelSimdSwigluF16F16Args, SnaxBingoKernelWaitFlagsArgs,
     SnaxBingoKernelXdmaChainGatherArgs, simd_beats)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from libs.blocks import GemmQueue, chain_gather, chain_gather_teardown  # noqa: E402
+from libs.blocks import GemmQueue, chain_gather  # noqa: E402
 from libs.comm.nest import d_to_a_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -87,8 +87,6 @@ class PBuild(cm.ChipletBuild):
 
     def __init__(self, args, p, plat, hw, shared=None):
         super().__init__(args, p, plat, hw, shared=shared)
-        if p.get("mapping", "single_pass") != "single_pass" or p.get("dn_split", "cols") != "cols":
-            raise ValueError("params: the prefill's one mapping is mapping single_pass, dn_split cols")
         if self.bcast_impl != "bcast_l1":
             raise ValueError("params bcast: bcast_l1 (X reaches the chips through the memory chip, params x_cast)")
         # THE ABLATION (workloads/ffn/dsv2_l0_prefill_ablation): params x_cast, reduce and sync take the paper's three
@@ -96,23 +94,15 @@ class PBuild(cm.ChipletBuild):
         #   x_cast     multicast: X from HBM by one multicast; unicast: the memory chip's push engine writes a copy into
         #              each chip's L3 in turn, the same tiles and flags (__host_bingo_kernel_hbm_ucast)
         #   reduce     chain: ChainGathers; root: the root's clusters pull every chip's partial of a slice into two L1
-        #              slots and fold it into their own on the SIMD, in the fold order (sync barrier, barrier_at kernel)
-        #   sync       edge: every cross-chip dependency a BINGO hardware edge; barrier: chip barriers instead
-        #   barrier_at kernel: a barrier after every kernel, fencing every core of the chip, kernels never overlapping
-        #              (_passes_kernel); cross: the tuned schedule (the fused kernel) with a barrier only where data
-        #              crosses chips, each before a slice's gathers, the gathers then running under the next GEMMs
-        #              (the reduce issued asynchronously), and only the tasks a barrier names waiting for it
+        #              slots and fold it into their own on the SIMD, in the fold order (sync barrier)
+        #   sync       edge: every cross-chip dependency a BINGO hardware edge; barrier: a chip barrier after every
+        #              kernel, fencing every core of the chip, kernels never overlapping (_passes_kernel)
         self.x_cast = str(p.get("x_cast", "multicast"))
         if self.x_cast not in ("multicast", "unicast"):
             raise ValueError(f"params x_cast={self.x_cast!r}: multicast or unicast")
-        self.barrier_at = str(p.get("barrier_at", "kernel")) if self.sync == "barrier" else None
-        if self.barrier_at not in (None, "kernel", "cross"):
-            raise ValueError(f"params barrier_at={self.barrier_at!r}: kernel or cross")
-        self.per_kernel = self.barrier_at == "kernel"
+        self.per_kernel = self.sync == "barrier"
         if self.reduce_impl == "root" and (not self.per_kernel or p.get("chain_alt", False)):
-            raise ValueError("params reduce root: with sync barrier, barrier_at kernel, and no chain_alt (one fold order)")
-        if self.sync == "barrier" and "barrier_fence" in p and bool(p["barrier_fence"]) != self.per_kernel:
-            raise ValueError("params barrier_fence: barrier_at sets it (kernel: every core waits; cross: the named tasks)")
+            raise ValueError("params reduce root: with sync barrier and no chain_alt (one fold order)")
         self.barrier_fence = self.per_kernel
         # params gemm_async: every GEMM a gemm_start / gemm_wait pair (libs/blocks/gemm_async.py), the GEMM core's program
         # issuing a start before the previous GEMM's wait where the graph allows, so it programs the next dispatch while
@@ -124,11 +114,6 @@ class PBuild(cm.ChipletBuild):
         # phase: the GEMM's kind (gu, dn) in its pass, so no wait trails a start across a kernel boundary
         self.gemm_async = bool(p.get("gemm_async", False))
         self.gemm_shape_l1 = bool(p.get("gemm_shape_l1", False))
-        # params chain_cfg_ahead: each ChainGather a configure, a start and a wait task (blocks/gather.py chain_gather), so a
-        # cluster's core programs its next gather while the other cluster's runs; the gathers still run one at a time
-        self.chain_cfg_ahead = bool(p.get("chain_cfg_ahead", False))
-        if self.chain_cfg_ahead and self.reduce_impl != "chain":
-            raise ValueError("params chain_cfg_ahead: with reduce chain")
         self.gemm_cfg_ahead = bool(p.get("gemm_cfg_ahead", False))
         self.gemm_cfg_hoist = bool(p.get("gemm_cfg_hoist", False))
         if not self.gemm_async and (self.gemm_shape_l1 or self.gemm_cfg_ahead or self.gemm_cfg_hoist):
@@ -136,17 +121,8 @@ class PBuild(cm.ChipletBuild):
         if self.gemm_cfg_hoist and (not self.gemm_cfg_ahead or self.per_kernel):
             # kernel by kernel, a fence orders every task made before a barrier ahead of it: a configure hoisted ahead of
             # the waits before its start would close a cycle with them
-            raise ValueError("params gemm_cfg_hoist: with gemm_cfg_ahead, and not with barrier_at kernel")
+            raise ValueError("params gemm_cfg_hoist: with gemm_cfg_ahead, and not with sync barrier")
         self.gsh = {}                           # (chip, cluster) -> its L1 copy of the shape parameters
-        # x_device (a block of a whole layer): the root's X source is made on the device, so it is staged as zeros, and
-        # pass i's multicast also waits for x_ready[i]
-        self.x_device = bool(p.get("x_device", False))
-        self.x_ready = {}
-        # x_hbm (default unless x_device): X from the HBM of the root's memory chip, multicast by its push engine
-        self.x_hbm = bool(p.get("x_hbm", not self.x_device))
-        if self.x_hbm == self.x_device:
-            raise ValueError("params x_hbm, x_device: X comes from HBM (x_hbm) or is made on the device (x_device), "
-                             "never preloaded in the root's L3")
         R = self.ROWS = int(p.get("rows", 32))
         if R % 16 or self.T % R:
             raise ValueError(f"params tokens={self.T} rows={R}: rows a multiple of 16 dividing T")
@@ -173,38 +149,30 @@ class PBuild(cm.ChipletBuild):
         # of copying them from the L3 slots the first pass filled; for weights larger than the ring
         self.restream = bool(p.get("restream", False))
         self.BPC = int(p.get("blocks", 3))          # 16-column gate blocks per gate|up chunk
-        # params first_blocks / last_blocks: the first and the last gate|up chunk of every cluster this
-        # many gate blocks wide (0 = blocks): a narrow first chunk is pushed sooner, so the first GEMM
-        # starts sooner; a narrow last chunk leaves less dequantise and SwiGLU between gate|up and down
+        # params first_blocks: the first gate|up chunk of every cluster this many gate blocks wide (0 = blocks): a
+        # narrow first chunk is pushed sooner, so the first GEMM starts sooner
         self.first_blocks = int(p.get("first_blocks", 0))
-        self.last_blocks = int(p.get("last_blocks", 0))
         self.DNC = int(p.get("dn_cols", 512))       # output columns per down chunk
-        # params w4_paired: every INT4 weight chunk in the paired layout (blocks of 32 columns, layout.py
-        # to_b_pairs), which the B reader walks 64 bytes a pass, as A; default the B-layout (32 bytes a pass). Every
-        # GEMM's column tiles, and every down slice, then come in whole pairs
-        self.w4_paired = bool(p.get("w4_paired", False))
-        self.int4_b = INT4_B_LAYOUT_PAIRED if self.w4_paired else INT4_B_LAYOUT_B
-        self.dn_unit = 2 * BLK if self.w4_paired else BLK
+        # every INT4 weight chunk in the paired layout (blocks of 32 columns, layout.py to_b_pairs), which the B reader
+        # walks 64 bytes a pass, as A: every GEMM's column tiles, and every down slice, come in whole pairs
+        self.int4_b = INT4_B_LAYOUT_PAIRED
+        self.dn_unit = 2 * BLK
         if self.DNC % self.dn_unit:
-            raise ValueError(f"params dn_cols={self.DNC}: every down GEMM whole {self.dn_unit}-column units "
-                             f"(w4_paired: pairs of column tiles)")
+            raise ValueError(f"params dn_cols={self.DNC}: every down GEMM whole {self.dn_unit}-column units (pairs of "
+                             f"column tiles)")
         d = self.d = self._data(args, p)
         self.lay = d.layout
         self.D, self.I = d.H, d.I
         if self.D % self.DNC:
             raise ValueError(f"{self.D} outputs are not whole {self.DNC}-column down chunks")
         self.NDN = self.D // self.DNC
-        # params root_light: the root chip's clusters take the smaller column share, since its
-        # cluster 0 also runs every gather and stores Y
-        self.root_light = bool(p.get("root_light", False))
-        # params col_unit: the intermediate columns are split over the clusters in units of this many (default 32;
-        # 16 = one GEMM column block, which evens the chips' totals out to 43 or 42 blocks)
-        # params root_cols: the root chip's clusters get exactly this many columns (one number for both, or one per
-        # cluster; the rest is split over the others), so its extra duties (every gather and store) cost no window time
+        # the intermediate columns split over the clusters in whole GEMM column blocks, the root chip's clusters taking
+        # the smaller share, since its cluster 0 also runs every gather and stores Y. params root_cols: the root chip's
+        # clusters get exactly this many columns (one number for both, or one per cluster; the rest is split over the
+        # others), so its extra duties (every gather and store) cost no window time
         rc = p.get("root_cols", 0)
         rc = [int(v) for v in rc] if isinstance(rc, (list, tuple)) else [int(rc)] * self.NC
-        self.cols = self.split_columns(self.I, last=self.gs(self.ROOT) if self.root_light else (),
-                                       unit=int(p.get("col_unit", 32)),
+        self.cols = self.split_columns(self.I, last=self.gs(self.ROOT), unit=BLK,
                                        fixed=dict(zip(self.gs(self.ROOT), rc)) if any(rc) else None)
         self.chunks = {g: self._gu_chunks(n) for g, (_, n) in self.cols.items()}
         # each cluster takes the chip's columns (K) for its half of the outputs, so it holds the chip's sum there and
@@ -242,11 +210,8 @@ class PBuild(cm.ChipletBuild):
               f"{sorted({len(c) for c in self.chunks.values()})}")
         self.XB = R * self.D                    # X of a pass, INT8
         self.YB = R * self.D * 2                # Y_raw of a pass, FP16
-        # params x_tile_bytes (x_hbm): the multicast's tile, each behind a flag (default: a first-pass block of X)
-        self.XT = int(p.get("x_tile_bytes", self.XB // self.x_blocks))
-        if self.x_hbm and (self.XB % self.XT or (self.XB // self.x_blocks) % self.XT):
-            raise ValueError(f"params x_tile_bytes={self.XT}: dividing the {self.XB // self.x_blocks}-byte blocks of X")
-        self.TPP = self.XB // self.XT           # x_hbm: tiles a pass
+        self.XT = self.XB // self.x_blocks      # the multicast's tile, each behind a flag: a first-pass block of X
+        self.TPP = self.XB // self.XT           # tiles a pass
         # params l3_overlay: Y_raw of a pass is stored over that pass's X buffers in L3, one region a pass ([source |
         # landing], as long as Y_raw), so the image holds Y beside neither; pass i's stores follow every reader of
         # X_i (the root's put and its clusters' fetches) through the pass's GEMMs
@@ -271,26 +236,18 @@ class PBuild(cm.ChipletBuild):
         if h % self.chain_group or (self.out_slots % self.chain_group and not self.per_kernel):
             raise ValueError(f"params chain_group={self.chain_group}: must divide the {h} slices a cluster and "
                              f"out_slots={self.out_slots}")
-        if self.x_cast == "unicast" and not self.x_hbm:
-            raise ValueError("params x_cast unicast: X from HBM (x_hbm)")
         if self.per_kernel:
             # kernel by kernel, no task of one kernel runs inside another: the down slices all wait in their output slots
             # until the reduce kernel, slot j for slice j, the symmetric buffer's two slots then the X buffer's (dead
             # until the next pass's X), so the X buffer sits right behind the symmetric buffer on every cluster
-            bad = [k for k in ("split_last", "split_first_dn", "dn_load_early", "x_early", "y_scatter", "x_device")
-                   if p.get(k, False)]
-            if bad or int(p.get("x_buffers", 1)) != 1 or "out_slots" in p:
-                raise ValueError(f"params barrier_at kernel: no {bad or 'x_buffers / out_slots'} "
-                                 f"(a kernel's tasks never run inside another kernel; x_buffers 1)")
+            bad = [k for k in ("split_last", "split_first_dn", "dn_load_early", "x_early", "y_scatter") if p.get(k, False)]
+            if bad or "out_slots" in p:
+                raise ValueError(f"params sync barrier: no {bad or 'out_slots'} (a kernel's tasks never run inside "
+                                 f"another kernel)")
             if self.chain_group != 1 and self.reduce_impl != "chain":
                 raise ValueError("params chain_group: with reduce chain")
             self.out_slots = h                  # slot j for slice j of the pass
         self.NTL = -(-self.T // 16 // len(self.chips))
-        self.SL = int(p.get("root_slice", 32 * 1024))
-        # what the build makes (ffn_stages_mc.py runs a part): the gate|up half of each pass, its down half; a8_pre
-        # {g: the task after which cluster g holds its chip's A8} stands in for the gate|up half
-        self.do_up, self.do_down, self.a8_pre = True, True, {}
-        self.x_pre = {}                         # {g: the task after which cluster g holds X of the (one) pass in L1}
         self._stage()
         self.make_streams()
         self.make_rings()
@@ -299,28 +256,23 @@ class PBuild(cm.ChipletBuild):
     def _data(self, args, p):
         """The FFN's data and golden (a layer's block gives it the layer's rows)."""
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
-        return ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
+        return ffn_data.FFNData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
                                 wbits=self.wbits, tokens=self.T, inter=p.get("inter"))
 
     def pass_start(self, i):
         """Where the tasks of pass i (i >= 1) begin, in the order they are made: nothing here; a layer starts an args
-        phase (llama3_prefill_mc.py)."""
+        phase (llama3/full_layer_prefill/common/llama3_layer_mc.py)."""
 
     # ---- the plan -------------------------------------------------------------------------
     def _gu_chunks(self, n):
-        """[(first gate block, blocks)] of a cluster's n columns: params first_blocks, then chunks of
-        blocks, then params last_blocks."""
+        """[(first gate block, blocks)] of a cluster's n columns: params first_blocks, then chunks of blocks."""
         nb = n // BLK
-        f, l = self.first_blocks, self.last_blocks
-        if not f and not l:
+        f = self.first_blocks
+        if not f:
             return [(b0, min(self.BPC, nb - b0)) for b0 in range(0, nb, self.BPC)]
-        if f > self.BPC or l > self.BPC or f + l > nb:
-            raise ValueError(f"params first_blocks={f} / last_blocks={l}: at most blocks={self.BPC} each, "
-                             f"together at most the {nb} blocks of a cluster")
-        out = [(0, f)] if f else []
-        end = nb - l
-        out += [(b0, min(self.BPC, end - b0)) for b0 in range(f, end, self.BPC)]
-        return out + ([(end, l)] if l else [])
+        if f > self.BPC or f > nb:
+            raise ValueError(f"params first_blocks={f}: at most blocks={self.BPC} and the {nb} blocks of a cluster")
+        return [(0, f)] + [(b0, min(self.BPC, nb - b0)) for b0 in range(f, nb, self.BPC)]
 
     def _gu_cols(self, g, b0, nb_):
         """The gate|up chunk's columns of [gate | up]: its gate blocks, then the same up blocks."""
@@ -330,14 +282,11 @@ class PBuild(cm.ChipletBuild):
 
     # ---- data -----------------------------------------------------------------------------
     def _pack_b(self, q):
-        """An INT4 weight chunk [K, N] as the GEMMs read it: the B-layout, or (params w4_paired) the paired layout."""
+        """An INT4 weight chunk [K, N] as the GEMMs read it: the paired layout."""
         lay, mesh = self.lay, self.d.mesh
-        if self.w4_paired:
-            if q.shape[1] % (2 * mesh[2]):
-                raise ValueError(f"params w4_paired: a weight chunk of {q.shape[1]} columns is not whole pairs of "
-                                 f"{mesh[2]}-column tiles")
-            return lay.pack_int4(lay.to_b_pairs(q, mesh))
-        return lay.pack_int4(lay.to_b(q, mesh))
+        if q.shape[1] % (2 * mesh[2]):
+            raise ValueError(f"a weight chunk of {q.shape[1]} columns is not whole pairs of {mesh[2]}-column tiles")
+        return lay.pack_int4(lay.to_b_pairs(q, mesh))
 
     def x_a(self):
         """Every pass's X, A layout, pass after pass (INT8)."""
@@ -346,22 +295,18 @@ class PBuild(cm.ChipletBuild):
 
     def _stage(self):
         st, d, T, lay = self.st, self.d, self.TAG, self.lay
-        # every chip's X landing area (with x_device the root's is also the source); params l3_overlay: one region a
-        # pass, [source | landing], as long as Y_raw of the pass
+        # every chip's X landing area; params l3_overlay: one region a pass as long as Y_raw of the pass, X landing in its
+        # second half
         if self.l3_overlay:
             st.put_zeros(f"{T}_xy", "int8_t", 2 * self.NI * self.XB, preload=True)
-        elif self.x_device:
-            self.h_xsrc = st.put_zeros(f"{T}_xsrc", "int8_t", self.NI * self.XB, preload=True)
-        if not self.l3_overlay and self.x_hbm:
-            st.put_zeros(f"{T}_xland", "int8_t", self.NI * self.XB, preload=True)
-        if self.x_hbm:                          # every pass's X in the HBM of the root's memory chip, a flag a tile
-            m = self.mem[self.ROOT]
-            self.h_xhbm = st.put_hbm(f"{T}_xhbm", self.x_a().reshape(-1), mem_chip=(m >> 4, m & 15))
-            st.put_zeros(f"{T}_xtflag", "uint8_t", 64 * self.NI * self.TPP)
-            if self.x_cast == "unicast":            # the root's progress flags, one a (chip, tile) of every pass
-                st.put_zeros(f"{T}_xuprog", "uint8_t", 64 * self.NI * len(self.chips) * self.TPP)
         else:
-            st.put_zeros(f"{T}_xflag", "uint8_t", self.NI * 64 * max(1, self.x_blocks))
+            st.put_zeros(f"{T}_xland", "int8_t", self.NI * self.XB, preload=True)
+        # every pass's X in the HBM of the root's memory chip, a flag a tile
+        m = self.mem[self.ROOT]
+        self.h_xhbm = st.put_hbm(f"{T}_xhbm", self.x_a().reshape(-1), mem_chip=(m >> 4, m & 15))
+        st.put_zeros(f"{T}_xtflag", "uint8_t", 64 * self.NI * self.TPP)
+        if self.x_cast == "unicast":            # the root's progress flags, one a (chip, tile) of every pass
+            st.put_zeros(f"{T}_xuprog", "uint8_t", 64 * self.NI * len(self.chips) * self.TPP)
         if not self.l3_overlay:
             st.put_zeros(f"{T}_y", "uint8_t", self.NI * self.YB, preload=True)
         if self.y_scatter:
@@ -397,22 +342,21 @@ class PBuild(cm.ChipletBuild):
         # the down output is reduced slice by slice (a slice's columns of all rows), through out_slots slots of each
         # cluster's symmetric buffer and two fold slots (of chain_group slices) of the root clusters' fold buffers
         self.SLICE = R * max(w for v in self.dn_sl.values() for _, w in v) * 2
-        # sync barrier with barrier_at kernel: two output slots in the symmetric buffer, the rest in the X buffer behind
-        # it (named to sort right after it, so the static packer puts it there on every cluster: check_symmetric)
+        # sync barrier: two output slots in the symmetric buffer, the rest in the X buffer behind it (named to sort right
+        # after it, so the static packer puts it there on every cluster: check_symmetric)
         self.sym_slots = 2 if self.per_kernel else self.out_slots
         if self.per_kernel and (self.out_slots - self.sym_slots) * self.SLICE > self.XB:
-            raise ValueError(f"barrier_at kernel: {self.out_slots - self.sym_slots} output slots of {self.SLICE} B do "
+            raise ValueError(f"sync barrier: {self.out_slots - self.sym_slots} output slots of {self.SLICE} B do "
                              f"not fit the {self.XB}-byte X buffer")
         self.sym_bytes = self.sym_slots * self.SLICE
         self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_sym", self.sym_bytes)
                     for k in self.chips for c in range(self.NC)}
         self.p1c = {c: self.cx_chip(self.ROOT).at(c).l1(f"{self.TAG}_p1c", 2 * self.chain_group * self.SLICE)
                     for c in range(self.NC)}
-        nxb = int(self.p.get("x_buffers", 1))
         self.xbuf, self.gbuf, self.sbuf, self.a16d, self.a16a, self.a8 = {}, {}, {}, {}, {}, {}
         for g, (_, n) in self.cols.items():
             l1 = lambda name, nb: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{self.TAG}_{name}", nb)
-            self.xbuf[g] = [l1("AAAB_xo" if self.per_kernel else f"x{b}", self.XB) for b in range(nxb)]
+            self.xbuf[g] = [l1("AAAB_xo" if self.per_kernel else "x0", self.XB)]
             gb = MT * 2 * self.BPC * TILE
             self.gbuf[g] = [l1(f"g{b}", gb) for b in range(2)]
             self.sbuf[g] = l1("sgu", self.sdup[g][1])
@@ -448,10 +392,9 @@ class PBuild(cm.ChipletBuild):
                           shape_addr=shape_addr)
 
     def gather_node(self, c, name, args, deps):
-        """One ChainGather into the root's cluster c; returns the task its output is ready after and its operands are free
-        after: the blocking task, or (params chain_cfg_ahead) the wait of its configure, start and wait tasks."""
+        """One ChainGather into the root's cluster c, on its xDMA core; returns the task."""
         return chain_gather(lambda n, kernel, a, d: self.node(self.ROOT, c, self.roles["xdma"], n, kernel, a, d),
-                            name, args, deps, self.chain_cfg_ahead)
+                            name, args, deps)
 
     def _load(self, g, i, j, deps=()):
         """Weight chunk j of cluster g into the next slab: a ring load in pass 0 (every pass with params restream), a
@@ -474,20 +417,12 @@ class PBuild(cm.ChipletBuild):
         return ld, si, slab
 
     # ---- X ----------------------------------------------------------------------------------
-    def _xsrc(self, off, **kw):
-        """x_device: the root's X source at byte `off` (of all passes' X, A layout): params l3_overlay puts each pass's
-        in its region of the overlay symbol."""
-        if self.l3_overlay:
-            return BingoMemSymbol(f"{self.TAG}_xy", offset=off // self.XB * self.YB + off % self.XB, **kw)
-        return BingoMemSymbol(f"{self.TAG}_xsrc", offset=off, **kw)
-
     def _xland(self, off, chip_id=None):
-        """Where X lands in every chip's L3, at byte `off`; with params l3_overlay after its pass's source. x_device
-        without l3_overlay: the root's put lands each pass's X over its source."""
+        """Where X lands in every chip's L3, at byte `off`; params l3_overlay: in the second half of its pass's region."""
         if self.l3_overlay:
             return BingoMemSymbol(f"{self.TAG}_xy", offset=off // self.XB * self.YB + self.XB + off % self.XB,
                                   chip_id=chip_id)
-        return BingoMemSymbol(f"{self.TAG}_xland" if self.x_hbm else f"{self.TAG}_xsrc", offset=off, chip_id=chip_id)
+        return BingoMemSymbol(f"{self.TAG}_xland", offset=off, chip_id=chip_id)
 
     def _ysym(self, off, **kw):
         """Y_raw in the root's L3 at byte `off`; params l3_overlay: over the X buffers, at the same offset."""
@@ -502,20 +437,15 @@ class PBuild(cm.ChipletBuild):
         return BingoMemSymbol(f"{self.TAG}_yt", offset=self.y_owner(q)[1] * self.YT_B + off, chip_id=chip_id)
 
     def out_view(self, g, so):
-        """Cluster g's output slot so: the symmetric buffer's slots, then (barrier_at kernel) the X buffer's, which
+        """Cluster g's output slot so: the symmetric buffer's slots, then (sync barrier) the X buffer's, which
         follows it at the same offset on every cluster, so self.sx(c, so * SLICE) names the slot on every chip."""
         k, c = self.chip(g), self.c(g)
         if so < self.sym_slots:
             return self.sym[(k, c)].view(so * self.SLICE)
         return self.xbuf[g][0].view((so - self.sym_slots) * self.SLICE)
 
-    def _xflag(self, i):
-        """x_device: the offset of X_i's landed flag (64 B each): with params x_blocks, the first pass's blocks take the
-        first flags and a later pass the one after them."""
-        return 64 * (i if self.x_blocks == 1 else self.x_blocks + i - 1)
-
     def x_hbm_bcasts(self, go):
-        """x_hbm: the root's host queues its memory chip's push engine, one task a pass: the pass's X a tile at a time
+        """The root's host queues its memory chip's push engine, one task a pass: the pass's X a tile at a time
         into every chip's L3, each tile behind its flag. The root's prefetcher drives the same engine and holds the host
         for the whole window, so it starts after the last of them. Returns the tasks, one a pass."""
         R, T = self.ROOT, self.TAG
@@ -536,42 +466,19 @@ class PBuild(cm.ChipletBuild):
         self.edge(out[-1], self.prefetch[R])
         return out
 
-    def stage_x_put(self, i, after):
-        """x_device: the root multicasts X_i into every chip's L3 (bcast_l1). Returns the put."""
-        T, R = self.TAG, self.ROOT
-        return self.node(R, 0, self.roles["dm"], f"x_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
-                         SnaxBingoKernelIdmaPutFlaggedArgs(
-                             self._xsrc(i * self.XB), self._xland(i * self.XB), self.XB,
-                             BingoMemSymbol(f"{T}_xflag", offset=self._xflag(i)), value=1, bcast=True,
-                             also_here=True), list(after) + list(self.x_ready.get(i, [])))
-
-    def stage_x_put_block(self, b, after):
-        """x_device with params x_blocks: the root multicasts row block b of the first pass's X."""
-        T, R, nb = self.TAG, self.ROOT, self.XB // self.x_blocks
-        return self.node(R, 0, self.roles["dm"], f"x_bput_i0b{b}", "__snax_bingo_kernel_idma_put_flagged",
-                         SnaxBingoKernelIdmaPutFlaggedArgs(
-                             self._xsrc(b * nb), self._xland(b * nb), nb,
-                             BingoMemSymbol(f"{T}_xflag", offset=b * 64), value=1, bcast=True,
-                             also_here=True), list(after) + list(self.x_ready.get(0, [])))
-
     def _x_fetch(self, g, i, off, nb, src, after, name, block=False):
-        """Bytes off .. off + nb of X_i into cluster g's L1 (its buffer i mod buffers), behind their flags: the tiles'
-        (x_hbm) or the put's. `src` is the multicast task (the hbm_bcast of pass i, or the root's put)."""
+        """Bytes off .. off + nb of X_i into cluster g's L1, behind their tiles' flags. `src` is the multicast task (the
+        hbm_bcast of pass i)."""
         T, dm = self.TAG, self.roles["dm"]
         k, c = self.chip(g), self.c(g)
-        xb = self.xbuf[g][i % len(self.xbuf[g])]
-        if self.x_hbm:
-            t0 = (i * self.XB + off) // self.XT
-            flag, nf = BingoMemSymbol(f"{T}_xtflag", offset=64 * t0), nb // self.XT
-        else:
-            flag = BingoMemSymbol(f"{T}_xflag", offset=self._xflag(i) if nb == self.XB else off // nb * 64)
-            nf = 1
+        xb = self.xbuf[g][0]
+        t0 = (i * self.XB + off) // self.XT
+        flag, nf = BingoMemSymbol(f"{T}_xtflag", offset=64 * t0), nb // self.XT
         nd = self.node(k, c, dm, name, "__snax_bingo_kernel_idma_fetch_flagged",
                        SnaxBingoKernelIdmaFetchFlaggedArgs(self._xland(i * self.XB + off), xb.view(off) if block else xb,
                                                            nb, flag, nf, 1),
-                       list(after) + ([src] if k == self.ROOT and not self.x_hbm else []))
-        if self.x_hbm or k != self.ROOT:
-            self.dfg.bingo_add_order_edge(src, nd)
+                       list(after))
+        self.dfg.bingo_add_order_edge(src, nd)
         return nd
 
     def x_wait_block(self, g, b, src, after=()):
@@ -580,7 +487,7 @@ class PBuild(cm.ChipletBuild):
         return self._x_fetch(g, 0, b * nb, nb, src, after, f"x_wait_i0b{b}_g{g}", block=True)
 
     def stage_x(self, i, src, after):
-        """X_i into every cluster's L1 buffer (i mod buffers), behind its flags. {g: the task after which it is there}."""
+        """X_i into every cluster's L1 buffer, behind its flags. {g: the task after which it is there}."""
         return {g: self._x_fetch(g, i, 0, self.XB, src, after.get(g, []), f"x_wait_i{i}_g{g}") for g in range(self.G)}
 
     # ---- gate|up and the A8 ---------------------------------------------------------------------
@@ -592,7 +499,7 @@ class PBuild(cm.ChipletBuild):
         for g, (_, n) in self.cols.items():
             k, c = self.chip(g), self.c(g)
             nb = n // BLK
-            xb = self.xbuf[g][i % len(self.xbuf[g])]
+            xb = self.xbuf[g][0]
             soff = 0
             sw = None
             xblk = self.x_blocks > 1 and i == 0
@@ -604,9 +511,8 @@ class PBuild(cm.ChipletBuild):
                     # of the A8 copies in the DM core's program (those wait for the quantise)
                     self.dn_first_load[g] = self._load(g, i, j + 1)
                 if xblk and j == 0:
-                    # the other X blocks behind the first weight load in the DM core's program (x_pre: all there)
-                    xws += ([x[g]] * (self.x_blocks - 1) if self.x_pre else
-                            [self.x_wait_block(g, bb, self._xsrc_task(bb)) for bb in range(1, self.x_blocks)])
+                    # the other X blocks behind the first weight load in the DM core's program
+                    xws += [self.x_wait_block(g, bb, self.x_bc[0]) for bb in range(1, self.x_blocks)]
                 b = self.gu_count[g] % 2
                 self.gu_count[g] += 1
                 gb = self.gbuf[g][b]
@@ -671,11 +577,6 @@ class PBuild(cm.ChipletBuild):
             self.last_swi[(g, i)] = swi_m           # the last chunk's SwiGLU of each row tile
         return last_sw, last_gemm
 
-    def _xsrc_task(self, b):
-        """The multicast task whose flags block b of the first pass's X waits for: the pass's hbm_bcast (x_hbm) or the
-        root's put of the block."""
-        return self.x_bc[0] if self.x_hbm else self._xputs[b]
-
     def _gu_tail(self, g, i, j, b0, nb_, gb, soff, gm_of):
         """params split_last: the last chunk's dequantise and SwiGLU row tile by row tile; behind each post
         block's last SwiGLU its reshape (xDMA) and the previous block's quantise (SIMD, whose reshape is done
@@ -738,24 +639,8 @@ class PBuild(cm.ChipletBuild):
                 self.node(k, c, self.roles["dm"], f"a8_push_m{m}_g{g}" if i == 0 else f"a8_push_i{i}m{m}_g{g}",
                           "__snax_bingo_kernel_idma_1d_copy",
                           SnaxBingoKernelIdma1dCopyArgs(self.a8[g][0].view(off), self.a8[other][0].view(off), 16 * n),
-                          [q] + (self.push_war.get(g, []) + self._pass_barrier(k) if first else [])))
+                          [q] + (self.push_war.get(g, []) if first else [])))
         return q
-
-    def _pass_barrier(self, k):
-        """barrier_at cross: [chip k's barrier between the previous pass's last gathers and this pass's first A8 copy
-        (no copy into a cluster while a gather passes through it)], made when chip k's first copy of the pass is, so
-        it sits behind the chip's gate|up loads in its DM core's program; [] without one. self.bx = (round, the root's
-        last gather, {chip: task})."""
-        if self.bx is None:
-            return []
-        n, last_red, made = self.bx
-        if k not in made:
-            prev = self.last_barrier[k]
-            made[k] = self.node(k, 0, self.roles["dm"], f"barrier{n}", "__snax_bingo_kernel_chip_barrier",
-                                SnaxBingoKernelChipBarrierArgs(self.barrier_mode, self.bar_tl, self.bar_br, seq=n),
-                                [prev] + ([last_red] if k == self.ROOT else []))
-            self.last_barrier[k] = made[k]
-        return [made[k]]
 
     def stage_post(self, i, sw):
         """A16 reshaped to the A layout and quantised into the chip's A8, post block by post block (split_last made the
@@ -803,27 +688,20 @@ class PBuild(cm.ChipletBuild):
         self.ex_push = {}                       # {(g, i): its A8 runs copied to the other cluster}
         self.push_war = {}                      # {g: what its first A8 copy of the pass follows}
         self.q_tile = {}                        # {g: {row tile: its quantise}}
-        self.dn_load_early = bool(self.p.get("dn_load_early", False)) and self.do_down
-        # params relay_on_simd: dep-tag relays of xDMA tasks (the gathers) go to the SIMD cores first, idle in the down
-        # phase, not behind the DM cores' blocking ring loads or the GEMM cores' long GEMMs
-        if self.p.get("relay_on_simd", False):
-            self.dfg.relay_prefer_cores = {self.roles["xdma"]: [self.roles["simd"]]}
-        # params relay_per_gather: each dep-tag relay of an xDMA task serves that one task, so a gather waits for its
-        # own slice's GEMMs only, not for the next gather's too (one relay held both)
-        if self.p.get("relay_per_gather", False):
-            self.dfg.relay_one_consumer_cores = [self.roles["xdma"]]
+        self.dn_load_early = bool(self.p.get("dn_load_early", False))
+        # dep-tag relays of xDMA tasks (the gathers) go to the SIMD cores first, idle in the down phase, not behind the DM
+        # cores' blocking ring loads or the GEMM cores' long GEMMs; each serves that one task, so a gather waits for its
+        # own slice's GEMMs only, not for the next gather's too (one relay would hold both)
+        self.dfg.relay_prefer_cores = {self.roles["xdma"]: [self.roles["simd"]]}
+        self.dfg.relay_one_consumer_cores = [self.roles["xdma"]]
         # params gather_relay_only: a dep-tag cell of the xDMA tasks (the gathers) that is over budget relays its
         # leftover edges instead of ordering them, so no down GEMM waits for an earlier gather
         if self.p.get("gather_relay_only", False):
             self.dfg.relay_not_order_cores = [self.roles["xdma"]]
         self.dn_first_load = {}                 # dn_load_early: {g: the first down chunk's load}
-        self.bx = None                          # barrier_at cross: the pass barrier being made (_pass_barrier)
-        xs, ys = [k >> 4 for k in self.chips], [k & 15 for k in self.chips]
-        self.bar_tl, self.bar_br = (min(xs) << 4) | min(ys), (max(xs) << 4) | max(ys)
-        # params sym_zero: false skips zeroing the symmetric buffers before the start; every slot is written whole by
-        # its down GEMMs before it is read, and an unzeroed buffer is live only from then on, so the static L1 plan can
-        # lay it over X
-        self.sym_zero = bool(self.p.get("sym_zero", True))
+        # the symmetric buffers are not zeroed before the start: every slot is written whole by its down GEMMs before it
+        # is read, and an unzeroed buffer is live only from then on, so the static L1 plan can lay it over X
+        self.sym_zero = False
         go = self.setup(extra=self.pre_window())
         self._passes(go, {g: [go[self.chip(g)]] for g in range(self.G)})
         if self.NI > 1 and not self.restream:
@@ -859,7 +737,7 @@ class PBuild(cm.ChipletBuild):
                     out = S if c == 0 else self.D - S
                     w = max(w, mt * kd * 2 * self.cols[g][1] // BLK + mt * (kn // 4) * out // BLK)
             return w
-        u = self.dn_unit                            # whole column tiles, or (w4_paired) whole pairs of them
+        u = self.dn_unit                            # whole pairs of column tiles
         S = min(range(u, self.D, u), key=lambda v: (worst(v), abs(v - self.D // 2)))
 
         def cut(o0, width):
@@ -885,41 +763,20 @@ class PBuild(cm.ChipletBuild):
         params restream loads it from the ring again). X_(i+1) comes into L1 after the last gate|up GEMM that reads the
         buffer. A pass's first A8 copy follows the previous pass's last gather (no copy into a cluster while a gather
         passes through it) and the receiving cluster's last down GEMM (its A8); its first down GEMMs follow the previous
-        pass's gathers of their slots; the stores keep their lag across passes. x_device: X_(i+1) is multicast right
-        behind pass i's gate|up loads in the root DM core's program, and pass i's first gather follows that put, so no
-        multicast meets a gather; x_hbm: every pass's X is multicast at the start, and the first gather follows it."""
+        pass's gathers of their slots; the stores keep their lag across passes. Every pass's X is multicast at the
+        start, and the first gather follows it, so no multicast meets a gather."""
         if self.per_kernel:
             return self._passes_kernel(go, after_x)
         R, dm, xdma, gemm = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["gemm"]
-        # params sync barrier (barrier_at cross): no edge crosses chips; a chip barrier before each slice's gathers takes
-        # every chip's down GEMMs of the slice and the root's previous gathers, and frees the output slots those read
-        bar = self.sync == "barrier"
-        freed = []                                  # output slots (chip, cluster, slot) the next barrier frees
-        if bar and (self.y_scatter or self.x_device or self.p.get("first_gather_waits_copies", True)):
-            raise ValueError("params barrier_at cross: no y_scatter or x_device, first_gather_waits_copies false (every "
-                             "one would cross chips)")
-        if self.x_pre or not self.do_up:          # ffn_stages_mc: X in L1 before the window, or no gate|up
-            x, puts = dict(self.x_pre), []
-        elif self.x_hbm:
-            self.x_bc = self.x_hbm_bcasts(go)
-            puts = []
-            if self.x_blocks > 1:
-                x = {g: self.x_wait_block(g, 0, self.x_bc[0], after_x[g]) for g in range(self.G)}
-            else:
-                x = self.stage_x(0, self.x_bc[0], after_x)
-        elif self.x_blocks > 1:
-            self._xputs = []
-            for b in range(self.x_blocks):
-                self._xputs.append(self.stage_x_put_block(b, [go[R]] + self._xputs[-1:]))
-            puts = list(self._xputs)
-            x = {g: self.x_wait_block(g, 0, self._xputs[0], after_x[g]) for g in range(self.G)}
+        self.x_bc = self.x_hbm_bcasts(go)
+        if self.x_blocks > 1:
+            x = {g: self.x_wait_block(g, 0, self.x_bc[0], after_x[g]) for g in range(self.G)}
         else:
-            puts = [self.stage_x_put(0, [go[R]])]
-            x = self.stage_x(0, puts[0], after_x)
+            x = self.stage_x(0, self.x_bc[0], after_x)
         SL, others, h = self.SLICE, self.order[1:], self.NDN // self.NC
         p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
         sym_reader, p1_reader, stores, pending, last_st = {}, {}, [], [], {}
-        lag = int(self.p.get("store_lag", 0))
+        lag = 1                                 # a gather's stores follow the next gather (two fold slots)
         # params split_first_dn: each cluster's first down slice as one GEMM per post block, each behind its block's
         # quantise and A8 copy only, so the end of the post-processing runs under down GEMMs
         split0 = bool(self.p.get("split_first_dn", False))
@@ -963,10 +820,6 @@ class PBuild(cm.ChipletBuild):
             last_st[c] = sts
             p1_reader[(c, s)] = sts
 
-        # params first_gather_waits_copies (default true): the first gather also waits for every A8 copy. False: only
-        # the copies into cluster c precede cluster c's gathers, through cluster c's own down GEMMs
-        wait_copies = bool(self.p.get("first_gather_waits_copies", True))
-        nxb = len(self.xbuf[0])
         # params x_early: X_{i+1} fetched behind pass i's second down chunk load in the DM core's program (the down
         # GEMMs leave the DM core idle), not at the top of pass i + 1 behind every down load and store of pass i
         x_early = bool(self.p.get("x_early", False))
@@ -974,47 +827,20 @@ class PBuild(cm.ChipletBuild):
         last_red, last_gu, last_dn = None, {}, {}
 
         def fetch_x(i):
-            # X_i into the buffer once the last gate|up GEMM that read it (pass i - buffers) is done
-            src = self.x_bc[i] if self.x_hbm else puts[-1]
-            return self.stage_x(i, src, {g: list(after_x[g]) + ([last_gu[i - nxb][g]] if i >= nxb else [])
-                                         for g in range(self.G)})
+            # X_i (i >= 1) into the buffer once the last gate|up GEMM that read it (pass i - 1) is done
+            return self.stage_x(i, self.x_bc[i], {g: list(after_x[g]) + [last_gu[i - 1][g]] for g in range(self.G)})
         for i in range(self.NI):
             if i:
                 self.pass_start(i)
                 x = xpre.pop(i) if i in xpre else fetch_x(i)
-                self.push_war = {g: [last_dn[self.gs(self.chip(g))[1 - self.c(g)]]] + ([] if bar else [last_red])
-                                 for g in range(self.G)}
-                if bar:                             # the pass barrier, made chip by chip (_pass_barrier)
-                    self.n_barrier += 1
-                    self.bx = (self.n_barrier, last_red, {})
+                self.push_war = {g: [last_dn[self.gs(self.chip(g))[1 - self.c(g)]], last_red] for g in range(self.G)}
             next_put = None
-            if self.do_up:
-                sw, last_gu[i] = self.stage_gu(i, x)
-                if i + 1 < self.NI and self.x_device:
-                    next_put = self.stage_x_put(i + 1, [go[R]] + puts[-1:])
-                    puts.append(next_put)
-                post = self.stage_post(i, sw)
-                if self.bx is not None:
-                    made = self.bx[2]
-                    if set(made) != set(self.chips):
-                        raise ValueError(f"pass {i}: the pass barrier was made on {len(made)} of {len(self.chips)} chips")
-                    for (k, c, o) in freed:         # the last slice's slots of the previous pass
-                        sym_reader[(k, c, o)] = [made[k]]
-                    freed = []
-                    self.barrier_rounds.append(made)
-                    self.bx = None
-                ex_last = {g: self.ex_push[(g, i)][-1] for g in range(self.G)}
-                copies = list(ex_last.values()) if wait_copies else []
-                a8_tile = lambda g, m, i=i: [self.q_tile[g][m], self.ex_push[(self.gs(self.chip(g))[1 - self.c(g)], i)][m]]
-                a8_all = lambda g: [post[g], ex_last[self.gs(self.chip(g))[1 - self.c(g)]]]
-            else:                                   # the chip's A8 in L1 before the window
-                copies = []
-                a8_tile = lambda g, m: [self.a8_pre[g]]
-                a8_all = lambda g: [self.a8_pre[g]]
-            if not self.do_down:
-                self.up_ends = [t for g in range(self.G) for t in self.ex_push[(g, i)]]
-                return
-            if self.x_hbm and i == 0 and self.do_up and not self.x_pre:
+            sw, last_gu[i] = self.stage_gu(i, x)
+            post = self.stage_post(i, sw)
+            ex_last = {g: self.ex_push[(g, i)][-1] for g in range(self.G)}
+            a8_tile = lambda g, m, i=i: [self.q_tile[g][m], self.ex_push[(self.gs(self.chip(g))[1 - self.c(g)], i)][m]]
+            a8_all = lambda g: [post[g], ex_last[self.gs(self.chip(g))[1 - self.c(g)]]]
+            if i == 0:
                 next_put = self.x_bc[-1]            # every multicast before the first gather
             lds = load(i, 0)
             prev_dn = {}
@@ -1063,14 +889,6 @@ class PBuild(cm.ChipletBuild):
                 # slot s (GS slices)
                 j0 = jl + 1 - GS
                 s, so0 = (j0 // GS) % 2, j0 % self.out_slots
-                if bar:
-                    # the group's barrier: every chip's down GEMMs of the group, the root's gathers before it; the slots
-                    # those gathers read are free once it is passed
-                    b = self.barrier({k: [dn[g] for g in self.gs(k)] + ([last_red] if k == R and last_red is not None
-                                                                        else []) for k in self.chips})
-                    for (k, c, o) in freed:
-                        sym_reader[(k, c, o)] = [b[k]]
-                    freed = []
                 for c in range(self.NC):
                     j = c * h + j0
                     # params chain_alt: cluster 1's gathers run the ring the other way, so each gather's data follows the
@@ -1080,19 +898,17 @@ class PBuild(cm.ChipletBuild):
                         cm.remote, R, c, ordr, src=self.sx(c, so0 * SL), dst=f"({p1x[c]} + {s * GS * SL})",
                         size=(GS - 1) * SL + self.ROWS * self.dn_sl[c][jl][1] * 2,
                         junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.p1c[c]])
-                    first = ([last_red] if last_red is not None else []) + (list(copies) if j0 == 0 else [])
+                    # the A8 copies into cluster c precede its gathers through its own down GEMMs
+                    first = [last_red] if last_red is not None else []
                     if next_put is not None and j0 == 0 and c == 0:
                         first.append(next_put)
-                    ins = [b[R]] if bar else [dn[g] for g in range(self.G) if self.c(g) == c]
+                    ins = [dn[g] for g in range(self.G) if self.c(g) == c]
                     red = self.gather_node(c, f"y_chain_j{j}" if i == 0 else f"y_chain_i{i}j{j}", ga,
                                            ins + p1_reader.get((c, s), []) + first)
                     last_red = red
                     for k in self.chips:
                         for o in range(so0, so0 + GS):
-                            if bar:
-                                freed.append((k, c, o))
-                            else:
-                                sym_reader[(k, c, o)] = [red]
+                            sym_reader[(k, c, o)] = [red]
                     pending.append((c, i, j, red, s))
             last_dn = dict(dn)
             for g in range(self.G):
@@ -1117,7 +933,7 @@ class PBuild(cm.ChipletBuild):
         self._checks()
 
     def _passes_kernel(self, go, after_x):
-        """params sync barrier, barrier_at kernel: the passes kernel by kernel, as a conventional system runs them, a
+        """params sync barrier: the passes kernel by kernel, as a conventional system runs them, a
         chip barrier after every kernel fencing every core of the chip (fence_barriers), so no two kernels overlap and
         nothing crosses chips but at a barrier. Per pass:
             K1  X into L1, then every gate|up chunk, its dequantise and SwiGLU the GEMM's epilogue
@@ -1201,9 +1017,9 @@ class PBuild(cm.ChipletBuild):
         return sts
 
     def _reduce_kernel(self, i):
-        """K4 of pass i (barrier_at kernel): every slice of both halves of the outputs reduced into the root and stored
+        """K4 of pass i (sync barrier): every slice of both halves of the outputs reduced into the root and stored
         to Y_raw in its L3, slice by slice. reduce chain: the ChainGathers of _passes, one at a time, into the root's
-        two fold slots, each stored params store_lag gathers later. reduce root: each root cluster pulls every other
+        two fold slots, each stored a gather later. reduce root: each root cluster pulls every other
         chip's partial of its half (one pull in flight, two L1 slots) and its SIMD adds it into the cluster's own, in
         the fold order, then stores the slice. Returns each root cluster's last store."""
         R, dm, xdma, simd = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["simd"]
@@ -1211,7 +1027,7 @@ class PBuild(cm.ChipletBuild):
         last = {}
         if self.reduce_impl == "chain":
             p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
-            lag = int(self.p.get("store_lag", 0))
+            lag = 1
             pending, p1_reader, last_red = [], {}, None
             GS = self.chain_group               # params chain_group: a gather carries this many slices, as in _passes
             for jl in range(0, h, GS):
@@ -1279,7 +1095,7 @@ class PBuild(cm.ChipletBuild):
                 if u.assigned_chiplet_id != v.assigned_chiplet_id and u not in pre and u not in post and v not in post]
 
     def check_symmetric(self):
-        """Every symmetric buffer at offset 0 of its arena; with barrier_at kernel also every X buffer right behind it,
+        """Every symmetric buffer at offset 0 of its arena; with sync barrier also every X buffer right behind it,
         where the output slots after the symmetric buffer's sit."""
         super().check_symmetric()
         if self.per_kernel:
@@ -1287,7 +1103,7 @@ class PBuild(cm.ChipletBuild):
             bad = [(g, pl[id(self.xbuf[g][0])][1] if id(self.xbuf[g][0]) in pl else None) for g in range(self.G)
                    if id(self.xbuf[g][0]) not in pl or pl[id(self.xbuf[g][0])][1] != self.sym_bytes]
             if bad:
-                raise ValueError(f"barrier_at kernel: X buffers not at offset {self.sym_bytes}: {bad[:4]}")
+                raise ValueError(f"sync barrier: X buffers not at offset {self.sym_bytes}: {bad[:4]}")
 
     def _checks(self):
         """Y_raw sampled on the root's L3 (the first and the last 2 KiB of every pass), or with y_scatter the first, a
@@ -1309,76 +1125,18 @@ class PBuild(cm.ChipletBuild):
             for name, off in ((f"y_i{i}_a", 0), (f"y_i{i}_b", self.YB - n)):
                 checks.append((name, self._ysym(i * self.YB + off, chip_id=R),
                                img[off:off + n], n))
-        if self.do_up:
-            g = self.gs(R)[0]
-            c0, ncol = self.kcols[R]            # the chip's A8, both clusters
-            i = self.NI - 1
-            a8 = self.d.a8[i * self.ROWS:(i + 1) * self.ROWS, c0:c0 + ncol]
-            img = lay.to_a(a8, self.d.mesh).reshape(-1).view(np.uint8)
-            if self.p.get("check_stages", False):
-                checks = self._stage_checks(n) + checks
-            elif self.p.get("check_a8_first", False):
-                # params check_a8_first: the root's A8 at its start, middle and end, ahead of Y, since the first failed
-                # check ends the run: tells a wrong A8 from a wrong down projection
-                mid = img.size // 2 // n * n
-                first = [(f"a8_root_{t}", self.stash(f"a8_root_{t}", R, 0, self.a8[g][i % 2].view(off), n, []),
-                          img[off:off + n], n) for t, off in (("a", 0), ("m", mid), ("b", img.size - n))]
-                checks = first + checks
-            else:
-                got = self.stash("a8_root", R, 0, self.a8[g][i % 2], n, [])
-                checks.append(("a8_root", got, img[:n], n))
+        g = self.gs(R)[0]
+        c0, ncol = self.kcols[R]                # the chip's A8, both clusters
+        i = self.NI - 1
+        a8 = self.d.a8[i * self.ROWS:(i + 1) * self.ROWS, c0:c0 + ncol]
+        img = lay.to_a(a8, self.d.mesh).reshape(-1).view(np.uint8)
+        got = self.stash("a8_root", R, 0, self.a8[g][i % 2], n, [])
+        checks.append(("a8_root", got, img[:n], n))
         self.run_checks(checks)
-
-    def _stage_checks(self, n):
-        """params check_stages: the last pass's data at each stage, in the order it flows, each group one check, ahead of
-        Y (the first failed check ends the run, so the first failing group is the earliest wrong stage, and its first
-        bad offset // n names the item): every cluster's A8 at its start, middle and end; every other chip's own
-        partial of its clusters' first and last output slices, in their output slots; the root's folded first and last
-        slices, in its output slots before the store. Each item is n bytes; the items are listed in the check's order."""
-        lay, R, i = self.lay, self.ROOT, self.NI - 1
-        h = self.NDN // self.NC
-        rows = slice(i * self.ROWS, (i + 1) * self.ROWS)
-        a8s, parts, fold = [], [], []
-        for k in self.chips:
-            c0, ncol = self.kcols[k]
-            img = lay.to_a(self.d.a8[rows, c0:c0 + ncol], self.d.mesh).reshape(-1).view(np.uint8)
-            mid = img.size // 2 // n * n
-            for c in range(self.NC):
-                g = self.gs(k)[c]
-                for off in (0, mid, img.size - n):
-                    a8s.append((k, c, self.a8[g][i % 2].view(off), img[off:off + n]))
-                for jl in (0, h - 1):
-                    o0, w = self.dn_sl[c][jl]
-                    src = self.gold["y_raw"] if k == R else self.gold["loc"][k]
-                    d = lay.to_d(src[rows, o0:o0 + w], self.d.mesh).astype(np.float16).reshape(-1).view(np.uint8)
-                    for off in (0, d.size - n):
-                        (fold if k == R else parts).append((k, c, self.out_view(g, jl).view(off), d[off:off + n]))
-        name = lambda its, per: [f"{k:02x}c{c}" for k, c, _, _ in its[::per]]
-        print(f"[{self.TAG}] check_stages: a8_all {len(a8s)} items, 3 a cluster (start, middle, end), clusters "
-              f"{name(a8s, 3)}; partials {len(parts)} items, 4 a cluster (first slice start, end; last slice start, "
-              f"end), clusters {name(parts, 4)}; root_fold {len(fold)} items, same, clusters {name(fold, 4)}; {n} B each")
-        return [self.gather_check("a8_all", a8s, n), self.gather_check("partials", parts, n),
-                self.gather_check("root_fold", fold, n)]
 
     def y_slices(self):
         """[(first column, columns)] of Y in the order its D-layout slices sit in L3."""
         return [sl for c in range(self.NC) for sl in self.dn_sl[c]]
-
-    def gather_check(self, name, items, n):
-        """items [(chip, cluster, L1 source, golden)]: after the end stamp each cluster's DM core
-        copies the first n bytes of its source into its own slice of one L3 symbol on the root, and
-        the root's host compares the whole symbol in one check. The first bad offset // n names the
-        item. Returns the check for run_checks."""
-        T, R = self.TAG, self.ROOT
-        sym = f"{T}_chk_{name}"
-        self.st.put_zeros(sym, "uint8_t", len(items) * n)
-        for j, (k, c, src, _) in enumerate(items):
-            self.check_copies.append(self.node(
-                k, c, self.roles["dm"], f"chk_{name}_{j}", "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(src, BingoMemSymbol(sym, offset=j * n, chip_id=R), n),
-                [self.end]))
-        gold = np.concatenate([np.ascontiguousarray(g).view(np.uint8).reshape(-1)[:n] for *_, g in items])
-        return (name, BingoMemSymbol(sym, chip_id=R), gold, len(items) * n)
 
     def check_hazards(self):
         """The passes reuse L1 buffers while an earlier slice's or pass's tail is still running on other cores;
@@ -1405,7 +1163,6 @@ class PBuild(cm.ChipletBuild):
             elif not nx.has_path(H, a, b):
                 bad.append(f"{what}: {a.node_name} is not before {b.node_name}")
 
-        nxb = len(self.xbuf[0])
         # cluster c's output slot: its gather of a slice before the next down GEMM into that slot (out_slots slices
         # later, or in the next pass); the root's fold slot: the store of a slice before the next gather into it; every
         # A8 copy into a cluster before that cluster's first gather of the pass. Between passes: the A8, A16, A16a and X
@@ -1421,7 +1178,7 @@ class PBuild(cm.ChipletBuild):
 
         def dn_first(i, c, jl, g):     # the first down GEMM of a slice (a split first slice: its block 0)
             return by.get(f"dn_c{c * h + jl}_i{i}_g{g}") or by.get(f"dn_c{c * h}_i{i}b0_g{g}")
-        for c in range(self.NC if self.do_down else 0):
+        for c in range(self.NC):
             uses = [(i, jl) for i in range(self.NI) for jl in range(h)]
             S = self.out_slots
             for n_, (i, jl) in enumerate(uses):
@@ -1438,7 +1195,7 @@ class PBuild(cm.ChipletBuild):
                 if nxt is not None and self.reduce_impl == "chain":
                     ordered(store(i, j, c), chain(nxt[0], c * h + nxt[1], c),
                             f"root fold slot c{c} i{i}j{j}->i{nxt[0]}j{c * h + nxt[1]}")
-        for i in range(self.NI if self.do_up and self.do_down else 0):
+        for i in range(self.NI):
             for g in range(self.G):          # every copy into cluster c before cluster c's first gather of the pass
                 c = self.c(g)
                 first = chain(i, c * h, c)
@@ -1456,10 +1213,9 @@ class PBuild(cm.ChipletBuild):
                 ordered(by.get(f"d2a_i{i - 1}b{pb - 1}_g{g}"), by.get(f"swi_c0m0_i{i}_g{g}"), f"a16d g{g} i{i - 1}->i{i}")
                 ordered(by.get(f"quant_i{i - 1}b{pb - 1}m{self.MT - 1}_g{g}"), by.get(f"d2a_i{i}b0_g{g}"),
                         f"a16a g{g} i{i - 1}->i{i}")
-                if i >= nxb:
-                    lg = rd(f"gu_c{nG - 1}_i{i - nxb}b{pb - 1}_g{g}") or rd(f"gu_c{nG - 1}_i{i - nxb}_g{g}")
-                    ordered(lg, by.get(f"x_wait_i{i}_g{g}"), f"x g{g} i{i - nxb}->i{i}")
-        if self.per_kernel and self.do_up and self.do_down:
+                lg = rd(f"gu_c{nG - 1}_i{i - 1}b{pb - 1}_g{g}") or rd(f"gu_c{nG - 1}_i{i - 1}_g{g}")
+                ordered(lg, by.get(f"x_wait_i{i}_g{g}"), f"x g{g} i{i - 1}->i{i}")
+        if self.per_kernel:
             # the output slots in the X buffer: read by pass i - 1's reduce before X_i lands there, and X_i read by the
             # pass's last gate|up GEMM before a down GEMM writes there
             for i in range(self.NI):
@@ -1471,13 +1227,11 @@ class PBuild(cm.ChipletBuild):
                             ordered(chain(i - 1, c * h + jl, c), by.get(f"x_wait_i{i}_g{g}"),
                                     f"X buffer g{g}: slot {jl} of pass {i - 1} reduced before X_{i} lands")
                         ordered(lg, dn_first(i, c, jl, g), f"X buffer g{g}: X_{i} read before slot {jl} is written")
-        if self.l3_overlay and self.do_up and self.do_down:
-            # Y_raw_i over X_i's L3 buffers: the root's put (x_device) and its clusters' fetches of X_i before every
-            # store of pass i
+        if self.l3_overlay:
+            # Y_raw_i over X_i's L3 buffers: the root clusters' fetches of X_i before every store of pass i
             for i in range(self.NI):
                 blk = [f"i0b{b}" for b in range(self.x_blocks)] if i == 0 and self.x_blocks > 1 else [f"i{i}"]
-                readers = [byk.get((f"x_bput_{t}", R, 0)) for t in blk] if self.x_device else []
-                readers += [by.get(f"x_wait_{t}_g{g}") for g in self.gs(R) for t in blk]
+                readers = [by.get(f"x_wait_{t}_g{g}") for g in self.gs(R) for t in blk]
                 for c in range(self.NC):
                     for jl in range(h):
                         for r in readers:
@@ -1486,11 +1240,8 @@ class PBuild(cm.ChipletBuild):
 
     def finish(self, app_name, x_prefixes=("x_wait_",)):
         self.chain_program_order()
-        if self.chain_cfg_ahead:
-            print(f"[{self.TAG}] chain_cfg_ahead: {chain_gather_teardown(self.dfg, self.roles['xdma'])} waits leave the "
-                  f"clean-up to the configure task behind them")
-        if self.p.get("gemm_reuse") and not self.gemm_async:
-            # params gemm_reuse: a GEMM whose configuration equals the previous GEMM's on its core (every
+        if not self.gemm_async:
+            # a GEMM whose configuration equals the previous GEMM's on its core (every
             # field but the four operand addresses) runs as gemm_minimal; each core runs its tasks in
             # creation order (chain_program_order), so the previous GEMM there is the one created before it
             print(f"[{self.TAG}] gemm_reuse: {reuse_gemm_config(self.dfg)} GEMMs run as gemm_minimal")
@@ -1502,7 +1253,7 @@ class PBuild(cm.ChipletBuild):
             if cross:
                 raise ValueError(f"sync barrier: {len(cross)} dependency edges cross chips inside the window, e.g. "
                                  + "; ".join(f"{u.node_name} -> {v.node_name}" for u, v in cross[:4]))
-            print(f"[{self.TAG}] sync barrier ({self.barrier_at}): {self.n_barrier} barriers a chip, no edge crosses "
+            print(f"[{self.TAG}] sync barrier (kernel): {self.n_barrier} barriers a chip, no edge crosses "
                   f"chips inside the window")
         if self.p.get("args_phase_bytes"):
             # params args_phase_bytes: each cluster's device args in phases of at most this many bytes, two alternating
@@ -1510,8 +1261,8 @@ class PBuild(cm.ChipletBuild):
             # buffers (the root's, with params reduce root); after the barrier fences, so the phase loads are not fenced
             from bingo_args_phases import split_args_phases
             split_args_phases(self, int(self.p["args_phase_bytes"]), [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")])
-        if self.p.get("gemm_reuse") and self.gemm_async:
-            # params gemm_reuse with gemm_async: a gemm_start that repeats its cluster's previous dispatch (every field but
+        if self.gemm_async:
+            # with gemm_async: a gemm_start that repeats its cluster's previous dispatch (every field but
             # the four operand addresses) writes only those addresses and starts (bingo_cfg_reuse), along the cores'
             # programs as they stand after the args phases
             n = reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
@@ -1528,9 +1279,9 @@ class PBuild(cm.ChipletBuild):
 
 def _app_name(S):
     arms = "" if (S.x_cast, S.reduce_impl, S.sync) == ("multicast", "chain", "edge") else \
-        f"; X {S.x_cast}, reduce {S.reduce_impl}, sync {S.sync}" + (f" at {S.barrier_at}" if S.barrier_at else "")
+        f"; X {S.x_cast}, reduce {S.reduce_impl}, sync {S.sync}"
     return (f"{S.p.get('model', 'dsv2-lite-l0')} FFN prefill, {S.T} tokens in {S.NI} x {S.ROWS}, "
-            f"{len(S.chips)} chips x {S.NC} clusters, X {'from HBM' if S.x_hbm else 'made on the device'}{arms}")
+            f"{len(S.chips)} chips x {S.NC} clusters, X from HBM{arms}")
 
 
 def run():

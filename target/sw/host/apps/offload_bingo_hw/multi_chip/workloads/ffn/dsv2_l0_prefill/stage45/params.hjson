@@ -1,18 +1,15 @@
-// stage45: stages 4-5 of one pass: the chip's A8 in L1 before the window; the down slices over the weight stream, the ChainGathers into the root and the stores. The mapping's params are full's with tokens 128 (one pass of rows). ../../common/ffn_stages_mc.py.
+// stage45: stages 4-5 of one pass alone (main_bingo.py): the chip's A8 in L1 before the window; the down slices
+// over the weight stream, the ChainGathers into the root and the stores. The mapping is the whole block's (../full)
+// for one pass (tokens = rows).
 {
-  stage: "45"
   num_chiplets: 16
   num_clusters: 2
   model: dsv2-lite-l0
-  seed: 1
   tokens: 128
   rows: 128
-  wbits: 4
-  blocks: 3
   dn_cols: 128
   w_chunk_bytes: 98304
   w_buffers: 2
-  x_buffers: 1
   weight_ring:
   {
     slots: 16
@@ -21,33 +18,11 @@
     head: 4
     batch_head: 1
   }
-  bcast: bcast_l1
-  reduce: chain
-  sync: edge
   static_l1: true
   compact_id_maps: true
-  l3_overlay: true
   l1_capacity: 990000
   d2d_ddr: true
-  mapping: single_pass
-  deq_per_row: true
-  x_blocks: 4
-  store_lag: 1
-  gemm_reuse: true
-  post_blocks: 4
-  root_light: true
-  first_blocks: 2
-  split_last: true
-  sym_zero: false
-  dn_split: cols
-  split_first_dn: true
-  col_unit: 16
   dn_balance: true
   root_cols: [320, 304]
   chain_alt: true
-  dn_load_early: true
-  relay_on_simd: true
-  first_gather_waits_copies: false
-  relay_per_gather: true
-  w4_paired: true
 }

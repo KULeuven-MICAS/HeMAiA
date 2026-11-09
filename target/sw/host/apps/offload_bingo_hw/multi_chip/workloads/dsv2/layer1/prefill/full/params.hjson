@@ -20,7 +20,6 @@
   fast_host_init: true
   d2d_ddr: true
   d2d_rx_yield: [255, 0]
-  relay_per_gather: true
   // every cluster's device args in phases of at most this many bytes, two alternating L1 regions, over the whole layer
   args_phase_bytes: 24000
   // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)

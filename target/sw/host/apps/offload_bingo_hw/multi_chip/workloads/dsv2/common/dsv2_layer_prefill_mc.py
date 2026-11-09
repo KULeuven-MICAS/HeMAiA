@@ -100,7 +100,6 @@ from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
 from bingo_cfg_reuse import prime_fa_softmax, reuse_gemm_fa_config, reuse_gemm_start_config  # noqa: E402
 from bingo_gemm_reuse import GEMM_FULL, GEMM_MINIMAL, reuse_gemm_config  # noqa: E402
 from libs.blocks import GemmQueue  # noqa: E402
-from libs.blocks.gather import chain_gather_teardown  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -337,7 +336,7 @@ class FfnPart(fpm.PBuild):
 
     def _data(self, args, p):
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
-        return ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
+        return ffn_data.FFNData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
                                 wbits=self.wbits, tokens=self.T, inter=p.get("inter"), rows=self.layer.mlp_rows)
 
     def setup(self, extra=None):
@@ -485,10 +484,9 @@ class LayerBuild(cm.ChipletBuild):
             pf = dict(common, **p["ffn"])
             if int(pf.get("tokens", 0)) != self.T_mlp:
                 raise ValueError(f"params ffn.tokens: the {self.T_mlp} rows of the attention's chunks made")
-            if pf.get("x_device") or pf.get("y_scatter") or not pf.get("l3_overlay", False):
-                raise ValueError("params ffn: X from HBM (no x_device), Y_raw on the root over its X (l3_overlay, no "
-                                 "y_scatter): the final reads it there")
-            pf["x_hbm"] = True
+            if pf.get("y_scatter") or not pf.get("l3_overlay", False):
+                raise ValueError("params ffn: Y_raw on the root over its X (l3_overlay, no y_scatter): the final reads it "
+                                 "there")
             pf.pop("args_phase_bytes", None)
             # params layer.ffn_y (hbm | l3): the FFN's Y_raw into the root memory chip's HBM (each pass's X landing then
             # back to back in L3), or in the root's L3 over its X buffers, as the block alone (l3_overlay)
@@ -831,9 +829,6 @@ class LayerBuild(cm.ChipletBuild):
         dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
         attn_nodes = {t for t in self.dfg.node_list if t.node_id <= self.attn_last_id or t in set(A.post_tasks)}
         GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
-        if self.which == 0 and M.chain_cfg_ahead:
-            print(f"[{self.TAG}] ffn chain_cfg_ahead: {chain_gather_teardown(self.dfg, self.roles['xdma'])} waits leave "
-                  f"the clean-up to the configure task behind them")
         self.prune_post_edges()
         if A.keys_by_chunk:
             A._check_multicasts()
@@ -855,8 +850,8 @@ class LayerBuild(cm.ChipletBuild):
                     off += 1
             print(f"[{self.TAG}] gemm_reuse (attention): {n - off} gemm_start configurations reuse")
         ffn_queued = self.which == 0 and M.gemm_async
-        if self.which == 0 and M.p.get("gemm_reuse") and not ffn_queued:
-            # the FFN's switch: its own gemm_fulls only (it runs after every attention GEMM on each core)
+        if self.which == 0 and not ffn_queued:
+            # the FFN's own gemm_fulls only (it runs after every attention GEMM on each core)
             before = {t: (t.kernel_name, t.kernel_args) for t in self.dfg.node_list if t.kernel_name == GEMM_FULL}
             n = reuse_gemm_config(self.dfg)
             back = 0
@@ -868,7 +863,7 @@ class LayerBuild(cm.ChipletBuild):
         if self.p.get("args_phase_bytes"):
             from bingo_args_phases import split_args_phases
             split_args_phases(self, int(self.p["args_phase_bytes"]), dev)
-        if ffn_queued and M.p.get("gemm_reuse"):
+        if ffn_queued:
             # the FFN's queued starts, along the cores' programs as they stand after the args phases, as the block alone
             reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
             n = sum(t.kernel_name.endswith("gemm_start") and t not in attn_nodes and bool(t.kernel_args.reuse)

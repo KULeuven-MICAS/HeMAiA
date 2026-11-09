@@ -103,7 +103,6 @@ from bingo_cfg_reuse import prime_fa_softmax, program_key, reuse_gemm_fa_config,
 from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
 from libs.blocks import GemmQueue  # noqa: E402
-from libs.blocks.gather import chain_gather_teardown  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -114,7 +113,6 @@ import llama3_data  # noqa: E402
 
 TR = 16                       # rows a tile: one A-layout row block
 COPIES = ("__snax_bingo_kernel_idma_1d_copy", "__snax_bingo_kernel_idma_2d_copy", "__snax_bingo_kernel_idma_put_flagged")
-CHAIN_START, CHAIN_WAIT = "__snax_bingo_kernel_xdma_chain_start", "__snax_bingo_kernel_xdma_chain_wait"
 
 
 class LayerStaging:
@@ -253,7 +251,7 @@ class FfnPart(fpm.PBuild):
     def _data(self, args, p):
         L = self.layer
         # the FFN's rows: h of the built passes; its static scales calibrated on h of the whole prompt
-        return ffn_data.FfnData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
+        return ffn_data.FFNData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
                                 tokens=self.T, inter=p.get("inter"), rows=dict(x16=L.h16[:self.T], cal=L.h16))
 
     def setup(self, extra=None):
@@ -382,9 +380,9 @@ class LayerBuild(cm.ChipletBuild):
         pf = dict(common, **p["ffn"])
         pf["model"] = llama3_data.MODEL
         pf["tokens"] = nf * int(pf.get("rows", A.R))
-        if pf.get("x_device") or not pf.get("y_scatter") or pf.get("l3_overlay"):
-            raise ValueError("params ffn: X from HBM (no x_device), y_scatter, no l3_overlay (Y_raw goes to the tiles' "
-                             "owners, no pass of it whole in the root's L3)")
+        if not pf.get("y_scatter") or pf.get("l3_overlay"):
+            raise ValueError("params ffn: y_scatter, no l3_overlay (Y_raw goes to the tiles' owners, no pass of it whole "
+                             "in the root's L3)")
         F = self.ffn = FfnPart(self, args, pf, plat, hw)
         if F.ROWS != A.R:
             raise ValueError("params ffn.rows: the attention's rows (a pass's tiles are the same in both blocks)")
@@ -1034,10 +1032,7 @@ class LayerBuild(cm.ChipletBuild):
             mm = re.match(r"Ld_c(\d+)_i(\d+)_g\d+_k", t.node_name)
             if mm and getattr(t, "exec_chunk", None) is not None:
                 idx[(t.exec_chunk[0], int(mm.group(2)), int(mm.group(1)))] = t.exec_chunk[1]
-        # a split ChainGather (params ffn.chain_cfg_ahead) begins at its start and ends at its wait
-        head = self._chain_heads()
         first = {i: min(ts, key=lambda t: t.node_id) for i, ts in chains.items()}
-        first = {i: head.get(t, t) for i, t in first.items()}
         last = {i: max(ts, key=lambda t: t.node_id) for i, ts in chains.items()}
         xb = self.f_bc
         if self.dfg.has_edge(xb[-1], first[0]):
@@ -1224,10 +1219,6 @@ class LayerBuild(cm.ChipletBuild):
         if bad:
             raise ValueError(f"cfg_reuse: {len(bad)} CSR_PRIMED softmax(es) after another SIMD kernel: {bad[:6]}")
 
-    def _chain_heads(self):
-        """A split ChainGather's wait -> its start (params ffn.chain_cfg_ahead); empty for blocking gathers."""
-        return {t.operands_held_by: t for t in self.dfg.node_list if t.kernel_name == CHAIN_START}
-
     def _check_collectives(self):
         """Every multicast (an HBM multicast, a device bcast put) and every ChainGather ordered against every other by a
         path of dependency and order edges: sorted by a topological order, each one reaches the next."""
@@ -1236,12 +1227,11 @@ class LayerBuild(cm.ChipletBuild):
         items = [t for t in self.dfg.node_list
                  if (t.kernel_name == "__snax_bingo_kernel_idma_put_flagged" and t.kernel_args.bcast & 1)
                  or t.kernel_name == "__host_bingo_kernel_hbm_bcast"
-                 or t.kernel_name in ("__snax_bingo_kernel_xdma_chain_gather", CHAIN_WAIT)]
-        head = self._chain_heads()
+                 or t.kernel_name == "__snax_bingo_kernel_xdma_chain_gather"]
         pos = {t: i for i, t in enumerate(nx.topological_sort(G))}
-        items.sort(key=lambda t: pos[head.get(t, t)])
+        items.sort(key=lambda t: pos[t])
         # a split ChainGather runs from its start to its wait: the one before it must end before that start
-        bad = [(a.node_name, b.node_name) for a, b in zip(items, items[1:]) if not nx.has_path(G, a, head.get(b, b))]
+        bad = [(a.node_name, b.node_name) for a, b in zip(items, items[1:]) if not nx.has_path(G, a, b)]
         if bad:
             raise ValueError(f"{len(bad)} collective pairs not ordered by a path, e.g. {bad[:4]}")
         kinds = {}
@@ -1356,7 +1346,6 @@ class LayerBuild(cm.ChipletBuild):
                 i, j = int(mm.group(1) or 0), int(mm.group(2))
                 c = t.assigned_cluster_id
                 gathers.setdefault(c, []).append(((i, j - c * h), t))
-        head = self._chain_heads()
         n = 0
         for c, gs in gathers.items():
             gs.sort()
@@ -1370,7 +1359,7 @@ class LayerBuild(cm.ChipletBuild):
                 if not readers:
                     raise ValueError(f"{ga.node_name}: no Y_raw puts read its fold slot")
                 n += len(readers)
-                late = [v.node_name for v in readers if not nx.has_path(G, v, head.get(nxt, nxt))]
+                late = [v.node_name for v in readers if not nx.has_path(G, v, nxt)]
                 if late:
                     raise ValueError(f"fold slot of {ga.node_name}: {late[:3]} not before {nxt.node_name}")
         print(f"[{self.TAG}] fold slots: {n} Y_raw puts each before the next gather into their slot")
@@ -1384,11 +1373,8 @@ class LayerBuild(cm.ChipletBuild):
         A, F = self.attn, self.ffn
         dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
         GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
-        if F.chain_cfg_ahead:
-            print(f"[{self.TAG}] ffn chain_cfg_ahead: {chain_gather_teardown(self.dfg, self.roles['xdma'])} waits leave "
-                  f"the clean-up to the configure task behind them")
-        if F.p.get("gemm_reuse") and not F.gemm_async:
-            # params ffn.gemm_reuse: the FFN's blocking GEMMs that repeat their core's previous configuration run as
+        if not F.gemm_async:
+            # the FFN's blocking GEMMs that repeat their core's previous configuration run as
             # gemm_minimal (the attention's queued starts break a run)
             print(f"[{self.TAG}] ffn gemm_reuse: {reuse_gemm_config(self.dfg)} GEMMs run as gemm_minimal")
         if self.p.get("args_phase_bytes"):
@@ -1399,7 +1385,7 @@ class LayerBuild(cm.ChipletBuild):
             primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
             print(f"[{self.TAG}] attn cfg_reuse: {n} FA matmuls REUSE, softmax {primed} PRIMED + {csr} CSR_PRIMED")
             self._check_csr_primed()
-        if A.gemm_reuse or (F.gemm_async and F.p.get("gemm_reuse")):
+        if A.gemm_reuse or F.gemm_async:
             # both blocks' queued starts: a start that repeats its cluster's previous dispatch writes only its addresses
             n = reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
             print(f"[{self.TAG}] gemm_reuse: {n} gemm_start configurations reuse")

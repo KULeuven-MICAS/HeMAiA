@@ -201,7 +201,7 @@ class FfnPart(fdm.DBuild):
 
     def _data(self, args, p):
         h = self.layer.h16[None, :]
-        return ffn_data.FfnData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
+        return ffn_data.FFNData("", llama3_data.MODEL, seed=int(p.get("seed", 1)), wbits=self.wbits,
                                 tokens=1, inter=p.get("inter"), rows=dict(x16=h, cal=h))
 
     def pre_window(self):
@@ -623,7 +623,7 @@ class LayerBuild(cm.ChipletBuild):
                 f"every collective and every push")
 
     def _gemm_reuse(self):
-        """params ffn.gemm_reuse over the FFN's GEMMs only (the attention's GEMVs reconfigure the array, which
+        """The GEMM-config reuse over the FFN's GEMMs only (the attention's GEMVs reconfigure the array, which
         reuse_gemm_config does not see); then every gemm_minimal's previous array task in its core's program is a
         gemm_full or gemm_minimal."""
         class _View:
@@ -730,7 +730,7 @@ class LayerBuild(cm.ChipletBuild):
     def finish(self, app_name, x_prefixes=("x_wait_",)):
         dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
         GemmQueue.of(self.dfg, False).program_order(self.dfg, dev, tag=self.TAG)
-        if self.ffn is not None and self.ffn.p.get("gemm_reuse"):
+        if self.ffn is not None:
             self._gemm_reuse()
         if self.attn.cfg_reuse:
             primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])

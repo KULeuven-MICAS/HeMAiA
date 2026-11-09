@@ -81,40 +81,28 @@
     dn_cols: 128
     w_chunk_bytes: 98304
     w_buffers: 2
-    x_buffers: 1
     restream: true
     weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
     l3_overlay: false
     y_scatter: true
-    mapping: single_pass
     deq_per_row: true
     x_blocks: 4
-    store_lag: 1
     // GEMMs (ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
     // ahead of its operands and of the waits before its start, a start that repeats its cluster's previous
-    // configuration writing only addresses (gemm_reuse)
+    // configuration writing only addresses
     gemm_async: true
     gemm_shape_l1: true
     gemm_cfg_ahead: true
     gemm_cfg_hoist: true
-    gemm_reuse: true
     post_blocks: 4
-    root_light: true
     split_last: true
-    sym_zero: false
-    dn_split: cols
     split_first_dn: true
-    col_unit: 16
     dn_load_early: true
-    relay_on_simd: true
-    first_gather_waits_copies: false
     out_slots: 8
     start_per_chip: true
     gather_relay_only: true
     chain_group: 4
     x_early: true
-    relay_per_gather: true
-    w4_paired: true
   }
   layer:
   {

@@ -3,7 +3,6 @@
 // prompt in one pass of 64 rows, X from the root memory chip's HBM; the switches of the ablation's
 // R0 (../../README.md), sized for its chips: their columns and what the size forces.
 {
-  stage: "full"
   num_chiplets: 16
   num_clusters: 2
   model: dsv2-lite-l0
@@ -15,7 +14,6 @@
   dn_cols: 128
   w_chunk_bytes: 98304
   w_buffers: 2
-  x_buffers: 1
   weight_ring:
   {
     slots: 16
@@ -32,26 +30,14 @@
   l3_overlay: true
   l1_capacity: 990000
   d2d_ddr: true
-  mapping: single_pass
   deq_per_row: true
   x_blocks: 4
-  store_lag: 1
-  gemm_reuse: true
   post_blocks: 4
-  root_light: true
   first_blocks: 2
-  sym_zero: false
-  dn_split: cols
-  col_unit: 16
   dn_balance: true
   root_cols: [320, 304]
-  relay_on_simd: true
-  first_gather_waits_copies: false
-  relay_per_gather: true
-  w4_paired: true
   // the ablation's switches (../../common/ffn_prefill_mc.py, THE ABLATION)
   x_cast: unicast
-  barrier_at: kernel
   barrier_mode: sw
   chain_alt: false
   // every cluster's args in phases of 10,000 B, two alternating L1 regions (workloads/common/args_phases.py): at
@@ -59,7 +45,7 @@
   args_phase_bytes: 10000
   // GEMMs (../../common/ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each
   // configured ahead of its operands, a start that repeats its cluster's previous configuration writing only
-  // addresses (gemm_reuse); kernel by kernel a GEMM is configured ahead only inside its kernel (no gemm_cfg_hoist)
+  // addresses; kernel by kernel a GEMM is configured ahead only inside its kernel (no gemm_cfg_hoist)
   gemm_async: true
   gemm_shape_l1: true
   gemm_cfg_ahead: true

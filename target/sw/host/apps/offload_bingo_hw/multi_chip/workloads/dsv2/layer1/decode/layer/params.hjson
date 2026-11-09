@@ -21,7 +21,6 @@
   fast_host_init: true
   d2d_ddr: true
   d2d_rx_yield: [255, 0]
-  relay_per_gather: true
   // the key-split MLA decode (dsv2/layer1/decode/mla_ks): one cached 64-key tile a chip on its cluster 0, the
   // token's tile on C00's cluster 1, every weight multiply a GEMV; x is the input norm's a_row multicast from C00's L1
   attn:

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""The shared driver of the ffn decode workloads (workloads/dsv2/layer0/decode/ffn_gemv, workloads/llama3/decode/ffn;
-with params gu_gemv workloads/dsv2/layer0/decode/ffn_gv, workloads/llama3/decode/ffn_gv): one
+"""The FFN block of the decode layers (DBuild, which ../../dsv2/common/dsv2_decode_mc.py and
+../../llama3/common/llama3_decode_layer_mc.py extend as their FfnPart): one
 LLM's dense SwiGLU FFN for ONE token, on the prefill's mapping (ffn_prefill_mc.PBuild) run as one pass of one row tile,
 with INT4 weights, tensor-parallel over every cluster of the 16 + 4 chiplet platform. The platform, the weight rings, the
 stamps and the setup are chiplet_mc.py's; the data and the golden are ffn_data.py's (one token).
@@ -21,7 +21,7 @@ chip's whole partial, and the chips' partials are reduced by ChainGathers into t
 
     X        the token's INT8 row from the HBM of the root's memory chip (params x_row, the default): the root's host
              queues that memory chip's push engine, which multicasts the row into every chip's L3 behind one flag
-             (__host_bingo_kernel_hbm_bcast, the prefill's x_hbm path); every cluster waits for the flag and copies the
+             (__host_bingo_kernel_hbm_bcast, as the prefill's X); every cluster waits for the flag and copies the
              row into row 0 of its X tile in one 2-D copy (4 bytes of every 64-byte block of the A layout), the tile's
              other rows zeroed before the window. x_row false: the HBM holds the whole tile, A layout (16 x the
              bytes), multicast and fetched as the prefill fetches a pass
@@ -48,7 +48,7 @@ chip's whole partial, and the chips' partials are reduced by ChainGathers into t
              (one task), so the HBM holds Y16
 
 Every SIMD task is one of the prefill's per-row-tile kernels (dequantise, SwiGLU, quantise), which run on this cluster's
-32-byte SIMD beat; the one-row kernels of the old decode driver (ffn_mc.py: SwiGLU into a_row) assume a 64-byte beat.
+32-byte SIMD beat.
 
 params gu_gemv (with dn_gemv): EVERY weight multiply on the GEMV, no 16-row tile anywhere; the same distribution
 (columns over every cluster, the down split by output columns, the rings, the paired INT4 chunks, the same HBM weight
@@ -69,8 +69,8 @@ images), only rows in L1:
 The SIMD tasks are the 32-byte-beat stream kernels on whole beats: the dequantise (MulF16, a beat every 16 columns of
 the chunk's row), SwiGLU (a beat a gate block), the quantise. The xDMA moves whole beats of 8 atoms (32 values), so the spread
 reads the A16 row and writes its a_row form up to a whole beat; both buffers are padded to that and zeroed with it, and
-the quantise reads only the row's own bytes. No task here is a GEMM, so params gemm_reuse rewrites nothing (_passes
-checks that every array task of the block is a GEMV).
+the quantise reads only the row's own bytes. No task here is a GEMM, so the GEMM-config reuse rewrites nothing
+(_passes checks that every array task of the block is a GEMV).
 
 THE X DELIVERY (gu_gemv). X is the token's INT8 row in a_row: value c at byte (c // 4) * 8 + c % 4, 2 x hidden
 bytes (gemv_utils.a_row_bytes); the GEMV reads the first 4 bytes of each 8-byte word, so the other 4 are free (zero
@@ -95,8 +95,8 @@ the zero rows; gu_gemv: the root's A8 row in a_row, its free bytes zero). The go
 GEMV path's is the tile path's row 0.
 
 PARAMS: ffn_prefill_mc.py's, for one pass of one row tile; tokens 1. The decode refuses what needs more than one pass,
-row tile or post block (x_device, l3_overlay, y_scatter, split_last, split_first_dn, x_early, restream, x_blocks,
-x_buffers, x_tile_bytes) and the ablation arms (sync barrier, reduce root, x_cast unicast).
+row tile or post block (l3_overlay, y_scatter, split_last, split_first_dn, x_early, restream, x_blocks) and the
+ablation arms (sync barrier, reduce root, x_cast unicast).
 """
 
 import os
@@ -107,7 +107,6 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ffn_prefill_mc as fp  # noqa: E402
-from driver import run_driver  # noqa: E402
 
 from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemvArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs,
@@ -132,10 +131,9 @@ class DBuild(fp.PBuild):
     def __init__(self, args, p, plat, hw, shared=None):
         if int(p.get("tokens", 1)) != 1:
             raise ValueError(f"params tokens={p['tokens']}: the decode runs one token")
-        bad = [k for k in ("x_device", "l3_overlay", "y_scatter", "split_last", "split_first_dn", "x_early", "restream")
+        bad = [k for k in ("l3_overlay", "y_scatter", "split_last", "split_first_dn", "x_early", "restream")
                if p.get(k, False)]
-        bad += [k for k, v in (("rows", ROWS), ("post_blocks", 1), ("x_blocks", 1), ("x_buffers", 1))
-                if int(p.get(k, v)) != v] + [k for k in ("x_tile_bytes",) if k in p]
+        bad += [k for k, v in (("rows", ROWS), ("post_blocks", 1), ("x_blocks", 1)) if int(p.get(k, v)) != v]
         bad += [f"{k} {p[k]}" for k, v in (("sync", "edge"), ("reduce", "chain"), ("x_cast", "multicast"))
                 if str(p.get(k, v)) != v]
         if bad:
@@ -144,11 +142,9 @@ class DBuild(fp.PBuild):
         # params x_row (default true): the HBM holds the token's INT8 row, which every cluster scatters into row 0 of its
         # zeroed X tile; false: the HBM holds the whole tile in the A layout
         self.x_row = bool(p.get("x_row", True))
-        # params dn_gemv: the down slices on VersaCore's one-row GEMV shape (the paired INT4 chunks, w4_paired). With
-        # gemm_reuse: every GEMV of a GEMM core follows its last gemm_full, so no gemm_minimal inherits a GEMV's set-up
+        # params dn_gemv: the down slices on VersaCore's one-row GEMV shape (the paired INT4 chunks). Every GEMV of a GEMM
+        # core follows its last gemm_full, so no gemm_minimal inherits a GEMV's set-up
         self.dn_gemv = bool(p.get("dn_gemv", False))
-        if self.dn_gemv and not p.get("w4_paired", False):
-            raise ValueError("params dn_gemv: the GEMV reads INT4 weights in the paired layout (w4_paired)")
         # params gu_gemv: gate|up on the GEMV too, X and every activation a row (the module docstring)
         self.gu_gemv = bool(p.get("gu_gemv", False))
         if self.gu_gemv and not (self.dn_gemv and self.x_row):
@@ -178,7 +174,7 @@ class DBuild(fp.PBuild):
     def _data(self, args, p):
         """The FFN's data and golden of the one token."""
         cache = os.path.join(fp.REPO, p.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
-        return ffn_data.FfnData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
+        return ffn_data.FFNData(cache, p.get("model", "dsv2-lite-l0"), seed=int(p.get("seed", 1)),
                                 wbits=self.wbits, tokens=1, inter=p.get("inter"))
 
     # ---- data -----------------------------------------------------------------------------
@@ -394,7 +390,7 @@ class DBuild(fp.PBuild):
         return out
 
     def _check_gemv_only(self, first):
-        """gu_gemv: every array task this block made (node ids from `first`) is a GEMV, so params gemm_reuse (which
+        """gu_gemv: every array task this block made (node ids from `first`) is a GEMV, so the GEMM-config reuse (which
         tracks only GEMM kernels) finds no GEMM here to turn into a gemm_minimal behind a GEMV."""
         gemm = self.roles["gemm"]
         arr = [t for t in self.dfg.node_list if t.node_id >= first and t.assigned_core_id == gemm
@@ -408,7 +404,7 @@ class DBuild(fp.PBuild):
     def _passes(self, go, after_x):
         """The one pass: X from HBM, the gate|up chunks and the post-processing (PBuild.stage_gu, stage_post), then the
         down slices, each cluster's in output slots j mod out_slots, one ChainGather a group of chain_group slices, the
-        token's row of each folded group into Y_raw's row (params store_lag gathers late), and Y_raw into HBM. gu_gemv:
+        token's row of each folded group into Y_raw's row (a gather late), and Y_raw into HBM. gu_gemv:
         X, gate|up and the A8 as rows (stage_x, stage_gu, stage_post here), the down GEMVs on the A8 row."""
         R, dm, xdma, gemm = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["gemm"]
         block0 = max((t.node_id for t in self.dfg.node_list), default=-1) + 1     # this block's first node id
@@ -418,12 +414,9 @@ class DBuild(fp.PBuild):
         post = self.stage_post(0, sw)
         other = lambda g: self.gs(self.chip(g))[1 - self.c(g)]
         ex_last = {g: self.ex_push[(g, 0)][-1] for g in range(self.G)}
-        # params first_gather_waits_copies (default true): the first gather also waits for every A8 copy; false: only
-        # the copies into cluster c precede cluster c's gathers, through cluster c's own down GEMMs
-        copies = list(ex_last.values()) if self.p.get("first_gather_waits_copies", True) else []
         SL, others, h, GS = self.SLICE, self.order[1:], self.NDN // self.NC, self.chain_group
         p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
-        lag = int(self.p.get("store_lag", 0))
+        lag = 1                                 # a gather's stores follow the next gather (two fold slots)
         sym_reader, p1_reader, pending, last_st = {}, {}, [], {}
         last_red = None
         # params chains_after_stream: the gathers are made after every down GEMM, the first behind every cluster's last
@@ -474,7 +467,8 @@ class DBuild(fp.PBuild):
                     cm.remote, R, c, ordr, src=self.sx(c, so0 * SL), dst=f"({p1x[c]} + {s * GS * SL})",
                     size=(GS - 1) * SL + self.slice_bytes(self.dn_sl[c][jl][1]),
                     junction=self.jct["Elementwise"], jct_csr0=fp.EW_F16_ADD, holds=[self.p1c[c]])
-                first = ([last_red] if last_red is not None else []) + (list(copies) if j0 == 0 else [])
+                # the A8 copies into cluster c precede its gathers through its own down GEMMs
+                first = [last_red] if last_red is not None else []
                 if j0 == 0 and c == 0:
                     first.append(self.x_bc[-1])     # X's multicast before the first gather
                     first += list(last_dn)
@@ -578,16 +572,3 @@ class DBuild(fp.PBuild):
         got = self.stash("a8_root", R, 0, buf, n, [])
         checks.append(("a8_root", got, img, n))
         self.run_checks(checks)
-
-
-def _app_name(S):
-    if S.gu_gemv:
-        return (f"{S.p.get('model', 'dsv2-lite-l0')} FFN decode, one token as rows, {len(S.chips)} chips x {S.NC} "
-                f"clusters, X from HBM (a_row), Y_raw to HBM, gate|up and down on the GEMV")
-    return (f"{S.p.get('model', 'dsv2-lite-l0')} FFN decode, one token as a {ROWS}-row tile, {len(S.chips)} chips x "
-            f"{S.NC} clusters, X from HBM ({'row' if S.x_row else 'tile'}), Y_raw to HBM"
-            + (", down on the GEMV" if S.dn_gemv else ""))
-
-
-def run():
-    run_driver("ffn decode workload generator", DBuild, _app_name)

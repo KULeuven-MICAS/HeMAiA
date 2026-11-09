@@ -13,9 +13,8 @@ software chip barriers after every kernel); and it scales the same FFN from 4 to
 ffn/
   common/                the block's code (common/README.md maps it)
     ffn_prefill_mc.py      the prefill block (its docstring explains the mapping; every parameter is explained
-                           where it is read); llama3/common/llama3_prefill_mc.py runs it inside the Llama layer
-    ffn_stages_mc.py       the prefill split into stage apps (params stage: 0, 123, 45, full), the method of
-                           fa/common/fa_stages_mc.py and moe/common/moe_stages_mc.py
+                           where it is read); run() is the entry point of the whole-block workloads, and the
+                           layers run it inside theirs
     ffn_decode_mc.py       one decode token on the prefill's mapping (the dsv2 and llama3 decode FFNs)
     ffn_data.py            the golden and the data staging (checkpoint weights from the sweep cache, or a
                            registered synthetic model such as ../llama3/common/llama3_data.py's)
@@ -39,11 +38,11 @@ cluster's L1; each weight chunk, as it streams in, used for all the pass's rows 
 by output columns over a chip's two clusters and reduced slice by slice by ChainGathers into the root, under the next
 slices' GEMMs. **X comes from HBM**: every pass's X sits in the HBM of the root's memory chip (0x20), and the root's
 host queues that chip's push engine to multicast it into every chip's L3, a 64 KiB tile and its flag at a time, before
-the root's weight prefetcher starts (`x_hbm`, the default; `x_device` is the Llama layer's, whose X is made on the
-device). Rows a pass: an L1 holds a pass's X (256 KiB) beside the weight slabs and the A16/A8 buffers, so 128 rows for
+the root's weight prefetcher starts. Rows a pass: an L1 holds a pass's X (256 KiB) beside the weight slabs and the A16/A8 buffers, so 128 rows for
 DeepSeek (hidden 2,048) and 64 for Llama (hidden 4,096).
 
-Each model's block in stage apps (`common/ffn_stages_mc.py`), each app's inputs in place before its window (in L1,
+Each model's block in stage apps (`<model>_prefill/stage*/main_bingo.py`, each a standalone program of its stage on
+`chiplet_mc` and `ffn_data`, the same tasks as the whole block's), each app's inputs in place before its window (in L1,
 copied from an HBM image), so a window is the stage alone:
 
 | app | what it runs |
@@ -69,16 +68,15 @@ explains the switches). `base` and `all` carry the params of the scaling sweep's
 
 | rung | workload | `x_cast` | `reduce` | `sync` | |
 |---|---|---|---|---|---|
-| `base` | `dsv2_l0_prefill_ablation/base` | unicast | root | barrier, `barrier_at: kernel` | the conventional baseline |
-| `bcast` | `dsv2_l0_prefill_ablation/bcast` | multicast | root | barrier, kernel | + broadcast |
-| `bcast_reduce` | `dsv2_l0_prefill_ablation/bcast_reduce` | multicast | chain | barrier, kernel | + in-transit reduce |
+| `base` | `dsv2_l0_prefill_ablation/base` | unicast | root | barrier | the conventional baseline |
+| `bcast` | `dsv2_l0_prefill_ablation/bcast` | multicast | root | barrier | + broadcast |
+| `bcast_reduce` | `dsv2_l0_prefill_ablation/bcast_reduce` | multicast | chain | barrier | + in-transit reduce |
 | `all` | `dsv2_l0_prefill_ablation/all` | multicast | chain | edge | + per-edge sync |
 
 The barrier is the vanilla point-to-point software chip barrier (`barrier_mode: sw`). Kernel by kernel, a barrier
 follows every kernel (gate|up with its SwiGLU, the A8, the down slices, the reduce), fencing every core of the chip, so
 those rungs have no overlap inside the pass. `bcast_reduce` runs one ChainGather a cluster, as `all` does (`chain_group`
-also works kernel by kernel), so the step to `all` is the synchronisation alone. `barrier_at: cross` (fused kernels, a
-barrier only where data crosses chips) is a switch the ladder does not use. Stage: `./stages.sh abl64_<rung>`; runs and
+also works kernel by kernel), so the step to `all` is the synchronisation alone. Stage: `./stages.sh abl64_<rung>`; runs and
 results: `target/sim/automation/sweep/llm_blocks/ffn/README.md`.
 
 ## Queued GEMMs (`gemm_async`)
@@ -90,14 +88,9 @@ the GEMM core programs the next dispatch while the array runs, and a GEMM's cons
 for its wait. `gemm_shape_l1`: the shape parameters copied into each cluster's L1 once (`gemm_shape_init`).
 `gemm_cfg_ahead`: each GEMM a configure task, which runs as soon as the previous dispatch has started, and a start task
 that waits for the operands; `gemm_cfg_hoist`: the configure ahead of the waits before its start (not with
-`barrier_at: kernel`, whose fences would close a cycle with it). `gemm_reuse` then marks the starts that repeat their
+`sync: barrier`, whose fences would close a cycle with it). The block then marks the starts that repeat their
 cluster's previous configuration (they write only the four addresses). A wait trails only the next start of its phase,
-the GEMM's kind in its pass (`gu_i<i>`, `dn_i<i>`). Off, every app generates byte for byte as before.
-
-`chain_cfg_ahead` does the same for the reductions: each ChainGather is a configure, a start and a wait task
-(`xdma_chain_cfg`, `xdma_chain_start`, `xdma_chain_wait`; `libs/blocks/gather.py` `chain_gather`). The gathers still run one
-at a time; a cluster's core programs its next gather while the other cluster's runs, and a wait leaves the CSR clean-up
-to the configure task behind it. Off, every app generates byte for byte as before.
+the GEMM's kind in its pass (`gu_i<i>`, `dn_i<i>`).
 
 ## The strong-scaling sweep at 64 tokens (`scaling`)
 
