@@ -25,7 +25,7 @@ CACHE = os.path.join(HERE, "cache")
 MANIFEST = os.path.join(CACHE, "manifest.json")
 
 _spec = importlib.util.spec_from_file_location(
-    "weights_fetch", os.path.join(HERE, "..", "common", "weights", "fetch_weights.py"))
+    "weights_fetch", os.path.join(HERE, "..", "..", "common", "weights", "fetch_weights.py"))
 cf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cf)
 

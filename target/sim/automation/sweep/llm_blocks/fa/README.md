@@ -1,8 +1,18 @@
-# L2 FA: MLA decode over a real 8K-token cache on 16 compute + 4 memory chiplets, with an ablation
+# L2 FA: the attention block's ablation on 16 compute + 4 memory chiplets
 
-One button: `./run.sh all` runs every variant (the cache must exist: `real_kv_cache.py` once).
-- `./run.sh run dsv2_l1/all dsv2_l1/base` runs a subset.
-- `./run.sh parse` re-parses into `results/fa.csv`; `../ffn/plot_l2.py` draws the figure.
+Each run is one workload of `workloads/fa/` through `stages.sh <stage>` (its watchdog profile, tags `stg_<stage>`):
+- **The decode ladder** (the paper's): `stages.sh llama3dec_<rung>` for `base`, `bcast`, `bcast_reduce`,
+  `all` (`workloads/fa/llama3_decode_full/`; the paper's runs are `stg_llama3dec_<rung>_w`), Llama-3-8B's whole decode attention block, one token over an
+  8,192-position cache. `exp/eval6_fa/decode.csv` in the paper and the FA tracker's decode section hold the windows.
+- **The prefill ladder** (the paper's): `stages.sh llama3abl_base`, `llama3abl_bcast`, `llama3abl_all`
+  (`workloads/fa/llama3_prefill_ablation/`; `all` = `llama3_prefill/t1024`, whose run `stg_llama3_t1024_1` is the paper's), Llama-3-8B at
+  1,024 tokens; `exp/eval6_fa/data.csv`.
+- **The stage apps** (debugging): `fresh_<variant>` (DSv2-Lite, `workloads/fa/dsv2_l1_prefill/`) and
+  `llama3_<variant>` (`workloads/fa/llama3_prefill/`), each prefill stage alone and chained; `fresh_t1024` is the
+  DSv2-Lite block at 1,024 tokens the paper quotes.
+
+`./run.sh run [variant ...]` launches a batch (by default the decode ladder) and parses it into `results/fa.csv`;
+`./run.sh parse` re-parses. `fa_trace.py` reads a run's window from its scheduler events.
 
 ## Question
 
@@ -18,118 +28,50 @@ the same compute:
 How much does each buy inside a real LLM layer whose weights stream from the memory chiplets,
 alone and together?
 
-## Workload
+## The rungs
 
-DeepSeek-V2-Lite's layer-1 MLA attention in absorbed form (16 heads, d_qk = 576, d_v = 512), one
-query at position 8191 over keys 0..8191.
-- **The cache is real.** `real_kv_cache.py` runs 8,193 tokens of a public-domain book through
-  the checkpoint's tokenizer, embedding, layer 0 and layer 1's KV projection (float32). Per
-  token: the normalised latent `c_unit[512]` and the rotated `k_pe[64]`, plus the hidden state
-  `x1` entering layer 1 (`cache/dsv2_l1_kv_8193.npz`, `cache/manifest.json`).
-- **The device cache is INT8**, one static scale per part (amax onto 127, as `util/calib.py`):
-  the key copy (A layout of [keys, 576]) and the value copy (V^T = c8^T).
-- **The query is real too:** the last token's `x1` through layer 1's input RMSNorm and `q_proj`,
-  RoPE at its position, `q_nope` absorbed through `W_UK` (the kv_a_layernorm gain moved onto the
-  query), quantised with calib's tied scales (`s_qt s_c = s_qpe s_kpe`, so a score is one INT32
-  dot product) calibrated on the last 64 tokens' queries. The 16 heads fill lanes 0..15 and
-  again 16..31 (the kernels' 32 lanes).
-- **Device vs the float attention over the float cache:** cosine 0.9955.
+Each rung adds one mechanism on the same mapping and buffers; what is broadcast and reduced is the block's own
+(decode: x, the q halves, m\* and o, the softmax statistics and the partial outputs; prefill: X and the gathered head
+outputs, and no partials to reduce, since every head's softmax completes on one cluster).
 
-## Mapping (split by key, `workloads/fa/common/fa_mc.py`)
+| rung | broadcast | reduce | sync |
+|---|---|---|---|
+| `base` | copies one chip at a time, or pulls | the root pulls and folds | a chip barrier after every kernel |
+| `bcast` | multicast | the root | barriers |
+| `bcast_reduce` | multicast | ChainGather (the statistics through the softmax-statistics junction) | barriers |
+| `all` | multicast | ChainGather | hardware, per edge |
 
-| step | where | what |
-|---|---|---|
-| broadcast | root -> every cluster | Q8 (18 KiB) into the cluster's symmetric buffer |
-| pass 1 | every cluster | its 4 K tiles (64 keys x 576 B) through its ring; per tile S^T = K Q^T and the FA softmax with its own seed: the shard's row max |
-| chip max | each chip | cluster 1's max copied to cluster 0, the softmax kernel run over the two beats as a lanewise max |
-| m* | 16 chips -> root -> every cluster | the chips' maxima met on the root, then broadcast into every cluster's pass-2 arena |
-| pass 2 | every cluster | its 4 V tiles through its ring; the softmax SEEDED at m* (no correction across clusters) and PV; the last tile leaves O^T as FP16 |
-| local fold, reduce | as the FFN's | each cluster's (O^T, row sums) added on its chip's cluster 0, then folded into the root in the fold order |
-| normalise | root | o~ = O c / l (rsqrt of l^2 / c^2), then the transpose: one head per row |
+**Barrier sync, the baseline** (`sync: barrier`, `barrier_mode: sw`): inside the window no task depends on another
+chip's; a point-to-point software chip barrier on every chip's cluster-0 xDMA core follows every kernel and fences
+every core of the chip, so no two kernels overlap. **Hardware sync** (`sync: edge`): every cross-chip dependency is a
+BINGO hardware edge, so a task waits for exactly its producers, and the levers that overlap kernels become possible.
 
-- **The cache streams like a weight.** Every cluster's shard lives in its memory chip's HBM,
-  tile-major: its K tiles, then its V tiles. Each tile is one ring chunk (K0..K3 for pass 1,
-  then V0..V3 for pass 2), pushed by the memory chip's engine under the chip's prefetcher.
-- **The V tiles stream during the exchange of the maxima.** Every DM core runs its tasks in
-  order and a ring load blocks until its chunk lands. So the V loads follow the cluster's copy of
-  its maximum, V0 and V1 come before m*'s arrival, V2 and V3 after it. On the root, the
-  exchange's DM tasks also come after V1.
-- **m* lands in place.** Pass 2's softmax arena sits in the symmetric buffer, so m* (the
-  multicast or each cluster's pull) writes straight into its `mrun`; `lrun` is zeroed with the
-  buffer at set-up.
-- **Golden:** `dsv2_datagen.split_attention_golden` (mode key), with the device's arithmetic
-  models, adding the chips' partials in the order the reduce does: the root's pulls start from
-  the root's own partial, the ChainGather from the chain's first chip with the root's own last
-  (`chiplet_mc.fold_order`). The max is exact in any order. Every variant is checked byte for
-  byte.
-
-## Variants (the ablation)
-
-Every combination of the three mechanisms: what is broadcast is the query (18 KiB) and m*; what is reduced is the chips' maxima (FP16 MAX) and every cluster's (O^T, l) partial.
-
-| variant | rung | broadcast | reduce | sync |
-|---|---|---|---|---|
-| `base` | R0 | iDMA pulls | root gathers | chip barriers |
-| `bcast` | R1 | multicast | root | chip barriers |
-| `bcast_reduce` | R2 | multicast | ChainGather | chip barriers |
-| `all` | R3 | multicast | ChainGather | hardware, per edge |
-| `reduce_sync` | R3 without broadcast | pulls | ChainGather | hardware |
-| `bcast_sync` | R3 without reduce | multicast | root | hardware |
-| `reduce` | reduce alone | pulls | ChainGather | chip barriers |
-| `sync` | sync alone | pulls | root | hardware |
-
-**Barrier sync, the baseline** (`sync: barrier`, `barrier_mode: bcast`). Inside the window no
-task depends on another chip's. The vanilla HeMAiA chip barrier (`snrt_hw_chip_global_barrier`,
-`chip_sync.h`) stands in for those dependencies: one barrier task on every chip's cluster-0 DM
-core, which announces its arrival with one 0xFF broadcast store and polls the others' locally.
-Every chip waits for every chip, which is what the per-edge hardware sync removes. Barriers sit
-after the start anchor, before a pull broadcast of a value made inside the window, and before the
-reduce; a multicast needs none (its landed flag says the data is there). Barriers are chained per
-chip, so every chip runs them in program order.
-**Hardware sync** (`sync: edge`): every cross-chip dependency is a BINGO hardware edge, so a task
-waits for exactly its producers.
-
-Weights stream plain (`weight_crest: false`): CREST is not part of the paper, and the paper's
-cluster has no decompressor. The first round, a CREST ladder on the 16 MiB-L3 platform, is in
-`results/round1/` (its runs and variants: `isca_archive/2026-10-07_l2_round1`).
+Weights stream plain.
 
 ## Measurement
 
-As the FFN's (`sweep/llm_blocks/ffn/README.md`): two anchors on chip 0x00 bracket the attention (the
-prefetchers start after the first, so the whole cache stream counts); SRAM accesses from the
-probe's marks. **Checks**, byte-exact: the output `xt` [32 x 512] FP16, m*, and one far chip's
-folded (O^T, l).
+Two anchors on chip 0x00 bracket the block (the prefetchers start after the first, so the whole weight and cache
+stream counts); the window runs from the start anchor's end to the end anchor's. **Checks**, byte-exact: the decode
+ladder's nine (the q halves, a far cluster's q, the root's statistics, a far chip's partial, y, and the appended K
+and V^T tiles, the last five copied from HBM into the root's L3 first); the prefill's y and per-stage stashes.
 
-**Phases** (`../ffn/trace_ffn.py`, each the latest end over the clusters): q on every cluster,
-pass 1, m* made on the root, m* in every cluster, pass 2, the chip fold, the reduce, the
-normalised output.
+## The prefill stage apps (DSv2-Lite and Llama-3-8B, for debugging)
 
-## Prefill (T = 256): the PoC and the real size as one 128-token chunk
-
-The same layer as a prefill over the 8K cache (`workloads/fa/common/fa_prefill_mc.py` generates it): head parallel
-(chip = head, cluster = half of a chunk's tokens), K/V tiles of 256 keys. The ladder
-`dsv2_l1_prefill/{base,bcast,bcast_reduce,all}` is the design at 4 chunks of 64 tokens; it has not run at the real
-size. What runs: `dsv2_l1_prefill/v5` (one 128-token chunk over all
-8,192 keys, y byte for byte, 1,542.4 us = 78.7 % MAC) and `v6` (+ a gather per W_O block, not yet run); the PoC
-`dsv2_l1_prefill_tiny/{all, v17, v18, v19}` over the first 1,024 keys. Every run with its finding is in
-`results/prefill_stages.md`; the FA Prefill Tracker artifact has the figures.
-
-`estimate_prefill.py` (writes `results/prefill_estimate.md`) is the estimate made before the first run (from the
-decode run's task times, the MoE's GEMM and push rates, E2 / E3). It found `all` at ~89 % (nominal) and ~80 %
-(stress); it did not model the weight and cache stream per chunk, which the runs showed binds 64-token chunks.
+The layer as a prefill over a fresh 256-token prompt (empty cache, causal), INT4 weights
+(`workloads/fa/common/fa_prefill_mc.py` and `fa_stages_mc.py` generate it): head parallel (chip = head, cluster =
+half of a chunk's tokens), two chunks of 128, the keys made in the window (stages 1-3) and swept by causal tiles.
+`workloads/fa/dsv2_l1_prefill/` holds one optimal workload per stage (stage0 .. stage3, stage0123, stage4,
+stage5, stage678) and the whole block (`full_n`; `t1024` at 1,024 tokens); `results/optimal_mappings.json` names each one's run and window.
+`workloads/fa/llama3_prefill` is the Llama-3-8B variant (GQA attention, the driver in `workloads/llama3/common`).
+Every run with its finding is in `results/prefill_stages.md`; the FA Prefill Tracker artifact has the figures.
 
 ## Files
 
-- `real_kv_cache.py`: the cache into `cache/`.
-- `run.sh`: the runs, through `common/launch.sh` (watchdog, sim slots).
-- `parse_fa.py`: `results/fa.csv`, with `../ffn/parse_ffn.py`.
-- `estimate_prefill.py`: the prefill's MAC utilisation estimate (`results/prefill_estimate.md`).
-- `stages.sh`: a prefill run, `poc_<variant>` (tiny) or `full_<variant>`, with its watchdog (`common/sim_watchdog.py`,
-  profile `fa_prefill`).
-- `fa_trace.py`: a prefill run's window from the scheduler's events: MAC, engine shares, phases, the ring pushed per
-  memory chip, the arrays' share; `results/<run>/{summary.txt, series.json, window.png, chips.png}`.
-- **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/fa/`.
-  - `common/fa_mc.py`: the decode driver, on `ffn/common/chiplet_mc.py`; `common/fa_prefill_mc.py`: the prefill's driver and generator.
-  - `common/fa_data.py`: the cache, the query, scales, golden.
-  - `common/fa.mk`: the build.
-  - `dsv2_l1/<variant>/params.hjson`: one directory per decode variant; `dsv2_l1_prefill/`, `dsv2_l1_prefill_tiny/`: the prefill's.
+- `stages.sh`: one run with its watchdog (`common/sim_watchdog.py`, profiles `fa_prefill` and `decode`).
+- `run.sh`: a batch of runs through `common/launch.sh`, then `parse_fa.py` into `results/fa.csv` with
+  `../ffn/parse_ffn.py`.
+- `fa_trace.py`: a prefill run's window: MAC, engine shares, phases, the ring pushed per memory chip;
+  `results/<run>/{summary.txt, series.json, window.png, chips.png}`.
+- `real_kv_cache.py`: DeepSeek-V2-Lite's real latent cache into `cache/`.
+- **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/fa/` (its README lists them and their
+  drivers).

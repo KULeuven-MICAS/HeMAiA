@@ -2,11 +2,13 @@
 # Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-"""ablation_report.py [rung=tag ...]: the FFN ablation ladder (workloads/ffn/dsv2_l0_prefill_ablation) from its runs,
-runs/stg_abl_<rung>[_n] (the newest of each rung unless one is named). Per rung: the verdict and the root's checks,
-the window from the root's SYNC line (start -> end anchor, in cycles of the 500 MHz cluster clock), the MAC-bound
-time over it (the 32 arrays' peak), the step over the rung below and over base, and the chip barriers in the window.
-Writes results/ablation.csv and results/ablation.md; a rung with no finished run is TBD."""
+"""ablation_report.py [rung=tag ...]: the paper's FFN ablation from its runs: DeepSeek-V2-Lite's dense FFN, 64 tokens in
+one pass on 16 chips (workloads/ffn/dsv2_l0_prefill_ablation, runs/stg_abl64_<rung>[_n]): the newest run of each
+rung unless one is named; base and all with no run of their own take the scaling sweep's 16-chip runs (DEFAULT_TAGS:
+the same params, workloads/ffn/scaling/base_n16 and all_n16). Per rung:
+the verdict and the root's checks, the window from the root's SYNC line (start -> end anchor, in cycles of the 500 MHz
+cluster clock), the MAC-bound time over it (the 32 arrays' peak), the step over the rung below and over base, and the
+chip barriers in the window. Writes results/ablation_t64.{csv,md}; a rung with no finished run is TBD."""
 import csv
 import glob
 import json
@@ -20,16 +22,20 @@ RUNGS = [
     ("base", "R0", "X unicast, root fold, a barrier after every kernel"),
     ("bcast", "R1", "+ broadcast: X by one multicast"),
     ("bcast_reduce", "R2", "+ in-transit reduce: ChainGathers"),
-    ("fused", "R3", "+ fused kernels: a barrier only where data crosses chips"),
-    ("all", "R4", "+ per-edge sync: BINGO hardware edges, no barrier"),
+    ("all", "R3", "+ per-edge sync: BINGO hardware edges, no barrier"),
 ]
-MAC_BOUND_CC = 3 * 2048 * 10944 * 256 // (32 * 1024)    # DeepSeek-V2-Lite layer 0 FFN, 256 tokens: 525,312
+PREFIX = "stg_abl64_"
+# the gate, up and down MACs of 64 tokens over the 32 arrays' 1,024 MACs a cycle
+MAC_BOUND_CC = 3 * 2048 * 10944 * 64 // (32 * 1024)
+OUT = "ablation_t64"
+# base and all with no stg_abl64_ run: the scaling sweep's 16-chip runs (workloads/ffn/scaling/base_n16, all_n16, the same params)
+DEFAULT_TAGS = {"base": "stg_sweep64_base_n16", "all": "stg_poc64_g8"}
 SYNC = re.compile(r"SYNC\[hw\] phase=\s*0 \| rt=(\d+) cc")
 CHECKS = re.compile(r"Checks: (\d+) PASS, (\d+) FAIL")
 
 
 def newest(rung):
-    tags = [t for t in glob.glob(f"{RUNS}/stg_abl_{rung}") + glob.glob(f"{RUNS}/stg_abl_{rung}_[0-9]*")
+    tags = [t for t in glob.glob(f"{RUNS}/{PREFIX}{rung}") + glob.glob(f"{RUNS}/{PREFIX}{rung}_[0-9]*")
             if os.path.isdir(t)]
     return os.path.basename(max(tags, key=os.path.getmtime)) if tags else None
 
@@ -64,7 +70,7 @@ def one(rung, tag):
 
 def main():
     named = dict(a.split("=", 1) for a in sys.argv[1:])
-    rows = [one(rung, named.get(rung, newest(rung))) for rung, _, _ in RUNGS]
+    rows = [one(rung, named.get(rung) or newest(rung) or DEFAULT_TAGS.get(rung)) for rung, _, _ in RUNGS]
     prev, base = None, rows[0]["window_cc"] or None
     for r, (_, lab, what) in zip(rows, RUNGS):
         r["label"], r["what"] = lab, what
@@ -75,7 +81,7 @@ def main():
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     keys = ["label", "rung", "what", "tag", "verdict", "checks", "window_cc", "window_us", "mac_pct", "step", "vs_base",
             "barriers"]
-    with open(os.path.join(HERE, "results", "ablation.csv"), "w", newline="") as f:
+    with open(os.path.join(HERE, "results", f"{OUT}.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, keys)
         w.writeheader()
         w.writerows({k: r[k] for k in keys} for r in rows)
@@ -85,7 +91,7 @@ def main():
         win = f"{r['window_us']:,} us ({r['window_cc']:,} cc)" if r["window_cc"] else "TBD"
         md.append(f"| {r['label']} {r['rung']} | {r['what']} | {r['tag'] or '-'} | {r['verdict']} {r['checks']} | "
                   f"{win} | {r['mac_pct'] or 'TBD'} | {r['step'] or '-'} | {r['vs_base'] or '-'} | {r['barriers']} |")
-    open(os.path.join(HERE, "results", "ablation.md"), "w").write("\n".join(md) + "\n")
+    open(os.path.join(HERE, "results", f"{OUT}.md"), "w").write("\n".join(md) + "\n")
     print("\n".join(md))
 
 

@@ -4,10 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A REAL layer-1 latent cache of DeepSeek-V2-Lite over real text, for the L2 FlashAttention experiment.
 
-The FA experiment streams the KV cache from the memory chiplets' HBM, CREST-compressed. A
-compression ratio means something only on a real cache, so this computes one, in float32 from the
-checkpoint's BF16 weights, following modeling_deepseek.py (the snax_cluster golden package's
-util/reference.py conventions, which the device's absorbed MLA uses):
+The FA experiment streams the KV cache from the memory chiplets' HBM. This computes a real one, in
+float32 from the checkpoint's BF16 weights, following modeling_deepseek.py (util/sim/llm/reference.py's
+conventions, which the device's absorbed MLA uses):
 
     tokens   real text (a pinned Project Gutenberg book), the checkpoint's own tokenizer, BOS first
     layer 0  embedding -> MLA attention (causal, YaRN RoPE) -> residual -> dense FFN -> residual
@@ -18,7 +17,7 @@ util/reference.py conventions, which the device's absorbed MLA uses):
              and the hidden state x1 entering layer 1, for the decode token's query
 
 Layer 0's attention runs batched in the ABSORBED form (queries mapped into the latent space);
-the last token is then re-computed by util/reference.attention -- the EXPANDED form, one token
+the last token is then re-computed by reference.attention -- the EXPANDED form, one token
 against the cache -- and the two must agree, which checks the batched implementation.
 
     python3 real_kv_cache.py [--tokens 8193]
@@ -46,18 +45,20 @@ TEXT_URL = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"   # Pride and 
 F32 = np.float32
 
 _spec = importlib.util.spec_from_file_location(
-    "weights_fetch", os.path.join(HERE, "..", "common", "weights", "fetch_weights.py"))
+    "weights_fetch", os.path.join(HERE, "..", "..", "common", "weights", "fetch_weights.py"))
 cf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cf)
 
 
-def _dsv2_util():
+def _dsv2_model():
+    """DeepSeek-V2-Lite's constants and its float reference: util/sim/llm's dsv2_model and reference."""
     repo = next(p for p in Path(HERE).resolve().parents if (p / "Bender.yml").exists())
-    sn = os.environ.get("SNAX_DSV2", str(repo / "deps/snitch_cluster/target/snitch_cluster/sw/apps/dsv2"))
-    if sn not in sys.path:
-        sys.path.insert(0, sn)
-    from util import model, reference
-    return model, reference
+    llm = str(repo / "util" / "sim" / "llm")
+    if llm not in sys.path:
+        sys.path.insert(0, llm)
+    import dsv2_model
+    import reference
+    return dsv2_model, reference
 
 
 TENSORS = (["model.embed_tokens.weight"] +
@@ -160,7 +161,7 @@ def main():
     ap.add_argument("--tokens", type=int, default=8193,
                     help="the cached tokens plus the decode token (default 8192 + 1)")
     a = ap.parse_args()
-    model, ref = _dsv2_util()
+    model, ref = _dsv2_model()
     d = model.load()
     t0 = time.time()
     os.makedirs(CACHE, exist_ok=True)

@@ -95,7 +95,12 @@ def main():
     names, ev, args = load(run_dir, wl_dir)
     p = hjson.load(open(wl_dir / "params.hjson"))
     keys, T = int(p["keys"]), int(p["tokens"])
-    mac = (2048 * 192 + 128 * 512 + keys * 576 + keys * 512 + 512 * 128 + 128 * 2048) * T * 16
+    mac = (2048 * 192 + 128 * 512 + 512 * 128 + 128 * 2048) * T * 16
+    if p.get("fresh"):
+        # an empty cache: causal scores (query t sees keys 0..t) and the keys' W_KVA made on the device
+        mac += T * (T + 1) // 2 * (576 + 512) * 16 + T * 2048 * 576
+    else:
+        mac += T * keys * (576 + 512) * 16
     a0 = next(i for i, r in names.items() if r["name"].startswith("A0_start"))
     a1 = next(i for i, r in names.items() if r["name"].startswith("A1_end"))
     # a run still going (or stopped early): the window ends at the last event so far

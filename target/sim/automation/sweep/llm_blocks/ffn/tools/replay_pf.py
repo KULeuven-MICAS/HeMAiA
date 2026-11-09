@@ -50,8 +50,7 @@ def generate(wl, out):
     args = argparse.Namespace(output_dir=out, data_h=os.path.join(out, "ffn_data.h"),
                               output_offload_file_name="offload_bingo_hw.h", cfg=f"{W}/{wl}/params.hjson",
                               hwcfg=f"{SN}/target/snitch_cluster/cfg/snax_split_cluster.hjson",
-                              platformcfg=f"{REPO}/target/sw/shared/platform/generated/occamy.h",
-                              dsv2_dir=f"{SN}/target/snitch_cluster/sw/apps/dsv2")
+                              platformcfg=f"{REPO}/target/sw/shared/platform/generated/occamy.h")
     with open(args.cfg) as f:
         p = dict(hjson.load(f))
     log = io.StringIO()

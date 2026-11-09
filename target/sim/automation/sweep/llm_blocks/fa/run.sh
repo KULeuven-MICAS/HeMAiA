@@ -10,17 +10,15 @@
 #                                    parse + prune for each
 #   ./run.sh parse [tag ...]         verdict, parse, prune
 #   ./run.sh all                     run
-# A variant is its path under workloads/fa/ (dsv2_l1/full, ...); its switches are its
-# params.hjson. Runs land in runs/l2f_<variant with / as _>. The cache is real_kv_cache.py's
-# (cache/, made once), the query's weights sweep/common/weights' cache (DeepSeek-V2-Lite layer 1).
+# A variant is its path under workloads/fa/ (llama3_decode_full/all, ...); its switches are its
+# params.hjson. Runs land in runs/l2f_<variant with / as _>. stages.sh launches the same workloads one at a
+# time with their watchdog profile (stg_<stage> tags); the paper's runs went through it.
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 SW=${D%/sweep/*}/sweep; EXP=${D#"$SW"/}   # the sweep dir, and this experiment: its path under it
-# every combination of the three mechanisms (multicast broadcast, in-transit reduce, hardware
-# sync), the ladder R0 -> R3 first (each rung adds one), then the leave-one-out arms of R3 not on
-# it, then each mechanism alone
-ALL="dsv2_l1/base dsv2_l1/bcast dsv2_l1/bcast_reduce dsv2_l1/all
-     dsv2_l1/reduce_sync dsv2_l1/bcast_sync dsv2_l1/reduce dsv2_l1/sync"
+# the ladder R0 -> R3 of the three mechanisms (multicast broadcast, in-transit reduce, hardware
+# sync), each rung adding one: Llama-3-8B's whole decode attention block over an 8,192-position cache
+ALL="llama3_decode_full/base llama3_decode_full/bcast llama3_decode_full/bcast_reduce llama3_decode_full/all"
 FA_PAR=${FA_PAR:-3}
 CFG=target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
 cmd=${1:-all}; shift || true

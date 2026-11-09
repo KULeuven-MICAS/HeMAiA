@@ -117,7 +117,6 @@ def parse_task(task: Path, run: str, verdict: str):
     for i, (nm, rt) in enumerate(zip(names, rts)):
         r = dict(run=run, task=task.name, family=fam, variant=variant, verdict=verdict, window=nm,
                  rt_cc=rt, us=round(rt * NS_PER_CC / 1000, 3),
-                 crest=int(bool(params.get("weight_crest", False))),
                  bcast=params.get("bcast", ""), reduce=params.get("reduce", ""),
                  sync=params.get("sync", "edge"),
                  barrier_mode=(params.get("barrier_mode", "bcast")
@@ -150,7 +149,7 @@ def main():
         return
     res = RESULTS
     res.mkdir(exist_ok=True)
-    keys = ["run", "task", "family", "variant", "verdict", "window", "crest", "bcast", "reduce",
+    keys = ["run", "task", "family", "variant", "verdict", "window", "bcast", "reduce",
             "route", "sync", "barrier_mode", "tokens", "rt_cc",
             "us", "sram_l1", "sram_l3", "sram", "sram_max_chip", "busiest_chip", "checks_pass",
             "checks_fail", "t_x_ns", "t_route_ns", "t_first_chunk_ns", "t_gu_ns", "t_dn_ns",
