@@ -186,6 +186,8 @@ bind bingo_hw_manager_top snax_taskq_probe u_snax_taskq_probe (
 //                   checkout queue without its ready-queue push in the same cycle, the reverse,
 //                   or a done entry for a task that was never started
 //   [BINGO FINAL]   the counters at the end of the simulation
+//   [BINGO LAUNCH]  software started the manager on a list (base, length): the START write
+//   [BINGO CERF]    a software CERF write landed (mask, data: groups g = bit g, hex)
 // A cell is one (core, cluster); the printed queue fields are w waiting, r ready, c checkout
 // (count@head task id) and x tasks started and not done.
 // ---------------------------------------------------------------------------------------
@@ -195,6 +197,8 @@ module snax_bingo_progress_probe #(
     parameter int unsigned CW        = 8,
     parameter int unsigned ProgCyc   = 2000,
     parameter int unsigned StallCyc  = 20000,
+    parameter int unsigned NG        = 32,
+    parameter int unsigned AW        = 48,
     parameter type         task_desc_t  = logic,
     parameter type         ready_desc_t = logic,
     parameter type         done_info_t  = logic
@@ -217,7 +221,12 @@ module snax_bingo_progress_probe #(
     input logic        [NC-1:0][NCL-1:0]  rq_pop,
     input ready_desc_t [NC-1:0][NCL-1:0]  rq_desc,
     input logic        [NC-1:0][NCL-1:0]  dq_push,
-    input done_info_t  [NC-1:0][NCL-1:0]  dq_in
+    input done_info_t  [NC-1:0][NCL-1:0]  dq_in,
+    input logic [31:0]                    start_i,
+    input logic [AW-1:0]                  list_base_i,
+    input logic                           cerf_en_i,
+    input logic [NG-1:0]                  cerf_mask_i,
+    input logic [NG-1:0]                  cerf_data_i
 );
 
   localparam int unsigned MaxAnomalyLines = 16;
@@ -232,6 +241,7 @@ module snax_bingo_progress_probe #(
   int     epoch, anomalies, occ;
   bit     armed, stall_rpt, ev_en;
   int     prog_cyc, stall_cyc;
+  bit     start_q;
 
   initial begin
     prog_cyc  = ProgCyc;
@@ -288,6 +298,7 @@ module snax_bingo_progress_probe #(
   always @(posedge clk_i) begin
     if (!rst_ni) begin
       cyc = 0; last_ev_cyc = 0; nlist = 0; fetched = 0; released = 0; started = 0; done_c = 0;
+      start_q = 0;
       epoch = 0; anomalies = 0; armed = 0; stall_rpt = 0;
       for (int co = 0; co < NC; co++) begin
         for (int cl = 0; cl < NCL; cl++) begin
@@ -296,6 +307,21 @@ module snax_bingo_progress_probe #(
       end
     end else begin
       cyc = cyc + 1;
+
+      // A software launch: START goes from 0 to set (the fetch FSM clears it once it has read
+      // the list), and a software CERF write. Both print with the simulation time, the time
+      // base of the EV lines, so a host action and the dispatch it causes compare directly.
+      if (start_i != 0 && !start_q) begin
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO LAUNCH] t=%0t chip=%02x base=%0h n=%0d",
+                  $time, chip_id_i, list_base_i, num_task_i);
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
+      start_q = (start_i != 0);
+      if (cerf_en_i) begin
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO CERF] t=%0t chip=%02x mask=%0h data=%0h",
+                  $time, chip_id_i, cerf_mask_i, cerf_data_i);
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
 
       // A new list: the first read of the descriptor list after reset or after the last list drained.
       if (list_ar_hs && !armed) begin
@@ -375,6 +401,7 @@ endmodule
 
 bind bingo_hw_manager_top snax_bingo_progress_probe #(
     .NC(NUM_CORES_PER_CLUSTER), .NCL(NUM_CLUSTERS_PER_CHIPLET), .CW(ChipIdWidth),
+    .NG(NumCerfGroups), .AW(HostAxiLiteAddrWidth),
     .task_desc_t (bingo_hw_manager_task_desc_t),
     .ready_desc_t(bingo_hw_manager_ready_task_desc_t),
     .done_info_t (bingo_hw_manager_done_info_t)
@@ -397,8 +424,49 @@ bind bingo_hw_manager_top snax_bingo_progress_probe #(
     .rq_pop     (ready_queue_pop),
     .rq_desc    (ready_queue_data_out),
     .dq_push    (done_q_push),
-    .dq_in      (done_q_data_in)
+    .dq_in      (done_q_data_in),
+    .start_i    (bingo_hw_manager_start_i),
+    .list_base_i(task_list_base_addr_i),
+    .cerf_en_i  (cerf_write_en_i),
+    .cerf_mask_i(cerf_write_mask_i),
+    .cerf_data_i(cerf_write_data_i)
 );
+
+// ---------------------------------------------------------------------------------------
+// [CERF ISSUE]: a store to the quadrant's CERF registers leaving a core: the host CVA6's AXI port
+// or a cluster's narrow AXI out, at the AW handshake, with the simulation time. [BINGO CERF] (the
+// progress probe above) is the same write latching in the HW manager, so the two bracket the
+// write's way through the fabric. The registers are the quadrant periph's CERF block
+// (OCCAMY_QUAD_PERIPH_CERF_STATE_0 .. CERF_CLR_3 at 128 groups), below the chip prefix.
+// ---------------------------------------------------------------------------------------
+module snax_cerf_issue_probe #(
+    parameter type req_t  = logic,
+    parameter type resp_t = logic,
+    parameter logic [39:0] Lo = 40'h00_0B00_0068,
+    parameter logic [39:0] Hi = 40'h00_0B00_00C0
+) (
+    input logic       clk_i,
+    input logic [7:0] chip_i,
+    input req_t       req,
+    input resp_t      resp
+);
+  logic [63:0] a;
+  assign a = 64'(req.aw.addr);
+  always @(posedge clk_i) begin
+    if (req.aw_valid && resp.aw_ready && a[39:0] >= Lo && a[39:0] < Hi) begin
+      $fdisplay(snax_probe_pkg::bingo_fd, "[CERF ISSUE] t=%0t chip=%02x addr=%0h %m", $time, chip_i, a[39:0]);
+      $fflush(snax_probe_pkg::bingo_fd);
+    end
+  end
+endmodule
+
+bind occamy_cva6_ara snax_cerf_issue_probe #(
+    .req_t(axi_a48_d64_i4_u3_req_t), .resp_t(axi_a48_d64_i4_u3_resp_t)
+) u_snax_cerf_issue_probe (.clk_i(clk_i), .chip_i(8'(chip_id_i)), .req(axi_req_o), .resp(axi_resp_i));
+
+bind snitch_cluster snax_cerf_issue_probe #(
+    .req_t(narrow_out_req_t), .resp_t(narrow_out_resp_t)
+) u_snax_cerf_issue_probe (.clk_i(clk_i), .chip_i(8'hFF), .req(narrow_out_req_o), .resp(narrow_out_resp_i));
 
 // ---------------------------------------------------------------------------------------
 // snitch_hive: what does an ICACHE REFILL actually wait for?
@@ -1591,7 +1659,15 @@ module snax_axi_xbar_stall_probe #(
   end
 endmodule
 
-`ifndef HEMAIA_SIM_LEAN_PROBES
+// The AXI stall probes below are bound in a full build, and in a lean one with HEMAIA_SIM_STALL_PROBES
+// (SIM_STALL_PROBES=1): they only watch, so a lean simulation keeps its timing and names the links a hang stops on.
+`ifdef HEMAIA_SIM_STALL_PROBES
+`define HEMAIA_STALL_PROBES_ON
+`elsif HEMAIA_SIM_LEAN_PROBES
+`else
+`define HEMAIA_STALL_PROBES_ON
+`endif
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_xbar snax_axi_xbar_stall_probe #(
   .NSlv(Cfg.NoSlvPorts), .NMst(Cfg.NoMstPorts),
   .slv_req_t(slv_req_t), .slv_resp_t(slv_resp_t), .mst_req_t(mst_req_t), .mst_resp_t(mst_resp_t)
@@ -1600,31 +1676,88 @@ bind axi_xbar snax_axi_xbar_stall_probe #(
   .sreq(slv_ports_req_i), .srsp(slv_ports_resp_o), .mreq(mst_ports_req_o), .mrsp(mst_ports_resp_i));
 `endif
 
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_id_remap snax_axi_stall_probe #(.req_t(slv_req_t), .resp_t(slv_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_dw_converter snax_axi_stall_probe #(.req_t(axi_slv_req_t), .resp_t(axi_slv_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_atop_filter snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_to_mem_split snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind axi_to_mem_interleaved snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_in_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_in_req_i), .resp_i(axi_in_rsp_o));
 `endif
-`ifndef HEMAIA_SIM_LEAN_PROBES
+`ifdef HEMAIA_STALL_PROBES_ON
 bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_out_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_out_req_o), .resp_i(axi_out_rsp_i));
+`endif
+
+// ---------------------------------------------------------------------------------------------
+// snax_core_stall_probe (HEMAIA_SIM_CORE_PROBES, SIM_CORE_PROBES=1): one Snitch core that does not move on.
+//   [CORE-STALL]  a data request offered (q_valid) and not taken for StallTh cycles: hart, PC, address, write
+//   [CORE-SPIN]   the PC within one 256-byte window for StallTh cycles (a core blocked on a response, or polling):
+//                 hart, the window, the PC, and the address of the last load it issued
+// Each reports once per episode and again after the core moves on. It only watches.
+// ---------------------------------------------------------------------------------------------
+module snax_core_stall_probe #(
+  parameter type dreq_t = logic, parameter type drsp_t = logic, parameter int unsigned StallTh = 100000
+) (
+  input logic clk_i, input logic rst_i, input logic [31:0] hart_id_i, input logic [31:0] pc_q,
+  input dreq_t data_req_o, input drsp_t data_rsp_i
+);
+  int unsigned q_wait, spin;
+  bit q_rep, s_rep;
+  logic [31:0] win;
+  logic [63:0] last_ld;
+  always @(posedge clk_i) begin
+    if (rst_i) begin
+      q_wait <= 0; spin <= 0; q_rep <= 0; s_rep <= 0; win <= '0; last_ld <= '0;
+    end else begin
+      if (data_req_o.q_valid && data_rsp_i.q_ready && !data_req_o.q.write)
+        last_ld <= 64'(data_req_o.q.addr);
+      if (data_req_o.q_valid && !data_rsp_i.q_ready) begin
+        q_wait <= q_wait + 1;
+        if (q_wait == StallTh && !q_rep) begin
+          q_rep <= 1;
+          $fdisplay(snax_probe_pkg::fd(), "[CORE-STALL] %m @%0t hart %0d pc %h addr %h write %0d",
+                    $time, hart_id_i, pc_q, 64'(data_req_o.q.addr), data_req_o.q.write);
+          $fflush(snax_probe_pkg::fd());
+        end
+      end else begin
+        q_wait <= 0;
+        q_rep <= 0;
+      end
+      if ((pc_q & 32'hffffff00) == win) begin
+        spin <= spin + 1;
+        if (spin == StallTh && !s_rep) begin
+          s_rep <= 1;
+          $fdisplay(snax_probe_pkg::fd(), "[CORE-SPIN] %m @%0t hart %0d window %h pc %h last load %h",
+                    $time, hart_id_i, win, pc_q, last_ld);
+          $fflush(snax_probe_pkg::fd());
+        end
+      end else begin
+        win <= pc_q & 32'hffffff00;
+        spin <= 0;
+        s_rep <= 0;
+      end
+    end
+  end
+endmodule
+
+`ifdef HEMAIA_SIM_CORE_PROBES
+bind snitch snax_core_stall_probe #(.dreq_t(dreq_t), .drsp_t(drsp_t)) u_snax_core_stall_probe (
+  .clk_i(clk_i), .rst_i(rst_i), .hart_id_i(hart_id_i), .pc_q(pc_q), .data_req_o(data_req_o), .data_rsp_i(data_rsp_i));
 `endif
