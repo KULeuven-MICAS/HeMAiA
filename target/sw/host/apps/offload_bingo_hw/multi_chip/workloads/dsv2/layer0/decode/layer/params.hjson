@@ -1,0 +1,112 @@
+// dsv2/layer0/decode/layer: DeepSeek-V2-Lite's layer 0 for one decode token at position 1,024 over the 1,024 cached
+// keys, every step on the device in one graph, the attention SPLIT BY KEY and every weight multiply on the one-token
+// GEMV: the input RMSNorm on C00 (x, one FP16 row, from the root memory chip's HBM; the attention's x, the row in a_row,
+// multicast from C00's L1), the key-split MLA decode (../../../../fa/common/fa_decode_ks_mc.py), the glue on C00 (h kept
+// in L1; the FFN's X in a_row, multicast from C00's L1), the dense FFN decode on the GEMV
+// (../../../../ffn/common/ffn_decode_mc.py, gu_gemv; its Y_raw dequantised on the root, y_dequant), the residual h added
+// on the root, the output row into the root memory chip's HBM; the new key's piece appended to the root's cache shard
+// there.
+// THE ATTENTION IS LAYER 1'S: the attention's data (its checkpoint weights, input_layernorm gain and 8K-token cache of
+// hidden states) exists for layer 1 only, so this layer runs layer 1's key-split MLA (the same shapes, so the same
+// timing) in front of layer 0's dense FFN with layer 0's post_attention_layernorm gain (the FFN data's, model
+// dsv2-lite-l0).
+// Each block's section holds its own decode workload's switches (dsv2/layer1/decode/mla_ks, dsv2/layer0/decode/ffn_gv
+// with y_dequant); the driver: ../../../common/dsv2_decode_mc.py.
+{
+  // the platform and the graph's emission, shared by both blocks
+  num_chiplets: 16
+  num_clusters: 2
+  static_l1: true
+  l1_capacity: 990000
+  l1_order: search
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  fast_host_init: true
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  relay_per_gather: true
+  // the key-split MLA decode (dsv2/layer1/decode/mla_ks): one cached 64-key tile a chip on its cluster 0, the
+  // token's tile on C00's cluster 1, every weight multiply a GEMV; x is the input norm's a_row multicast from C00's L1
+  attn:
+  {
+    // the step: the cached positions (the token's position); the dequantisation's calibration positions
+    cache: 1024
+    n_calib: 32
+    // m*: one ChainGather with the FP16 MAX junction
+    m_exchange: chain
+    // every chain after every chip's last ring chunk has landed: no ChainGather beside a memory-chip push
+    chains_after_stream: true
+    // the block's own checks the layer makes (y: m*, o~, a partial, the appended piece)
+    checks: y
+    // one ring a chip: every chunk of both clusters in push order, each its own slot; its first 11 chunks pushed one
+    // by one, then runs of 4
+    w_chunk_bytes: 36864
+    weight_ring:
+    {
+      slots: 16
+      batch: 4
+      policy: 1
+      head: 11
+      batch_head: 1
+    }
+  }
+  // the dense FFN decode on the GEMV (dsv2/layer0/decode/ffn_gv: 2,048 -> 10,944 -> 2,048, INT4 in the paired layout):
+  // the prefill's distribution, every activation a row; each chip's down projection split by output columns between its
+  // clusters, 8 slices of 128 a cluster in 8 output slots, one ChainGather a group of 4 slices, cluster 1's the other way
+  // round the ring, each group's row stored a gather late; y_dequant: the root dequantises Y_raw's row before the layer
+  // adds h
+  ffn:
+  {
+    model: dsv2-lite-l0
+    seed: 1
+    tokens: 1
+    wbits: 4
+    blocks: 3
+    dn_cols: 128
+    w_chunk_bytes: 98304
+    w_buffers: 2
+    weight_ring:
+    {
+      slots: 16
+      batch: 4
+      policy: 1
+      head: 4
+      batch_head: 1
+    }
+    bcast: bcast_l1
+    reduce: chain
+    sync: edge
+    mapping: single_pass
+    dn_split: cols
+    x_row: true
+    store_lag: 1
+    gemm_reuse: true
+    root_light: true
+    first_blocks: 2
+    sym_zero: false
+    col_unit: 16
+    dn_balance: true
+    chain_alt: true
+    dn_load_early: true
+    relay_on_simd: true
+    first_gather_waits_copies: false
+    w4_paired: true
+    out_slots: 8
+    chain_group: 4
+    dn_gemv: true
+    gu_gemv: true
+    y_dequant: true
+  }
+  // the layer: the key-split attention, the second block, where the layer stops, the second block's weights pushed
+  // once X's multicast is done, and its first gather after its every ring's last chunk
+  layer:
+  {
+    attn: ks
+    mlp: ffn
+    stop: full
+    mlp_prefetch: after
+    chains_after_stream: true
+  }
+}

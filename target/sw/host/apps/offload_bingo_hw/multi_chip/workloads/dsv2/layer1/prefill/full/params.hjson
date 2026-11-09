@@ -1,0 +1,177 @@
+// dsv2/layer1/prefill/full: DeepSeek-V2-Lite's layer 1 (MLA attention + the MoE) over a fresh 1,024-token prompt, every
+// step on the device in one graph: every token's x normed into HBM, the attention's eight chunks, the glue, then the MoE
+// in two passes of 512 rows (layer.moe_passes), each the MoE block's 512-token mapping on its rows (its own route,
+// placement and weight stream), the second once the first is done; the residual added in each pass's reduce, the
+// output into HBM. The MoE takes passes of 512: in one pass over 1,024 rows a 64-column output slice is 128 KiB, and the
+// root's two output slots and two fold slots of that size, beside the experts' row buffers of twice the rows, do not fit
+// its L1. Each block section holds its own block workload's switches: attn = fa/dsv2_l1_prefill/t1024, moe =
+// moe/dsv2_l1_prefill/full_t512 (its args phases are the layer's). The platform and the graph's emission, shared by both
+// blocks, are the attention's. The driver: ../../../common/dsv2_layer_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  static_l1: true
+  l1_capacity: 960000
+  l1_order: search
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  fast_host_init: true
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  relay_per_gather: true
+  // every cluster's device args in phases of at most this many bytes, two alternating L1 regions, over the whole layer
+  args_phase_bytes: 24000
+  // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
+  list_phases: true
+  layer:
+  {
+    layer: 1
+    moe_passes: 2
+    // L3: the attention's ring and scratch and the router's weights share dl_act, and each ring schedule stays in its
+    // own chip's image (../../../common/dsv2_layer_prefill_mc.py _place_l3_arena, _check_l3_arena)
+    l3_arena: true
+    // the chip that adds h into its partial of every output slice (in the chain path, next to its memory chip, which
+    // holds h), 16 KiB of h at a time
+    resid_chip: "33"
+    resid_piece: 16384
+  }
+  attn:
+  {
+    stage: full
+    tokens: 1024
+    model: dsv2-lite-l1
+    chunk: 128
+    fresh: true
+    keys: 1024
+    bc: 64
+    wbits: 4
+    s4_reorder: true
+    s4_tile_absorb: true
+    s4_overlap: true
+    skip_masked: true
+    row_swap: true
+    ot8_fused: true
+    kv_norm_fused: true
+    kv_split_clusters: true
+    kv_vals_other: true
+    kv_vals_own: true
+    kv_cfg_ahead: true
+    x_hbm: true
+    x_bcast: memchip
+    kv_balance_ways: 4
+    kv_wkva_first: true
+    kv_balance: true
+    x_bcast_after_prefetch: false
+    split_loads: true
+    split_frac: 0.3
+    wo_cols: false
+    w_chunk_bytes: 65536
+    w_buffers: 3
+    weight_ring:
+    {
+      slots: 6
+      batch: 4
+      policy: 1
+    }
+    bcast: bcast_l1
+    reduce: chain
+    sync: edge
+    gemm_async: true
+    l3_overlay: true
+    x_puts_first: true
+    y_halves: false
+    y_store_halves: true
+    y_windows: 4
+    kv_slabs: split_kb
+    prefetch_after_x: false
+    chain_concurrent: false
+    checks: y
+    cfg_reuse: true
+    gemm_shape_l1: true
+    rope_fused: true
+    rope_perm: true
+    dq_fused: true
+    gemm_reuse: true
+    mask_c: true
+    gemm_cfg_ahead: true
+    fa_cfg_ahead: true
+    x_put_cluster: 1
+    q_tiles: true
+    o_tiles: true
+    y_block_chains: true
+    kv_cols: true
+    reduce_early: true
+    last_pair_chains: true
+    x_pf_split: true
+    sm_geom_xdma: true
+    chains_after_sweep: true
+    keys_by_chunk: true
+    full_kv_all: false
+    y_roots: ["11", "31", "13", "33"]
+    relay_prefer: {xdma: ["dm"]}
+    s4_q8_pairs: 2
+    gemm_cfg_hoist: true
+    yr_store_tile: 2
+    post_tiles: true
+    wo_split_rows: true
+    wo_row_pipe: true
+    kc_xs_late: true
+    kx_mid_double: true
+    kx_ahead: true
+    yr_rel1: true
+    x_rest_early: true
+    kx_per_chunk: true
+    kx_after_chains: true
+  }
+  moe:
+  {
+    stage: full
+    seed: 1
+    tokens: 512
+    wbits: 4
+    blocks: 3
+    slice: 64
+    x_blocks: 16
+    expert_rows: 32
+    w_chunk_bytes: 100352
+    w_buffers: 2
+    weight_ring:
+    {
+      slots: 18
+      batch: 4
+      policy: 1
+      head: 4
+      batch_head: 1
+      queued: true
+    }
+    bcast: bcast_l1
+    reduce: chain
+    sync: edge
+    gemm_async: true
+    b_parity: true
+    gemm_shape_l1: true
+    topk_shared: true
+    warm_root: true
+    dispatch_blocks: true
+    down_half_slabs: false
+    dtmp_bufs: 2
+    route: dist
+    chain_concurrent: false
+    l3_overlay: true
+    prefetch_after_x: true
+    shared_after: [0]
+    x_in_xe: true
+    route_tile_buf: true
+    route_early: true
+    fetch_lag: 2
+    sh_quant_blocks: true
+    slot_order: [1, 2, 3, 0]
+    store_lag: 1
+    scale_out: true
+    chain_first_alt: true
+    chain_tail: 1
+    chain_path: ["40", "41", "42", "43", "33", "32", "31", "30", "10", "11", "12", "13", "03", "02", "01", "00"]
+  }
+}

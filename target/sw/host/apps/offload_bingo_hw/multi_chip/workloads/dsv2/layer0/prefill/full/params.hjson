@@ -1,0 +1,177 @@
+// dsv2/layer0/prefill/full: DeepSeek-V2-Lite's layer 0 (MLA attention + the dense SwiGLU FFN, 2,048 -> 10,944 -> 2,048)
+// over a fresh 1,024-token prompt, every step on the device in one graph: every token's x normed into HBM, the
+// attention's eight chunks, the glue, the FFN in eight passes of 128 rows (a pass a chunk), then the final residual, the
+// output into HBM.
+// THE ATTENTION IS LAYER 1'S: the attention's data (its checkpoint weights, input_layernorm gain and cache of hidden
+// states) exists for layer 1 only, so this layer runs layer 1's MLA (the same shapes, so the same timing) in front of
+// layer 0's dense FFN with layer 0's post_attention_layernorm gain (the FFN data's, model dsv2-lite-l0).
+// Each block section holds its own block workload's switches: attn = fa/dsv2_l1_prefill/t1024, ffn =
+// ffn/dsv2_l0_prefill/full at 1,024 tokens (its args phases are the layer's). The platform and the graph's emission,
+// shared by both blocks, are the attention's. The driver: ../../../common/dsv2_layer_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  static_l1: true
+  l1_capacity: 960000
+  l1_order: search
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  fast_host_init: true
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  relay_per_gather: true
+  // every cluster's device args in phases of at most this many bytes, two alternating L1 regions, over the whole layer
+  args_phase_bytes: 24000
+  // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
+  list_phases: true
+  layer:
+  {
+    layer: 0
+    // the FFN's Y_raw slice by slice into the root memory chip's HBM (each pass's X landing back to back in L3), where
+    // the final reads it: no activation of the prompt whole in the root's L3
+    ffn_y: hbm
+  }
+  attn:
+  {
+    stage: full
+    tokens: 1024
+    model: dsv2-lite-l1
+    chunk: 128
+    fresh: true
+    keys: 1024
+    bc: 64
+    wbits: 4
+    s4_reorder: true
+    s4_tile_absorb: true
+    s4_overlap: true
+    skip_masked: true
+    row_swap: true
+    ot8_fused: true
+    kv_norm_fused: true
+    kv_split_clusters: true
+    kv_vals_other: true
+    kv_vals_own: true
+    kv_cfg_ahead: true
+    x_hbm: true
+    x_bcast: memchip
+    kv_balance_ways: 4
+    kv_wkva_first: true
+    kv_balance: true
+    x_bcast_after_prefetch: false
+    split_loads: true
+    split_frac: 0.3
+    wo_cols: false
+    w_chunk_bytes: 65536
+    w_buffers: 3
+    weight_ring:
+    {
+      slots: 6
+      batch: 4
+      policy: 1
+    }
+    bcast: bcast_l1
+    reduce: chain
+    sync: edge
+    gemm_async: true
+    l3_overlay: true
+    x_puts_first: true
+    y_halves: false
+    y_store_halves: true
+    y_windows: 4
+    kv_slabs: split_kb
+    prefetch_after_x: false
+    chain_concurrent: false
+    checks: y
+    cfg_reuse: true
+    gemm_shape_l1: true
+    rope_fused: true
+    rope_perm: true
+    dq_fused: true
+    gemm_reuse: true
+    mask_c: true
+    gemm_cfg_ahead: true
+    fa_cfg_ahead: true
+    x_put_cluster: 1
+    q_tiles: true
+    o_tiles: true
+    y_block_chains: true
+    kv_cols: true
+    reduce_early: true
+    last_pair_chains: true
+    x_pf_split: true
+    sm_geom_xdma: true
+    chains_after_sweep: true
+    keys_by_chunk: true
+    full_kv_all: false
+    y_roots: ["11", "31", "13", "33"]
+    relay_prefer: {xdma: ["dm"]}
+    s4_q8_pairs: 2
+    gemm_cfg_hoist: true
+    yr_store_tile: 2
+    post_tiles: true
+    wo_split_rows: true
+    wo_row_pipe: true
+    kc_xs_late: true
+    kx_mid_double: true
+    kx_ahead: true
+    yr_rel1: true
+    x_rest_early: true
+    kx_per_chunk: true
+    kx_after_chains: true
+  }
+  ffn:
+  {
+    stage: full
+    model: dsv2-lite-l0
+    seed: 1
+    tokens: 1024
+    rows: 128
+    wbits: 4
+    blocks: 3
+    dn_cols: 128
+    w_chunk_bytes: 98304
+    w_buffers: 2
+    x_buffers: 1
+    weight_ring:
+    {
+      slots: 16
+      batch: 4
+      policy: 1
+      head: 4
+      batch_head: 1
+    }
+    bcast: bcast_l1
+    reduce: chain
+    sync: edge
+    l3_overlay: true
+    mapping: single_pass
+    deq_per_row: true
+    x_blocks: 4
+    store_lag: 1
+    // GEMMs (ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
+    // ahead of its operands and of the waits before its start, a start that repeats its cluster's previous
+    // configuration writing only addresses (gemm_reuse)
+    gemm_async: true
+    gemm_shape_l1: true
+    gemm_cfg_ahead: true
+    gemm_cfg_hoist: true
+    gemm_reuse: true
+    post_blocks: 4
+    root_light: true
+    first_blocks: 2
+    split_last: true
+    sym_zero: false
+    dn_split: cols
+    split_first_dn: true
+    col_unit: 16
+    dn_balance: true
+    root_cols: [320, 304]
+    chain_alt: true
+    dn_load_early: true
+    relay_on_simd: true
+    first_gather_waits_copies: false
+    w4_paired: true
+  }
+}
