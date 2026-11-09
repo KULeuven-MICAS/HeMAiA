@@ -154,11 +154,12 @@ class ChipletBuild(FabricBase):
         self.sym = {}
         self.checks = []                       # (name, got handle, golden array, bytes)
         if shared is not None:
-            for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark"):
+            for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark", "ring_scheds"):
                 setattr(self, a, getattr(shared, a))
             self.n_anchor = 0
             return
         self.st = DataStaging(plat, on_host=True)
+        self.ring_scheds = {}                  # schedule symbol: the WeightRings it holds
         if not self.st.has_hbm:
             raise ValueError(f"{args.platformcfg} has no HBM")
         dfg = self.dfg = BingoDFG(num_chiplets=len(chips), num_clusters_per_chiplet=NC,
@@ -594,9 +595,31 @@ class ChipletBuild(FabricBase):
         """Each chip's ring schedule, the table its prefetcher walks."""
         for k in self.chips:
             r = self.rings[k]
-            self.st.put(f"{self.TAG}_ring_sched_k{k:02x}", "uint64_t", np.array(r.schedule(), dtype=np.uint64))
+            name = f"{self.TAG}_ring_sched_k{k:02x}"
+            self.st.put(name, "uint64_t", np.array(r.schedule(), dtype=np.uint64))
+            self.ring_scheds[name] = r
             print(f"[{self.TAG}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
                   f"{self.mem[k]:#04x} engine {self.engine[k]}")
+
+    def report_ring_races(self):
+        """The weight rings' overwrite races (WeightRings.races) under every prefetcher task of the
+        graph, its parts' chunk ranges together: the runs the prefetcher's byte guard holds back."""
+        pfs = {}
+        for n in self.dfg.nodes:
+            a = n.kernel_args
+            if isinstance(a, HostBingoKernelWeightPrefetchArgs):
+                pf = pfs.setdefault(a.sched_addr.symbol_name, (a, set()))
+                pf[1].add((getattr(a, "chunk_lo", 0), getattr(a, "chunk_hi", 0)))
+        if not pfs:
+            return
+        total = 0
+        for name, (a, parts) in pfs.items():
+            races = self.ring_scheds[name].races(a, sorted(parts))
+            total += len(races)
+            if races:
+                print(f"[{self.TAG}] {name}: {len(races)} ring races (ring, unread chunk, pushed chunk, "
+                      f"bytes of it covered) {races[:4]}")
+        print(f"[{self.TAG}] ring races (runs the prefetcher's byte guard holds back): {total}")
 
     def data_h_extra(self):
         """More lines for the end of the data header."""
@@ -605,6 +628,7 @@ class ChipletBuild(FabricBase):
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
         dfg, p, st, args, T = self.dfg, self.p, self.st, self.args, self.TAG
         self.emit_ring_schedules()
+        self.report_ring_races()
         if args.data_h:
             st.emit(args.data_h, args.output_dir)
             if p.get("d2d_ddr", True):
