@@ -45,9 +45,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ffn",
-                                "common"))
-from ffn_data import RMS_EPS, _bf16, a_row_bytes, import_util  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "llm"))
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "gemm"))
+from gemv_utils import a_row_bytes  # noqa: E402
+from model_data import RMS_EPS, import_golden, read_bf16  # noqa: E402
 
 N_EXP, TOP_K, CAND = 64, 6, 8          # experts, the route's k, the TopK junction's candidates
 PAD16 = np.float16(-65504.0)           # a lane no softmax or max may pick
@@ -68,9 +69,9 @@ def _f32_a_wins(a, b):
 class MoeData:
     """`chips_experts`: per chip index, the 4 expert ids whose logits it computes (in order)."""
 
-    def __init__(self, cache_dir, dsv2_dir, seed=1, n_calib=8, wbits=4,
+    def __init__(self, cache_dir, seed=1, n_calib=8, wbits=4,
                  model="dsv2-lite-bf16", layer=1):
-        fp, hm, layout, pack, ref = import_util(dsv2_dir)
+        fp, hm, layout, pack, ref = import_golden()
         self.fp, self.hm, self.layout, self.packmod, self.ref = fp, hm, layout, pack, ref
         if wbits != 4:
             raise ValueError(f"params wbits={wbits}: the experts stream INT4 weights")
@@ -85,7 +86,7 @@ class MoeData:
             d = t[pre + name]
             if d["dtype"] != "BF16":
                 raise ValueError(f"{name} is {d['dtype']}")
-            return _bf16(os.path.join(base, pre + name + ".bin"), d["shape"])
+            return read_bf16(os.path.join(base, pre + name + ".bin"), d["shape"])
 
         self.repo, self.revision, self.layer = m["repo"], m["revision"], layer
         self.gain = rd("post_attention_layernorm.weight")
@@ -188,7 +189,7 @@ class MoeData:
 
     def ssj_exp(self, t, n=SSJ_EXP_LUT_N):
         """The softmax-statistics junction's exponential, bit for bit: FpActivation's EXP with
-        an n-entry table (dsv2 util/simd.py's model of the same unit, at the junction's table
+        an n-entry table (util/sim/simd/simd.py's model of the same unit, at the junction's table
         depth)."""
         simd, F32 = self.hm.simd, np.float32
         log2ef = F32(1.44269504088896341 * n)

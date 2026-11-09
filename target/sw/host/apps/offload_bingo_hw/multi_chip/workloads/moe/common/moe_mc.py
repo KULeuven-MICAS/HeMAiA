@@ -6,7 +6,7 @@
 """The shared driver of the moe workloads (workloads/moe/<model>/<variant>/): DeepSeek-V2-Lite's
 layer-1 MoE for one token at its real size, on the 16 + 4 chiplet platform, with a SHARDED
 router (the platform, the rings, the anchors, the sync arm, the broadcast and the reduce are
-ffn/common/chiplet_mc.py's; the data and the golden are moe_data.py's).
+util/sim/multichip/chiplet_mc.py's; the data and the golden are moe_data.py's).
 
 THE MAPPING. Each of the 6 routed slots runs on the 4 clusters of 2 chips, the shared expert
 (2816) on the 8 clusters of 4 chips (the x = 0 column, the root among them): every cluster
@@ -44,11 +44,11 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "multichip"))
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "common"))
 from driver import repo_root, run_driver  # noqa: E402
 REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
-sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
 
 import _bingo_paths  # noqa: F401,E402
@@ -85,7 +85,7 @@ class MBuild(cm.ChipletBuild):
         if self.route_impl not in ("fold", "gather"):
             raise ValueError(f"params route={self.route_impl!r}: fold or gather")
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = moe_data.MoeData(cache, args.dsv2_dir, seed=int(p.get("seed", 1)),
+        d = self.d = moe_data.MoeData(cache, seed=int(p.get("seed", 1)),
                                       wbits=self.wbits)
         self.D = d.H
         # ---- roles: the shared expert on the x = 0 column (the root's), the slots on pairs -
@@ -124,8 +124,7 @@ class MBuild(cm.ChipletBuild):
 
         self._stage()
         self.make_streams()
-        self.make_rings(self.cimg, routed=self.cex, slices=self.cslices, rec_l3=self.h_rec_l3,
-                        rec_slots=TOP_K)
+        self.make_rings(rec_l3=self.h_rec_l3, rec_slots=TOP_K)
         # ---- the symmetric buffer of every cluster ---------------------------------------
         xb = 2 * self.D
         self.OFF_X, self.OFF_LOC, self.OFF_FLAG = 0, 0, xb
@@ -163,7 +162,7 @@ class MBuild(cm.ChipletBuild):
         st, d, T = self.st, self.d, self.TAG
         self.h_x8 = st.put(f"{T}_x8", "int8_t", d.x8())
         self.h_rec_l3 = st.put_zeros(f"{T}_rec_l3", "uint8_t", TOP_K * 128)
-        self.wh, self.h_sgu, self.cimg = {}, {}, {}
+        self.wh, self.h_sgu = {}, {}
         self.h_sdn = st.put(f"{T}_s_dn_sh", "uint16_t",
                             np.asarray(d.sh_pack["dn_f"], np.float16).view(np.uint16))
         # the router: each chip its own 32-column block and factors
@@ -181,18 +180,12 @@ class MBuild(cm.ChipletBuild):
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
             hd = st.put_hbm(f"{T}_wimg_g{g}", img, mem_chip=loc)
             self.wh[(g, "gu")], self.wh[(g, "dn")] = hd, at_offset(hd, gu.size)
-            if self.crest:
-                cap = img.nbytes + 64 * 1024
-                self.cimg[g] = (hd.address, img.view(np.uint8).reshape(-1),
-                                st.put_hbm(f"{T}_cimg_g{g}", np.zeros(cap, np.uint8), mem_chip=loc),
-                                cap)
             self.h_sgu[g] = st.put(f"{T}_s_gu_g{g}", "uint16_t",
                                    np.asarray(d.gu_factors(d.sh_pack, c0, INTER),
                                               np.float16).view(np.uint16))
         # the routed slots: per slot chip, its clusters' slices of the slot's expert, back to
         # back per field, in its memory chip's HBM; its expert table names them
         self.tables, self.table_bytes, self.slot_off = {}, {}, {}
-        self.cex, self.cslices = {}, {}
         for s, pair in enumerate(self.slot_chips):
             e = self.ids[s]
             mp = d.expert(e)
@@ -203,14 +196,7 @@ class MBuild(cm.ChipletBuild):
                 gus = [np.asarray(d.gu_factors(mp, self.role[g][1], INTER), np.float16) for g in gs]
                 dn = [d.dn_blob(mp, self.role[g][1], INTER) for g in gs]
                 f = {"gu": np.concatenate(gu), "dn": np.concatenate(dn)}
-                if self.crest:
-                    hs = {fn: st.put_hbm(f"{T}_e{e}_{fn}_k{k:02x}", np.zeros(b.nbytes, np.uint8),
-                                         mem_chip=loc) for fn, b in f.items()}
-                    self.cex[k] = {fn: ({e: np.ascontiguousarray(b).view(np.uint8).reshape(-1)},
-                                        {e: hs[fn]}) for fn, b in f.items()}
-                else:
-                    hs = {fn: st.put_hbm(f"{T}_e{e}_{fn}_k{k:02x}", b, mem_chip=loc)
-                          for fn, b in f.items()}
+                hs = {fn: st.put_hbm(f"{T}_e{e}_{fn}_k{k:02x}", b, mem_chip=loc) for fn, b in f.items()}
                 h_gus = st.put_hbm(f"{T}_e{e}_gus_k{k:02x}",
                                    np.concatenate(gus).view(np.int8), mem_chip=loc)
                 h_dns = st.put_hbm(f"{T}_e{e}_dns_k{k:02x}",
@@ -226,10 +212,6 @@ class MBuild(cm.ChipletBuild):
                     self.slot_off[g] = {"gu": sum(b.size for b in gu[:r]),
                                         "gu_s": 2 * 2 * INTER * r, "dn": sum(b.size for b in dn[:r]),
                                         "dn_s": 0}
-                self.cslices[k] = {r: {fn: (sum(b.size for b in parts[:r]),
-                                            sum(b.size for b in parts[:r + 1]))
-                                       for fn, parts in (("gu", gu), ("dn", dn))}
-                                   for r in range(len(gs))}
 
     # ---- the layer ------------------------------------------------------------------------
     def build(self):
@@ -484,7 +466,7 @@ class MBuild(cm.ChipletBuild):
 
 def _app_name(S):
     return (f"DeepSeek-V2-Lite layer {S.d.layer} MoE, one token, INT{S.wbits} experts, "
-            f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
+            f"{len(S.chips)} chips x {S.NC} clusters, "
             f"route={S.route_impl} bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
 
 

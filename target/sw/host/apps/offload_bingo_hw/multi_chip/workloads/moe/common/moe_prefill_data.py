@@ -41,9 +41,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ffn",
-                                "common"))
-from ffn_data import RMS_EPS, _bf16, import_util  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "llm"))
+from model_data import RMS_EPS, import_golden, read_bf16  # noqa: E402
 
 N_EXP, TOP_K = 64, 6
 TILE_ROWS = 8                 # an A / D row tile of array shape 3
@@ -51,13 +50,16 @@ MESH3 = (8, 8, 16)            # array shape 3: (Mu, Ku, Nu)
 
 
 def pad8(n):
-    return -(-int(n) // TILE_ROWS) * TILE_ROWS
+    """An expert's rows on the device: its tokens padded to whole 8-row tiles, and at least one tile -- an expert no
+    token chose (a prompt can leave one empty) keeps its place in the static schedule and runs one tile of zero rows
+    with route weight 0, adding nothing."""
+    return max(-(-int(n) // TILE_ROWS), 1) * TILE_ROWS
 
 
 class MoePrefillData:
-    def __init__(self, cache_dir, dsv2_dir, hw=None, seed=1, n_calib=8, n_cal_act=32, tokens=256,
-                 inter_e=None, inter_sh=None, wbits=4, layer=1, model="dsv2-lite-bf16"):
-        fp, hm, layout, pack, ref = import_util(dsv2_dir)
+    def __init__(self, cache_dir, hw=None, seed=1, n_calib=8, n_cal_act=32, tokens=256,
+                 inter_e=None, inter_sh=None, wbits=4, layer=1, model="dsv2-lite-bf16", rows=None):
+        fp, hm, layout, pack, ref = import_golden()
         self.fp, self.hm, self.layout, self.packmod, self.ref = fp, hm, layout, pack, ref
         self.simd = hm.simd
         if hw is not None:
@@ -75,7 +77,7 @@ class MoePrefillData:
             d = t[pre + name]
             if d["dtype"] != "BF16":
                 raise ValueError(f"{name} is {d['dtype']}")
-            return _bf16(os.path.join(base, pre + name + ".bin"), d["shape"])
+            return read_bf16(os.path.join(base, pre + name + ".bin"), d["shape"])
 
         self.repo, self.revision, self.layer = m["repo"], m["revision"], layer
         self._rd = rd
@@ -96,10 +98,20 @@ class MoePrefillData:
         self.k_dn_e = fp.d_shift_for_depth(self.I_e)
         self.k_dn_sh = fp.d_shift_for_depth(self.I_sh)
         # ---- the tokens and the input scale ------------------------------------------------
-        rng = np.random.default_rng([int(seed), 2])
-        cal = rng.normal(0.0, 1.0, size=(n_calib, H)).astype(np.float16).astype(np.float32)
-        self.x16 = rng.normal(0.0, 1.0, size=(self.T, H)).astype(np.float16)   # [T, H]
-        cal_act = rng.normal(0.0, 1.0, size=(n_cal_act, H)).astype(np.float16).astype(np.float32)
+        # rows (a whole layer, dsv2_prefill_mc.py): the prompt's rows x16 (FP16 [T, H], the residual stream
+        # after the attention), the rows the input scale is calibrated on (cal) and those the activation
+        # scales are (cal_act), instead of the seeded draws
+        if rows is None:
+            rng = np.random.default_rng([int(seed), 2])
+            cal = rng.normal(0.0, 1.0, size=(n_calib, H)).astype(np.float16).astype(np.float32)
+            self.x16 = rng.normal(0.0, 1.0, size=(self.T, H)).astype(np.float16)   # [T, H]
+            cal_act = rng.normal(0.0, 1.0, size=(n_cal_act, H)).astype(np.float16).astype(np.float32)
+        else:
+            self.x16 = np.asarray(rows["x16"], dtype=np.float16)
+            if self.x16.shape != (self.T, H):
+                raise ValueError(f"rows x16 {self.x16.shape}: [{self.T}, {H}]")
+            cal = np.asarray(rows["cal"], dtype=np.float16).astype(np.float32)
+            cal_act = np.asarray(rows["cal_act"], dtype=np.float16).astype(np.float32)
         self.gain16 = gain.astype(np.float16)
         xg16 = lambda x: fp.mul16(hm.rmsnorm(np.asarray(x, dtype=np.float16)), self.gain16)
         self.s_h = hm.QScale.for_amax(max(float(np.max(np.abs(xg16(x).astype(np.float32))))
@@ -166,7 +178,7 @@ class MoePrefillData:
     def x_rows(self, rows):
         """The INT8 input rows `rows` (index T: the zero row)."""
         hz = np.concatenate([self.hq, np.zeros((1, self.H), dtype=self.hq.dtype)])
-        return hz[np.asarray(rows)]
+        return hz[np.asarray(rows, dtype=np.int64)]
 
     def a8(self, mp, xq, w16):
         """An MLP's down operand: INT8 [rows, I] of input rows xq and route weights w16."""
@@ -196,11 +208,14 @@ class MoePrefillData:
         raw, _ = self.hm.gemv(a8[:, k0:k1], mp["dn_q"][k0:k1, c0:c0 + w], mp["k_dn"])
         return self.fp.mul16(raw, mp["dn_f"][None, c0:c0 + w])
 
-    def chip_partial(self, sh_cols, experts, c0, w):
+    def chip_partial(self, sh_cols, experts, c0, w, init=None):
         """A chip's partial over output columns c0:c0+w (FP16 [T, w]): the shared MLP's down over
-        its shared intermediate columns sh_cols = (k0, k1), then its experts in slot order."""
+        its shared intermediate columns sh_cols = (k0, k1), plus `init` (FP16 [T, w], the layer's
+        residual on the one chip that adds it), then its experts in slot order."""
         add16 = self.fp.add16
         y = self.d16(self.sh, self.a8_shared(), sh_cols[0], sh_cols[1], c0, w).copy()
+        if init is not None:
+            y = add16(y, np.asarray(init, dtype=np.float16))
         for e in experts:
             d = self.d16(self.expert(e), self.a8_expert(e), 0, self.I_e, c0, w)
             for i, tt in enumerate(self.tok[e]):
@@ -226,8 +241,12 @@ class MoePrefillData:
             y[sel] += p[sel, e][:, None] * ((ref.silu(h @ we["gate"]) * (h @ we["up"])) @ we["down"])
         return y
 
-    def report(self, y16):
-        ref = np.asarray(self.y_ref(), dtype=np.float64).reshape(-1)
+    def report(self, y16, resid=None):
+        """resid: the residual the device's y includes (a whole layer's), added to the float layer too."""
+        ref = np.asarray(self.y_ref(), dtype=np.float64)
+        if resid is not None:
+            ref = ref + np.asarray(resid, dtype=np.float64)
+        ref = ref.reshape(-1)
         got = np.asarray(y16, dtype=np.float64).reshape(-1)
         rel = float(np.max(np.abs(got - ref)) / max(np.max(np.abs(ref)), 1e-12))
         cos = float(np.dot(got, ref) / max(np.linalg.norm(got) * np.linalg.norm(ref), 1e-30))
