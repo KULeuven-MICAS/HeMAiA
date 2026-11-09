@@ -26,11 +26,12 @@ because each depends on the last. The analyses the passes use live here too.
 | `bingo_sim_check.py` | Replays the graph against a model of the hardware task manager. It is a **deadlock oracle**, not a performance model — trust it for "this wedges", not for cycle counts. |
 | `bingo_block_viz.py` | One picture and one text listing per libs block, under `<output_dir>/block_dfg/`, drawn from the records `Pipeline.run()` leaves on the DFG. It runs first in `bingo_compile_dfg`, so it shows the dependencies the blocks stated rather than the dummy nodes they are lowered to, and it never fails a build. `BINGO_BLOCK_DFG=0` skips it. |
 
-## A rewrite a workload calls itself
+## Rewrites a workload calls itself
 
 | file | |
 |---|---|
 | `bingo_gemm_reuse.py` | `reuse_gemm_config(dfg)`: a `gemm_full` that repeats the previous `gemm_full`'s configuration on its core (every field but the four operand addresses) becomes `gemm_minimal`. It reads creation order as run order, so the cores must have been ordered first (`GemmQueue.program_order`). `bingo_compile_dfg` does not run it. |
+| `bingo_args_phases.py` | `split_args_phases(S, budget, dev_cores)`: cuts each cluster's device tasks, in run order, into args phases of at most `budget` bytes (params `args_phase_bytes`) and adds each later phase's load, an iDMA copy on the DM core, with its edges: after the last task of phase p - 2 on every core (the L1 region it overwrites), before every core's first task of phase p. `bingo_dfg_emit.py` (ARGS PHASES) gives the even and odd phases the two alternating L1 regions. Call it after the program order, before `bingo_compile_dfg`; `_args_bytes(t)` is a task's args struct in the arena. |
 
 ## Why the order is fixed
 
