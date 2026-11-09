@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""DeepSeek-V2-Lite's layer-1 MoE prefill built stage by stage (params stage; the stage apps are archived).
+"""DeepSeek-V2-Lite's layer-1 MoE prefill built stage by stage (params stage).
 
 Each stage is the one before it plus one step of the mapping (the MoE Prefill Tracker's "The stages, step by step"), so
 every step is measured and optimised on its own before the next one is added. The data, the placement, the buffers and

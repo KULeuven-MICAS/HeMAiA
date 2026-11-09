@@ -1,5 +1,5 @@
-// all: R4, fused + per-edge synchronisation: BINGO hardware edges, no barrier (sync edge): the tuned block,
-// byte for byte the former dsv2_l1_prefill/full_t512 (its run stg_full_t512_3 stands for this rung).
+// all: R4, fused + per-edge synchronisation: BINGO hardware edges, no barrier (sync edge): the tuned block
+// (its measured run is stg_full_t512_3).
 // DeepSeek-V2-Lite's layer-1 MoE (64 routed experts of 1,408 intermediate columns, top 6, and the shared MLP of 2,816),
 // the checkpoint's weights in INT4 (the router's INT8), a fresh 512-token prompt in one pass on 16 + 4 chiplets, X from the
 // root memory chip's HBM; the tuned mapping, chunks, slices and buffers.

@@ -38,7 +38,7 @@ rectangle runs no code and gets no task (`HEMAIA_IS_COMPUTE_CHIP`).
 
 ## Results
 
-Runs `runs/stg_sync_ab`, `runs/stg_sync_c`, `runs/stg_sync_d` (3 Nov 2026), all PASS; every barrier
+Runs `runs/stg_sync_ab`, `runs/stg_sync_c`, `runs/stg_sync_d`, all PASS; every barrier
 report err = 0 on every participant. Cycles of the 500 MHz cluster clock.
 
 | P | hops | A barrier | B barrier | C 1-to-1 | C 1-to-all | D 1-to-1 | D 1-to-all |
@@ -57,5 +57,3 @@ report err = 0 on every participant. Cycles of the 500 MHz cluster clock.
 - The CSV's `min` / `max` for A and B are the extremes over all 32 iterations and all participants. B's
   spread is widest at P = 16: 1503 / 1632 / 2750 (min / avg / max).
 
-The earlier numbers, measured on `hemaia_16chiplet.hjson` (4 x 4 compute grid, one memory chiplet at
-[4,0], P = 16 at 6 hops), are kept in `results/four_arm_sync_latency_hemaia_16chiplet.csv`; their method.
