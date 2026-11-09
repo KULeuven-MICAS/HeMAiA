@@ -1,0 +1,51 @@
+// fa/llama3_decode_full/bcast_reduce: the FA decode ablation on the whole attention block of Llama-3-8B (32 query / 8 key-value
+// heads of 128, hidden 4096, synthetic INT4 weights): one decode token over an 8,192-position KV cache, x from the root
+// memory chip's HBM through the q / k / v GEMVs, the key-split attention, W_O, y written back to HBM and the new key
+// and value appended to the cache in HBM. Rung bcast_reduce: bcast with the statistics merged and the partials summed along ChainGathers (+ reduction).
+// ../../../llama3/common/llama3_decode_ks_mc.py explains the mapping and every parameter (THE ABLATION).
+{
+  num_chiplets: 16
+  num_clusters: 2
+  seed: 1
+  tokens: 1
+  // the cached positions (128 key tiles of 64, 8 a chip) and the prefill's passes of 64 queries the golden runs over
+  // them for the prompt's static scales
+  ctx: 8192
+  rows: 64
+  bc: 64
+  wbits: 4
+  w4_paired: true
+  w_chunk_bytes: 65536
+  // the 4 W_O chunks of a cluster wait in its slabs for o (wo_push before_chains)
+  w_buffers: 4
+  weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+  bcast: bcast_l1
+  reduce: chain
+  sync: barrier
+  barrier_mode: sw
+  x_cast: multicast
+  static_l1: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  remote_broadcast: false
+  fast_host_init: true
+  x_bcast: "memchip",
+  // the FA core's variant: one pass, the clusters' (m, l) merged by the softmax-statistics junction (with reduce root
+  // the root takes the maxima and the row sums are reduced with O)
+  passes: 1
+  stats: merge
+  // each chip's W_O pushes right behind its k / v chunks, during the sweep; the statistics wait until the chip has
+  // loaded its last W_O chunk: no ChainGather and no o multicast beside a push
+  wo_push: before_chains
+  // each chip's cache copy waits until q is in every cluster: no cache copy beside the W_q streams or q's multicast
+  cache_order: after_q
+  // the query halves, the root's m*, a far chip's partial before y and the appends; y and the appends copied from
+  // HBM into the root's L3 first
+  checks: stages
+  hbm_checks: stash
+}

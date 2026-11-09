@@ -1,0 +1,67 @@
+// stage0: the staged DSv2 MLA fresh prefill (common/fa_stages_mc.py), stage 0: X from HBM into every chip's L3.
+// The root's memory chip multicasts it (x_bcast memchip): its push engine reads each 16-token tile (32 KiB) from its
+// HBM and multicasts it, then the tile's flag, into every compute chip's L3, configured by the root's host (one host
+// task, __host_bingo_kernel_hbm_bcast); the root gets its copy from the multicast like every other chip. Every
+// cluster waits for the tiles stage 1 reads.
+{
+  "stage": 0,
+  "x_hbm": true,
+  "x_bcast": "memchip",
+  "num_chiplets": 16,
+  "num_clusters": 2,
+  "tokens": 256,
+  "static_l1": true,
+  "l1_capacity": 960000,
+  "compact_id_maps": true,
+  "gid_lists": true,
+  "per_chip_image": true,
+  "desc_in_image": true,
+  "d2d_ddr": true,
+  "d2d_rx_yield": [
+    255,
+    0
+  ],
+  "relay_per_gather": true,
+  "model": "dsv2-lite-l1",
+  "chunk": 128,
+  "fresh": true,
+  "wo_cols": false,
+  "keys": 256,
+  "bc": 64,
+  "w_chunk_bytes": 65536,
+  "w_buffers": 3,
+  "weight_ring": {
+    "slots": 6,
+    "batch": 4,
+    "policy": 1
+  },
+  "bcast": "bcast_l1",
+  "reduce": "chain",
+  "sync": "edge",
+  "gemm_async": true,
+  "l3_overlay": true,
+  "x_puts_first": true,
+  "y_halves": false,
+  "y_store_halves": false,
+  "y_windows": 4,
+  "kv_slabs": "split",
+  "prefetch_after_x": false,
+  "chain_concurrent": false,
+  "checks": "y",
+  "cfg_reuse": true,
+  "gemm_shape_l1": true,
+  "rope_fused": true,
+  "rope_perm": true,
+  "dq_fused": true,
+  "gemm_reuse": true,
+  "mask_c": true,
+  "gemm_cfg_ahead": true,
+  "fa_cfg_ahead": true,
+  "x_put_cluster": 1,
+  "q_tiles": true,
+  "o_tiles": true,
+  "y_block_chains": true,
+  "l1_order": "search",
+  "kv_cols": true,
+  "wbits": 4
+}

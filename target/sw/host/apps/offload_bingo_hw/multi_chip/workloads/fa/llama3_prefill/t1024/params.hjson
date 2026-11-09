@@ -1,0 +1,80 @@
+// t1024: Llama-3-8B's whole attention over a fresh 1,024-token prompt, all 16 passes, with the switches of the proof of
+// concept fa/llama3_prefill_poc/t1024_ab_rxo. x comes from HBM and y_scatter stores y in its owners' tiles, so L3
+// holds only every pass's x landing area (no overlay: 16 passes of [x src | x land] would fill the 8 MiB L3).
+{
+  num_chiplets: 16
+  num_clusters: 2
+  seed: 1
+  tokens: 1024
+  rows: 64
+  bc: 64
+  dn_cols: 256
+  wbits: 4
+  w4_paired: true
+  w_chunk_bytes: 65536
+  w_buffers: 2
+  load_ahead: true
+  wo_cols: true
+  wo_slice: 128
+  rope_pairs: chunks
+  restream: true
+  l3_overlay: false
+  kv_split: true
+  weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  static_l1: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  remote_broadcast: false
+  // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
+  // then every pass's y at its head, middle and tail
+  checks: stages
+  cfg_reuse: true
+  gemm_shape_l1: true
+  gemm_reuse: true
+  gemm_cfg_ahead: true
+  fa_cfg_ahead: true
+  mask_c: true,
+  // the confirmed stage levers (28 Oct): X from HBM with the root's prefetch split around it (stage1234_xp), the
+  // sweep's o~ straight into o8 and its geometry on the xDMA (stage5_og), W_O by columns with the weights loaded
+  // ahead and the gather on the xDMA (stage678_oe without o_overlap: in the block, pass i + 1's o8 waits for that
+  // pass's x fetch, which follows pass i's y stores on the DM core, so o_overlap's order closes a cycle)
+  x_bcast: "memchip",
+  x_pf_split: true,
+  ot8_fused: true,
+  sm_geom_xdma: true,
+  wo_load_ahead: true,
+  y_scatter: true,
+  wo_early: true,
+  o_get_xdma: true,
+  // levers A and B (the FA tracker's roofline section): A, pass i + 1's x fetch and projections between pass i's o8
+  // puts and the root's wait, so the arrays run them under the o8 round trip (wo_under_proj), the root's wait and
+  // multicast ahead of that work on its DM core (o_mc_first); B, pass i + 1's x fetch before pass i's sweep (x_early)
+  wo_under_proj: true,
+  o_mc_first: true,
+  x_early: true,
+  // pass i's o8 gather right behind pass i + 1's last projection on the xDMA core (o_get_ahead); pass i + 1's K/V
+  // trade ahead of pass i's y stores (trade_ahead); every cluster's next-pass RoPE table and first two weight chunks
+  // ahead of its o8 put (front_first all); pass i + 1's x copy beside the sweep's tail, not its softmaxes
+  o_get_ahead: true,
+  trade_ahead: true,
+  front_first: "x",
+  x_after_sm: true,
+  // the cluster-level levers (snax replays rt3, rtxf, rtxo), and the host's tables as static images
+  x_row_tiles: true,
+  front_after_sm: true,
+  x_tiles_xdma: true,
+  x_xdma_free: true,
+  o_row_tiles: true,
+  fast_host_init: true,
+  // args phases (workloads/common/args_phases.py): 16 passes' device args (about 430 KB a cluster) do not fit L1 beside
+  // the static buffers; phases of at most 34,000 bytes in two alternating regions (room about 75 KB a cluster)
+  args_phase_bytes: 34000
+}

@@ -21,8 +21,8 @@ calibrated on the last 64 tokens' queries. The 16 heads fill the BR query lanes 
 of FP16 lanes, a whole multiple of the heads -- repeated if BR is wider (a zero lane would sum
 every key's value at weight 1, near the FP16 range).
 
-THE GOLDEN is the device's arithmetic (util/hwmodel.py, the snax FA kernels' models) for the key
-split the driver builds -- dsv2_datagen.split_attention_golden's mode "key", in this platform's
+THE GOLDEN is the device's arithmetic (util/sim/common/hwmodel.py, the snax FA kernels' models) for the key
+split the driver builds (by key), in this platform's
 fold order: every cluster's shard of key tiles; pass 1, the shard's row maximum; m* their
 lanewise maximum (exact); pass 2, the shard's softmax seeded at m* (no correction) and PV, O^T
 leaving the D port as FP16 at k_o, the row sums FP16; the shards' (O, l) added in FP16 in the
@@ -36,9 +36,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ffn",
-                                "common"))
-from ffn_data import RMS_EPS, _bf16, import_util  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "llm"))
+from model_data import RMS_EPS, import_golden, read_bf16  # noqa: E402
 
 # BR: the query lanes, one SIMD beat of FP16 values (the softmax reduces one query per lane) --
 # the cluster's SIMD beat, which fa_mc.py checks against the cluster cfg.
@@ -46,11 +45,11 @@ BC, BR, D_QK, D_V = 64, 16, 576, 512
 
 
 class FaData:
-    def __init__(self, kv_path, weights_cache, dsv2_dir, keys=8192, layer=1,
+    def __init__(self, kv_path, weights_cache, keys=8192, layer=1,
                  model="dsv2-lite-bf16", n_calib=64):
-        fp, hm, layout, pack, ref = import_util(dsv2_dir)
+        fp, hm, layout, pack, ref = import_golden()
         self.fp, self.hm, self.layout, self.ref = fp, hm, layout, ref
-        from util import model as mdl
+        import dsv2_model as mdl
         self.mdl = mdl
         d = self.dims = mdl.load()
         z = np.load(kv_path)
@@ -66,7 +65,7 @@ class FaData:
         t = m["tensors"]
         base = os.path.join(weights_cache, m["repo"].replace("/", "__"))
         pre = f"model.layers.{layer}."
-        rd = lambda n: _bf16(os.path.join(base, pre + n + ".bin"), t[pre + n]["shape"])
+        rd = lambda n: read_bf16(os.path.join(base, pre + n + ".bin"), t[pre + n]["shape"])
         in_norm = rd("input_layernorm.weight")
         wq = rd("self_attn.q_proj.weight").T                         # [2048, 3072]
         kv_norm = rd("self_attn.kv_a_layernorm.weight")              # [512]

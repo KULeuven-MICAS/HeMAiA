@@ -9,6 +9,17 @@ latent cache, head parallel over the 16 + 4 chiplet platform. The platform, the 
 barriers and the synchronisation arm are chiplet_mc.py's; the data and the golden are
 fa_prefill_data.py's; the sweep over the cache is libs/blocks/fa_sweep.py's.
 
+A FRESH PROMPT (params fresh, in a whole layer: dsv2_prefill_mc.py with layer.tiles chips): no cache; the
+keys are the prompt's own and causal. Each chip makes the latent of the 16-token tiles its input norm gave
+it (stage_kv, cluster 0; tile q on chip q mod 16, T / 256 tiles a chip): kv = x8 . W_KVA in nine GEMMs of 64
+columns a tile (W_KVA through the ring once, ahead of the chunks' weights), dequantised; c~ = RMSNorm of its
+first 512 columns, into the key rows (A layout, quantised) and, transposed, the value columns; k_pe = RoPE of
+the last 64, into the key rows. The piece [key rows 9 KiB | value columns 8 KiB] goes into the root's L3
+behind a landed flag; the root multicasts a chunk's pieces at a time into every other chip's L3
+(stage_kv_bcast): one source, as x, because 16 chips multicasting at once lock the D2D routers' outputs in a
+cycle. A chunk's sweep runs over the key tiles up to the chunk's end (FreshTileSource: one wait on the landed
+flags, then a tile at a time from the chip's own L3), the causal masks added to the scores (fa_sweep's mask).
+
 THE SPLIT. Chip k computes head h(k) (16 compute chips, 16 heads, a memory chip's row of four chips
 holding four consecutive heads); cluster c of every chip takes half of each chunk's tokens, so a
 cluster owns `chunk` / 2 query rows of ONE head: `chunk` / 32 query tiles of 16 rows (BR, one SIMD
@@ -49,36 +60,60 @@ cross-chip dependency: a BINGO edge, or the chip barrier before and after each c
 full fence). The ladder base -> bcast -> bcast_reduce -> all adds one each.
 
 PARAMETERS (params.hjson): the platform (num_chiplets, num_clusters), tokens, chunk, keys, bc,
-w_chunk_bytes and w_buffers (the ring chunk and the L1 slabs), weight_ring, weight_crest (false),
+w_chunk_bytes and w_buffers (the ring chunk and the L1 slabs), weight_ring,
 bcast, reduce, sync, barrier_mode, barrier_fence, gemm_async, static_l1, l1_capacity, d2d_ddr, and
 n_calib (calibration tokens), kv_cache and weights (paths under the repository), root_slice (the
 root's pull slice), compact_id_maps, gid_lists, relay_per_gather (each dependency-tag relay of
 an xDMA task serves that one task; default true). The orders and buffers (each explained where it is read):
 x_puts_first, prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
-wo_split_rows. The checks: checks (y | stages), y_windows (3 | 4). For bisecting a failure: stop
-(full | q8 | sweep | post | x), x_root, x_put_cluster, x_ring.
+wo_split_rows, o_land; fresh (a fresh prompt: keys = tokens, a multiple of 256, kv_slabs split), kv_clusters
+(fresh: a chip's n-th tile makes its keys on cluster n mod 2 instead of cluster 0), kv_cols (fresh: W_KVA by columns
+over the chips, the rows traded, stage_kv_cols). cfg_reuse (default
+false): the sweep's tasks skip the accelerator CSRs their core's previous task left in place (bingo_cfg_reuse).
+gemm_shape_l1 (default false): every gemm_start reads the array shape's parameters from an L1 copy.
+rope_fused (default false): q_pe's RoPE in one SIMD task (simd_rope) instead of three. rope_perm (default false,
+with rope_fused and fresh): the rotary columns in half order, so RoPE's swap moves two halves instead of FP16 pairs.
+dq_fused (default false): q_nope's, q~'s and o's dequantisations folded into the quantises after them.
+gemm_reuse (default false): a projection gemm_start that repeats its cluster's previous dispatch writes only its
+addresses. mask_c (default false, fresh): the causal mask as the score matmul's INT32 C instead of a SIMD add.
+gemm_cfg_ahead (default false): every projection GEMM a configure task right before its start task, which only
+starts. fa_cfg_ahead (default false): the same for a FlashAttention matmul that does not REUSE the previous one.
+gemm_cfg_hoist (default false, with gemm_cfg_ahead): those configure tasks ahead of the waits before their start.
+x_resident (default false): every chip's clusters copy their x rows from the chip's own copy of x, with no multicast
+from the root (the layer before leaves x on every chip). x_hbm (default false; the stage workloads, fa_stages_mc.py): x
+in the HBM of the root's memory chip, every chip's L3 copy filled by a multicast inside the window. wbits (8 | 4,
+default 8): the weights INT8 or paired INT4.
+q_tiles (default false): a query tile's sweep follows its
+own Q8 quantises only. o_tiles (default false): W_UV a query tile at a time, each behind that tile's relayout and
+quantise.
+The checks: checks (y | stages), y_windows (3 | 4) (fresh adds the keys' pieces in the root's L3). For
+bisecting a failure: stop (full | q8 | sweep | post | x), x_root, x_put_cluster, x_ring.
 """
 
+import dataclasses
 import os
 import sys
 
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "multichip"))
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "common"))
 from driver import repo_root, run_driver  # noqa: E402
 REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
-sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
 
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
-    SnaxBingoKernelGemmFullArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
+    INT4_B_LAYOUT_PAIRED, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmShapeInitArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
     SnaxBingoKernelIdmaPairwiseSwapArgs, SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelIdmaRingLoadArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulF16Args,
-    SnaxBingoKernelXdmaChainGatherArgs, simd_beats, simd_fp16_lanes)
+    SnaxBingoKernelSimdMulI8Args,
+    SnaxBingoKernelSimdRmsnormArgs, SnaxBingoKernelSimdRopeArgs, SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
+    SnaxBingoKernelXdmaTranspose2dArgs, simd_beats, simd_fp16_lanes)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
+from bingo_cfg_reuse import program_key, prime_fa_softmax, reuse_gemm_fa_config, reuse_gemm_start_config  # noqa: E402
 from libs.blocks import FaSweepCfg, GemmQueue, WeightRings, fa_sweep, fa_sweep_alloc  # noqa: E402
 from libs.comm.nest import convert_args, d_to_a_args  # noqa: E402
 
@@ -91,22 +126,73 @@ D_QK, D_V, KV_RANK, ROPE, Q_NOPE, Q_HEAD, HIDDEN = 576, 512, 512, 64, 128, 192, 
 TILE16 = 16 * 16 * 2          # one D-layout FP16 block
 EW_F16_ADD = cm.EW_F16_ADD
 STRIPE = [0, 1, 3, 4]         # the compute columns of a row
+KB, VB = 16 * D_QK, D_V * 16  # a fresh prompt's 16-token piece: its key rows, its value columns (INT8)
+KVP = KB + VB
 
 
 def check(p):
     """The mapping's arithmetic; raises ValueError where the parameters cannot be laid out."""
-    tokens, chunk, keys, bc = (int(p[k]) for k in ("tokens", "chunk", "keys", "bc"))
+    tokens, chunk, bc = (int(p[k]) for k in ("tokens", "chunk", "bc"))
+    fresh = bool(p.get("fresh", False))
+    keys = tokens if fresh else int(p["keys"])
     rows = chunk // 2
     if tokens % chunk or chunk % 2 or rows % BR:
         raise ValueError(f"tokens {tokens} / chunk {chunk}: a cluster takes chunk / 2 rows, a whole number of "
                          f"{BR}-row query tiles")
     if keys % bc or bc % 16 or keys // bc < 4:
         raise ValueError(f"keys {keys}: not whole tiles of bc {bc} (a multiple of 16), at least four")
-    if int(p["w_chunk_bytes"]) < max(bc * D_QK, D_V * bc, HIDDEN * 64):
+    if fresh and (chunk % bc or int(p.get("keys", keys)) != keys):
+        raise ValueError(f"fresh: a chunk of {chunk} is whole key tiles of bc {bc} (a chunk's two row blocks sweep "
+                         f"every tile up to its end), and the keys are the {tokens} tokens")
+    wq_block = HIDDEN * 64 * int(p.get("wbits", 8)) // 8
+    if int(p["w_chunk_bytes"]) < max(bc * D_QK, D_V * bc, wq_block):
         raise ValueError(f"w_chunk_bytes {p['w_chunk_bytes']}: a K tile is {bc * D_QK} B, a W_q block "
-                         f"{HIDDEN * 64} B")
-    return dict(chunks=tokens // chunk, query_tiles=rows // BR, tiles=keys // bc,
+                         f"{wq_block} B")
+    return dict(chunks=tokens // chunk, query_tiles=rows // BR, tiles=keys // bc, keys=keys,
                 qk_passes=(bc // 16) * (D_QK // 4), pv_passes=(D_V // 16) * (bc // 4))
+
+
+class FreshTileSource:
+    """fa_sweep's tiles for a fresh prompt: key and value tile j of chunk i from the chip's own L3, where stage_kv's
+    multicasts leave the 16-token pieces [key rows | value columns] side by side, behind one wait a sweep on the
+    flags of the pieces it reads. A key tile is its pieces' key rows one after the other (a 2D copy); a value tile is
+    the A layout of [512, bc], each piece's 256-byte runs one 16-row block apart (a 3D copy). K tiles in slab 0 (split)
+    or slabs 0 and 3 alternately (split4), or slab 0 and a one-tile buffer alternately (split_kb), V tiles in slabs 1
+    and 2 alternately."""
+
+    def __init__(self, fb, g, i, nt):
+        self.fb, self.g, self.i, self.nt = fb, g, i, nt
+        self.wait = None
+
+    def fetch(self, kind, j):
+        fb = self.fb
+        k, c = fb.chip(self.g), fb.c(self.g)
+        if self.wait is None:
+            self.wait = fb.kv_wait(self.g, self.i)
+        n = fb.bc // 16
+        src = BingoMemSymbol(f"{fb.TAG}_kv", offset=j * n * KVP + (KB if kind == "V" else 0))
+        if kind == "K" and fb.kv_slabs == "split_kb" and j % 2:
+            # split_kb: the odd key tiles in a buffer of one key tile of their own, free once the last QK of the
+            # odd tile before has read it
+            si, slab = ("kb", self.g), fb.kbuf(self.g)
+            war = [fb._kb_reader[self.g]] if self.g in fb._kb_reader else []
+            args = SnaxBingoKernelIdma2dCopyArgs(src, slab, KB, KVP, KB, n)
+        elif kind == "K":
+            si, slab, war = fb.ls[self.g].take_at(3 if fb.kv_slabs == "split4" and j % 2 else 0, fb.bc * D_QK)
+            args = SnaxBingoKernelIdma2dCopyArgs(src, slab, KB, KVP, KB, n)
+        else:
+            si, slab, war = fb.ls[self.g].take_at(1 + j % 2, D_V * fb.bc)
+            args = SnaxBingoKernelIdma2dCopyArgs(src, slab, 256, 256, 16 * fb.bc, D_V // 16, outer=n, src_outer=KVP,
+                                                 dst_outer=256)
+        ld = fb.node(k, c, fb.roles["dm"], f"Ld_{kind}{j}_i{self.i}", "__snax_bingo_kernel_idma_2d_copy", args,
+                     war + [self.wait])
+        return ld, slab, si
+
+    def release(self, token, task):
+        if isinstance(token, tuple) and token[0] == "kb":
+            self.fb._kb_reader[token[1]] = task
+        else:
+            self.fb.ls[self.g].release(token, task)
 
 
 class TileSource:
@@ -122,8 +208,8 @@ class TileSource:
         # kv_slabs split: every K tile in slab 0, V tiles in slabs 1 and 2 in turn, so K_{j+1} loads under
         # PV(j-1) and V_{j+1} under QK(j+1) (in turn, K_{j+2} would wait for PV(j), right before QK(j+2))
         slab = None
-        if fb.kv_slabs == "split":
-            slab = 0 if kind == "K" else 1 + j % 2
+        if fb.kv_slabs in ("split", "split4"):
+            slab = (3 if fb.kv_slabs == "split4" and j % 2 else 0) if kind == "K" else 1 + j % 2
         ld, si, slab = fb.load(self.g, n, f"Ld_{kind}{j}_i{self.i}", slab=slab)
         return ld, slab, si
 
@@ -134,19 +220,147 @@ class TileSource:
 class FaBuild(cm.ChipletBuild):
     TAG = "fp"
 
-    def __init__(self, args, p, plat, hw):
-        super().__init__(args, p, plat, hw)
-        if self.crest:
-            raise ValueError("params weight_crest: the prefill streams plain INT8")
+    def kbuf(self, g):
+        """kv_slabs split_kb: cluster g's buffer for its odd key tiles (one key tile)."""
+        if g not in self._kbuf:
+            self._kbuf[g] = self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{self.TAG}_kbuf", self.bc * D_QK)
+        return self._kbuf[g]
+
+    def __init__(self, args, p, plat, hw, shared=None):
+        super().__init__(args, p, plat, hw, shared=shared)
+        # x_device (a block of a whole layer, dsv2_prefill_mc.py): the root's x source is made on the device,
+        # chunk i's tasks in x_ready[i]: staged as zeros, and each chunk's multicast waits for them
+        self.x_device = bool(p.get("x_device", False))
+        self.x_ready = {}
         m = check(p)
         self.NCH, self.NQ, self.NT = m["chunks"], m["query_tiles"], m["tiles"]
         self.C = int(p["chunk"])
         self.ROWS = self.C // self.NC                  # query rows a cluster
-        self.keys, self.bc = int(p["keys"]), int(p["bc"])
+        # row_swap: in every odd chunk the clusters take the other halves (causal: the late half sweeps more tiles)
+        self.row_swap = bool(p.get("row_swap", False))
+        # ot8_fused: the sweep's normalisation quantises o~ into W_UV's A operand (simd_mla_normalise_q8), so no
+        # transpose, no row-major -> A conversion and no separate quantisation sit between the sweep and W_UV
+        self.ot8_fused = bool(p.get("ot8_fused", False))
+        # post_tiles (o_tiles, dq_fused): o_h's relayout and quantisation a query tile at a time, each behind its own
+        # W_UV GEMM, so they run under the next tiles' GEMMs and W_O starts behind the last tile's
+        self.post_tiles = bool(p.get("post_tiles", False))
+        # sm_batch: a key tile's softmaxes of the cluster's query tiles as one SIMD task (simd_fa_softmax_n)
+        self.sm_batch = bool(p.get("sm_batch", False))
+        # sm_prologue: each sweep's softmax arenas get their geometry from PROLOGUE nodes at the sweep's head
+        self.sm_prologue = bool(p.get("sm_prologue", False))
+        # sm_geom_xdma: each softmax arena's geometry built on the cluster's xDMA core at the sweep's head (fa_build_shapes)
+        # instead of on the SIMD core; the arena's first softmax then runs GEOM_PRIMED (replaces sm_prologue)
+        self.sm_geom = "xdma" if bool(p.get("sm_geom_xdma", False)) else None
+        if self.post_tiles and not (bool(p.get("o_tiles", False)) and bool(p.get("dq_fused", False))):
+            raise ValueError("params post_tiles needs o_tiles and dq_fused")
+        if self.ot8_fused and not bool(p.get("o_tiles", False)):
+            raise ValueError("params ot8_fused needs o_tiles (W_UV a query tile at a time)")
+        self.keys, self.bc = m["keys"], int(p["bc"])
+        # fresh: a fresh prompt (the module's docstring); chip chips[q % 16] makes the keys of tokens 16 q .. 16 q + 15,
+        # the 16-row tiles its input norm gives it, T / 256 a chip 16 tiles apart (a layer hands each tile in:
+        # kv_src {tile: (x8 handle, [ready tasks])}; the block alone loads them from the staged x, fresh_tiles)
+        self.fresh = bool(p.get("fresh", False))
+        self.kv_src, self.kv_put = {}, {}
+        # params wo_cols: W_O by output columns instead of by heads: every head's o8 into the root's L3 (the chunk's x
+        # landing area holds them, dead by then), one multicast of them from the root, and each cluster's two GEMMs make
+        # its chip's 128 columns of y for its rows over the full depth, stored straight into the root's y: no reduce
+        self.wo_cols = bool(p.get("wo_cols", False))
+        # params o_land (wo_cols): each chunk's o8 lands in an area of its own in the root's L3 (fp_oland, two chunks'
+        # worth, by the chunk's parity) instead of the chunk's x landing area, so no put of it waits for the root's
+        # fetches of x: a chip's DM core then holds no edge from the root's every chunk at once
+        self.o_land = bool(p.get("o_land", False))
+        # params wo_prefetch (wo_cols): each cluster loads its chunk's two W_O blocks right after its o8 put, so its
+        # in-order DM core streams them during the o8's round trip through the root instead of after its gather
+        self.wo_prefetch = bool(p.get("wo_prefetch", False))
+        if self.wo_prefetch and not self.wo_cols:
+            raise ValueError("params wo_prefetch: needs wo_cols")
+        if self.o_land and not self.wo_cols:
+            raise ValueError("params o_land: needs wo_cols")
+        if self.fresh:
+            nch = len(self.chips)
+            if self.T % (16 * nch):
+                raise ValueError(f"fresh: {self.T} tokens; each of the {nch} chips makes whole 16-token tiles")
+            # tile q on chip chips[q % 16]: the first chunks' keys come from every chip's first tile
+            self.kv_tiles = {k: [q for q in range(self.T // 16) if self.chips[q % nch] == k] for k in self.chips}
+        # params kv_clusters (fresh): a chip's n-th tile makes its keys on cluster n mod NC (kv_cluster), so with more
+        # than one tile a chip both clusters make keys; the layer puts the tile's input norm there too
+        self.kv_clusters = bool(p.get("kv_clusters", False))
+        if self.kv_clusters and not self.fresh:
+            raise ValueError("params kv_clusters: needs fresh")
+        # params owner_bcast (fresh, a layer's x): each tile's owner multicasts its x8 rows and its keys' piece to every
+        # chip itself, each with a landed flag of its own, instead of putting them into the root's L3 for the root to
+        # multicast a chunk at a time: the root's DM core then runs no chip's collectives before its own chunk 0, and
+        # a cluster's x and key waits count the tiles' flags. It HANGS the D2D fabric: sixteen chips multicasting at once
+        # deadlock (prefill_tiny/layer12a3, 25 Oct: every chip's SoC crossbar stalled before the first tile landed)
+        self.owner_bcast = bool(p.get("owner_bcast", False))
+        if self.owner_bcast and not (self.fresh and self.x_device and self.bcast_impl == "bcast_l1"):
+            raise ValueError("params owner_bcast: needs fresh, a layer's x (x_device) and bcast bcast_l1")
+        # params wbits (8 | 4, default 8): the projection weights INT8 or INT4 in the paired layout (half the bytes
+        # pushed, half the L1 slab); the base class's default of 4 is the FFN's and the MoE's
+        self.wbits = int(p.get("wbits", 8))
+        if self.wbits not in (8, 4):
+            raise ValueError(f"params wbits={self.wbits}: 8 or 4")
+        # params kv_cols (fresh, the block alone): W_KVA by columns instead of by tokens. Chip j streams only its
+        # 16-column granules [36 j / 16, 36 (j + 1) / 16) of W_KVA's 36 (two or three: one ring chunk) and makes them
+        # for every token, its cluster c the tiles q = c mod 2, a GEMM a tile; each tile's slice goes into the L3 of
+        # the tile's owner behind a flag of its own, and the owner runs the keys' glue on the gathered rows as before
+        self.kv_cols = bool(p.get("kv_cols", False))
+        if self.kv_cols and not (self.fresh and not self.x_device and not self.owner_bcast):
+            raise ValueError("params kv_cols: needs fresh, the block's staged x (not x_device), not owner_bcast")
+        if self.kv_cols:
+            # INT4 streams whole pairs of granules (the paired layout's blocks of 32 columns)
+            pg = 2 if self.wbits == 4 else 1
+            ng, nch = D_QK // 16 // pg, len(self.chips)
+            self.kvg = {k: (pg * (j * ng // nch), pg * ((j + 1) * ng // nch)) for j, k in enumerate(self.chips)}
+            self.kv_owner = {q: k for k in self.chips for q in self.kv_tiles[k]}
+            self.KVD = 16 * D_QK * 2                     # a tile's kv, D layout [16, 576] FP16
+            self.KVR_TILES = max(len(t) for t in self.kv_tiles.values())
         if simd_fp16_lanes() != BR:
             raise ValueError(f"the SIMD has {simd_fp16_lanes()} FP16 lanes; the softmax takes one query "
                              f"a lane and the tiles are {BR} rows")
         self.gemm_async = bool(p.get("gemm_async", True))
+        # params gemm_shape_l1 (with gemm_async): each cluster's GEMM core first copies array shape 0's
+        # parameters into its L1 (gemm_shape_init), and every gemm_start reads them there instead of L3
+        self.gemm_shape_l1 = bool(p.get("gemm_shape_l1", False))
+        if self.gemm_shape_l1 and not self.gemm_async:
+            raise ValueError("params gemm_shape_l1: needs gemm_async (gemm_start reads the copy)")
+        self.gsh = {}
+        # params rope_fused: q_pe's RoPE as one simd_rope task over [x | cos | xswap | sin] instead of two multiplies
+        # and an add; the same roundings (RNE(RNE(x cos) + RNE(swap(x) sin))), so the same bits
+        self.rope_fused = bool(p.get("rope_fused", False))
+        # params rope_perm (with rope_fused, fresh): the rotary columns ordered as the pairs' first elements, then their
+        # second (fa_prefill_data.py), so the swap is the two 32-column halves exchanged: whole 1 KB runs of each row
+        # tile's D layout on the iDMA, instead of the pairwise swap's 2-byte rows
+        self.rope_perm = bool(p.get("rope_perm", False))
+        # params dq_fused: each dequantisation that a quantise follows (q_nope, q~, o) folded into that quantise: the
+        # D -> A reshape moves the raw FP16 values, then one SIMD task multiplies them by an A-layout copy of the
+        # per-column scales and quantises (SimdMulI8, the same roundings as the two tasks)
+        self.dq_fused = bool(p.get("dq_fused", False))
+        if self.rope_perm and not (self.rope_fused and self.fresh):
+            raise ValueError("params rope_perm: needs rope_fused and fresh")
+        # params kv_rope_fused (fresh, rope_perm): the keys' k_pe RoPE as one simd_rope, as q_pe's; kv_rope_first: the
+        # owner's SIMD core takes the keys' RoPE right after their dequantisation (stage_kv_on)
+        self.kv_rope_fused = bool(p.get("kv_rope_fused", False))
+        self.kv_rope_first = bool(p.get("kv_rope_first", False))
+        if self.kv_rope_fused and not self.rope_perm:
+            raise ValueError("params kv_rope_fused: needs rope_perm")
+        # params mask_c (fresh): each masked score tile's mask is its QK matmul's C, an INT32 bias added before the D
+        # port's conversion (fa_sweep's mask_c), instead of a SIMD add between the matmul and the softmax
+        self.mask_c = bool(p.get("mask_c", False))
+        if self.mask_c and not self.fresh:
+            raise ValueError("params mask_c: needs fresh")
+        # params gemm_cfg_ahead: each queued projection GEMM (gemm_start) as a configure task, which the GEMM core runs
+        # right after the previous dispatch's start, while its operands are still on their way, and a start task
+        # behind them that only starts (blocks/gemm_async.py cfg_ahead)
+        self.gemm_cfg_ahead = bool(p.get("gemm_cfg_ahead", False))
+        # params fa_cfg_ahead: the same split for each FA matmul that does not repeat its cluster's previous dispatch
+        # (the first QK and the first PV of a key tile); PV's column factors stay in its start task
+        self.fa_cfg_ahead = bool(p.get("fa_cfg_ahead", False))
+        # params gemm_cfg_hoist (with gemm_cfg_ahead): each projection GEMM's configure task ahead of the waits right
+        # before its start (blocks/gemm_async.py cfg_hoist), so a phase's first configure runs under the last GEMM
+        self.gemm_cfg_hoist = bool(p.get("gemm_cfg_hoist", False))
+        if self.gemm_cfg_hoist and not self.gemm_cfg_ahead:
+            raise ValueError("params gemm_cfg_hoist: needs gemm_cfg_ahead")
         self.stop = str(p.get("stop", "full"))
         if self.stop not in ("full", "q8", "sweep", "post", "x"):
             raise ValueError(f"params stop={self.stop!r}: full, q8, sweep, post or x")
@@ -158,7 +372,25 @@ class FaBuild(cm.ChipletBuild):
         if self.x_root not in ("flagged", "copy", "poll2d", "flagged_zero"):
             raise ValueError(f"params x_root={self.x_root!r}: flagged, copy, poll2d or flagged_zero")
         self.x_put_cluster = int(p.get("x_put_cluster", 0))
+        # x_resident: every chip holds the prompt's x in its L3 (the block's staged x, which fresh_tiles already reads
+        # there): each cluster copies its rows of a chunk from its own chip's copy, and the root multicasts no x. A
+        # mapping of the layer around the block: the block before leaves x on every chip (an all-gather) instead of
+        # in the root
+        self.x_resident = bool(p.get("x_resident", False))
+        if self.x_resident and (self.x_device or self.owner_bcast):
+            raise ValueError("params x_resident: x is staged on every chip (not x_device, not owner_bcast)")
+        # x_hbm (the staged builder, fa_stages_mc.py): the prompt's rows sit in the HBM of the root's memory chip, and
+        # every chip's copy of them in L3 (fp_xsrc) starts as zeros for a multicast inside the window to fill, a tile of
+        # 16 tokens at a time behind its own flag (fp_xtflag)
+        self.x_hbm = bool(p.get("x_hbm", False))
+        if self.x_hbm and (self.x_resident or self.x_device or self.owner_bcast or not (self.fresh and self.kv_cols)):
+            raise ValueError("params x_hbm: needs fresh and kv_cols, not x_resident, x_device or owner_bcast")
         self.x_ring = bool(p.get("x_ring", True))
+        # q_tiles: a query tile's first score matmul follows that tile's two Q8 quantises only, not every projection
+        # task of the cluster; o_tiles: o~'s relayout, its quantise and W_UV a query tile at a time, each tile's W_UV
+        # behind its own transpose's chain (one load of W_UV for both)
+        self.q_tiles = bool(p.get("q_tiles", False))
+        self.o_tiles = bool(p.get("o_tiles", False))
         # l3_overlay: the root's y lives in its x buffers (y of chunk i, cluster 0 in the landing buffer of
         # chunk i, cluster 1 in the source of chunk i): every chip's image is the same, and an 8 MiB L3 cannot
         # hold y beside both x buffers, the ring and the task tables. A chunk's y is stored after its reduce,
@@ -172,26 +404,95 @@ class FaBuild(cm.ChipletBuild):
         self.y_halves = bool(p.get("y_halves", False))
         if self.y_halves and (self.reduce_impl != "chain" or self.sync == "barrier"):
             raise ValueError("y_halves needs reduce: chain and sync: edge")
+        # y_store_halves (with y_halves): each half's gather lands in a buffer of its own, stored right after it,
+        # and the second half's gather waits for the first half's store, so the root holds half of y at a time
+        self.y_store_halves = bool(p.get("y_store_halves", False))
+        # chunk_pipeline (y_halves): chunk i's front -- x, projections, sweep, post -- is made right after chunk i-1's
+        # W_O block 0 and its reduce, before chunk i-1's block 1: the in-order GEMM core runs it while the root's xDMA
+        # reduces block 0 (block 1 waits for that reduce anyway: one half-size symmetric buffer)
+        self.chunk_pipeline = bool(p.get("chunk_pipeline", False))
+        if self.chunk_pipeline and not (self.y_halves and not self.y_store_halves and self.stop == "full"):
+            raise ValueError("chunk_pipeline needs y_halves, no y_store_halves, stop full")
+        if self.y_store_halves and not (self.y_halves or bool(p.get("y_block_chains", False))):
+            raise ValueError("y_store_halves needs y_halves or y_block_chains")
         # chain_concurrent (default true): cluster 0's and cluster 1's ChainGathers run at the same time
         # through every chip. False: every ChainGather after the previous one of either cluster, so a
         # chain's finish never meets the other cluster's chain data in a chip's D2D framer (the MoE's
         # deadlock with a memory chip's push through a hop chip).
         self.chain_concurrent = bool(p.get("chain_concurrent", True))
-        # kv_slabs (rr | split): the sweep's K and V tiles through the W slabs in turn, or (split, three
-        # slabs) K tiles in slab 0 and V tiles in slabs 1 and 2 alternately
+        # kv_slabs (rr | split | split4): the sweep's K and V tiles through the W slabs in turn, or (split, three
+        # slabs) K tiles in slab 0 and V tiles in slabs 1 and 2 alternately, or (split4, four slabs) K tiles in slabs 0
+        # and 3 alternately as well, so K_{j+1} waits for QK(j-1), not QK(j), and loads under QK(j)
         self.kv_slabs = str(p.get("kv_slabs", "rr"))
-        if self.kv_slabs not in ("rr", "split") or (self.kv_slabs == "split" and int(p.get("w_buffers", 3)) != 3):
-            raise ValueError(f"params kv_slabs={self.kv_slabs!r}: rr, or split with w_buffers 3")
+        nwb = int(p.get("w_buffers", 3))
+        if (self.kv_slabs not in ("rr", "split", "split4", "split_kb") or (self.kv_slabs in ("split", "split_kb") and nwb != 3)
+                or (self.kv_slabs == "split4" and nwb != 4)):
+            raise ValueError(f"params kv_slabs={self.kv_slabs!r}: rr, split or split_kb with w_buffers 3, or split4 with "
+                             f"w_buffers 4")
+        # split_kb (fresh): the odd key tiles in a one-tile buffer of each cluster, not a fourth ring slab
+        self._kbuf, self._kb_reader = {}, {}
         # wo_split_rows: W_O as GEMMs of two 16-row tiles each instead of one of all the cluster's rows
         self.wo_split_rows = bool(p.get("wo_split_rows", False))
+        # wo_row_pipe (post_tiles, wo_split_rows): each W_O GEMM of two 16-row tiles waits for those two tiles' o8 only,
+        # not for the last tile's, so W_O starts while the last tiles are still relaid and quantised
+        self.wo_row_pipe = bool(p.get("wo_row_pipe", False))
+        if self.wo_row_pipe and not (self.post_tiles and self.wo_split_rows):
+            raise ValueError("params wo_row_pipe: needs post_tiles and wo_split_rows")
+        self._o8_tiles = {}
         # prefetch_after_x: the memory chips' pushes start after the root's x multicasts (x_puts_first)
         self.prefetch_after_x = bool(p.get("prefetch_after_x", False))
         # y_block_chains: a ChainGather per W_O block (the whole partial y in the symmetric buffer)
         self.y_block_chains = bool(p.get("y_block_chains", False))
         if self.y_block_chains and (self.y_halves or self.reduce_impl != "chain" or self.sync == "barrier"):
             raise ValueError("y_block_chains: reduce chain, sync edge, no y_halves")
+        # reduce_early (y_block_chains): chunk i-1's chains for root cluster c are made right after that cluster's q side
+        # of chunk i, so on the root's in-order xDMA core they run during chunk i's sweep instead of behind its o side,
+        # and chunk i's W_O (which waits for them: one symmetric buffer) no longer waits for chunk i's front. With
+        # y_store_halves each W_O block's sum lands in a half-size buffer, stored right after its chain
+        self.reduce_early = bool(p.get("reduce_early", False))
+        if self.reduce_early and not (self.y_block_chains and self.stop == "full"):
+            raise ValueError("reduce_early: needs y_block_chains and stop full")
+        # y_roots (y_block_chains, y_store_halves): the chips that collect and store y, one a W_O block in turn (chunk i's
+        # block h: y_roots[(2 i + h) % len]), so the root is not every chain's collector and store; each chain folds the
+        # cycle from its own collector (default: the root collects every block)
+        self.y_roots = [int(str(k), 16) for k in p.get("y_roots", [])]
+        if self.y_roots and not (self.y_block_chains and self.y_store_halves):
+            raise ValueError("y_roots: needs y_block_chains and y_store_halves (a collector a W_O block)")
+        # sym_per_block (y_block_chains): W_O block r of chunk i waits only for chunk i-1's chains of block r, which read
+        # the half of the symmetric buffer block r writes, instead of for both blocks' chains
+        self.sym_per_block = bool(p.get("sym_per_block", False))
+        # y_chain_l3 (y_block_chains, y_store_halves): each chain's last hop writes its block of y straight into the
+        # collector's L3, where the store would have put it: no landing buffer in L1, no store
+        self.y_chain_l3 = bool(p.get("y_chain_l3", False))
+        if (self.sym_per_block or self.y_chain_l3) and not (self.y_block_chains and self.y_store_halves):
+            raise ValueError("sym_per_block, y_chain_l3: need y_block_chains and y_store_halves")
+        self._sym_blk = {}
         self._wo_blk = {}
         self._last_chain = None
+        self._chains = []                           # every reduce chain, in creation order
+        # last_pair_chains (with serial chains): the last chunk's two clusters' chains of a W_O block run at the same
+        # time, once every chip's prefetcher has pushed its last chunk (no memory-chip push then transits a hop chip,
+        # the third party of the concurrent-chain deadlock); the blocks stay in series
+        self.last_pair_chains = bool(p.get("last_pair_chains", False))
+        # chain_gate_prefetch: every reduce chain waits for every chip's prefetcher (all its pushes done), so with
+        # chain_concurrent no memory-chip push can transit a hop chip while two chains run
+        self.chain_gate_prefetch = bool(p.get("chain_gate_prefetch", False))
+        # store_late (y_store_halves, y_block_chains): a chunk's y stores (but the last chunk's) are made after the next
+        # chunk's W_O tasks, so the root's in-order DM core loads the next chunk's weights before it stores
+        self.store_late = bool(p.get("store_late", False))
+        # y_dst_shared (y_block_chains, y_store_halves): a chunk's two W_O blocks' chains (but the last chunk's) land in
+        # one half-size buffer on each root cluster, block 1's chain behind block 0's store, so a root cluster's sweep keeps
+        # its L1 while the previous chunk's chains run. With chains_after_sweep the root clusters' chains of a chunk are
+        # made together, block 0 of every cluster first, and each block-0 store goes behind the root cluster's load of the
+        # values of key tile dst_store_tile in its DM core's program, not behind the whole sweep's loads
+        self.y_dst_shared = bool(p.get("y_dst_shared", False))
+        self.dst_store_tile = int(p.get("dst_store_tile", 2))
+        if self.y_dst_shared and not (self.y_block_chains and self.y_store_halves):
+            raise ValueError("y_dst_shared: needs y_block_chains and y_store_halves")
+        if self.y_dst_shared and (self.y_chain_l3 or self.store_late):
+            raise ValueError("y_dst_shared: not with y_chain_l3 or store_late (its block-0 store frees the buffer)")
+        self._late_stores = []
+        self._pair_prev = None
         self.checks_kind = str(p.get("checks", "y"))
         # head h(k): a memory chip's row holds four consecutive heads, nearest the memory chip last
         by_row = sorted(self.chips, key=lambda k: (k & 15, k >> 4))
@@ -201,8 +502,10 @@ class FaBuild(cm.ChipletBuild):
         kv = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
                                                   "dsv2_l1_kv_8193.npz"))
         wc = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = fa_prefill_data.FaPrefillData(kv, wc, args.dsv2_dir, tokens=self.T, keys=self.keys,
-                                                   bc=self.bc, n_calib=int(p.get("n_calib", 32)))
+        d = self.d = fa_prefill_data.FaPrefillData(kv, wc, tokens=self.T, keys=self.keys,
+                                                   bc=self.bc, n_calib=int(p.get("n_calib", 32)), fresh=self.fresh,
+                                                   chunk=self.C, rope_perm=self.rope_perm, mask_c=self.mask_c,
+                                                   wbits=self.wbits, skip_masked=bool(p.get("skip_masked", False)))
         self.lay = d.layout
         # the fold order of the 16 partials: the chips' order from the base class, as heads
         self.fold_heads = [self.head[k] for k in self.fold_order()]
@@ -222,20 +525,41 @@ class FaBuild(cm.ChipletBuild):
     # ---- the ring's plan: per token chunk ------------------------------------------------------
     PER_CHUNK_HEAD, PER_CHUNK_TAIL = 4, 3          # W_q x 3 and W_UK; W_UV and W_O x 2
 
+    def kv_in_ring(self):
+        """Ring chunks of K and V a token chunk takes: the cache's tiles (a fresh prompt's come from L3)."""
+        return 0 if self.fresh else 2 * self.NT
+
+    def kva_in_ring(self):
+        """Ring chunks ahead of the token chunks: W_KVA's blocks (fresh; kv_cols: the chip's slice)."""
+        return (1 if self.kv_cols else D_QK // 64) if self.fresh else 0
+
     def per_chunk(self):
         """Ring chunks a token chunk takes: a run that stops early takes only what it uses."""
         if self.stop == "x":
             return self.PER_CHUNK_HEAD if self.x_ring else 0
         if self.stop == "q8":
             return self.PER_CHUNK_HEAD
-        kv = 2 * self.NT
-        return self.PER_CHUNK_HEAD + kv + (0 if self.stop == "sweep" else self.PER_CHUNK_TAIL)
+        return self.PER_CHUNK_HEAD + self.kv_in_ring() + (0 if self.stop == "sweep" else self.PER_CHUNK_TAIL)
 
     def chunk_index(self, i, part):
         """The ring index of token chunk i's first chunk of `part`: head (W_q, W_UK), kv, tail."""
-        base = i * self.per_chunk()
+        base = self.kva_in_ring() + i * self.per_chunk()
         return base + {"head": 0, "kv": self.PER_CHUNK_HEAD,
-                       "tail": self.PER_CHUNK_HEAD + 2 * self.NT}[part]
+                       "tail": self.PER_CHUNK_HEAD + self.kv_in_ring()}[part]
+
+    def kv_cluster(self, k, q):
+        """The cluster of chip k that makes tile q's keys (params kv_clusters), cluster 0 otherwise."""
+        return self.kv_tiles[k].index(q) % self.NC if self.kv_clusters else 0
+
+    def kv_cls(self, k):
+        """The clusters of chip k that make keys, in order."""
+        return sorted({self.kv_cluster(k, q) for q in self.kv_tiles[k]})
+
+    def flag_dep(self, t, k, c):
+        """Whether task t enters a flag wait on chip k cluster c as a dependency, else as an ordering edge (the flag
+        proves the landing): a task of that chip, and with params kv_clusters of that cluster too (the chip's tiles run
+        on both its clusters, and the other cluster's puts would crowd the waiting core's dependency tags)."""
+        return t.assigned_chiplet_id == k and (not self.kv_clusters or t.assigned_cluster_id == c)
 
     # ---- data -----------------------------------------------------------------------------------
     def _stage(self):
@@ -243,9 +567,17 @@ class FaBuild(cm.ChipletBuild):
         mesh = d.mesh
         # the prompt's rows, A layout per chunk: the root's source and every chip's landing
         self.xsrc = np.concatenate([d.x_chunk_a(i * self.C, self.C) for i in range(self.NCH)]).astype(np.int8)
-        self.h_xsrc = st.put(f"{T}_xsrc", "int8_t", self.xsrc)
+        self.h_xsrc = (st.put_zeros(f"{T}_xsrc", "int8_t", self.xsrc.size, preload=True) if self.x_device or self.x_hbm
+                       else st.put(f"{T}_xsrc", "int8_t", self.xsrc))
+        if self.x_hbm:
+            m = self.mem[self.ROOT]
+            self.h_xhbm = st.put_hbm(f"{T}_xhbm", self.xsrc, mem_chip=(m >> 4, m & 15))
+            st.put_zeros(f"{T}_xtflag", "uint8_t", (self.T // 16) * 64)
         st.put_zeros(f"{T}_xland", "int8_t", self.NCH * self.XB, preload=True)
         st.put_zeros(f"{T}_xflag", "uint8_t", self.NCH * 64)
+        if self.owner_bcast:                                # a tile's x8 rows / its keys' piece landed (every chip)
+            st.put_zeros(f"{T}_xtflag", "uint8_t", (self.T // 16) * 64)
+            st.put_zeros(f"{T}_kvtflag", "uint8_t", (self.T // 16) * 64)
         if self.x_root == "flagged_zero":
             st.put_zeros(f"{T}_zero64", "uint8_t", 64, preload=True)
         if self.l3_overlay:
@@ -257,23 +589,51 @@ class FaBuild(cm.ChipletBuild):
         rope = []
         for i in range(self.NCH):
             for c in range(self.NC):
-                cs, sn = d.rope_tables(i * self.C + c * self.ROWS, self.ROWS)
+                cs, sn = d.rope_tables(self.r0(i, c), self.ROWS)
                 rope += [cs, sn]
         self.h_rope = st.put(f"{T}_rope", "uint16_t", np.concatenate(rope).astype(np.float16).view(np.uint16))
         self.ROPE_B = self.ROWS * ROPE * 2
-        # the cache, once in each memory chip's HBM, tile by tile K0 V0 K1 V1 ...
-        tiles = d.cache_tiles()
-        cache = np.concatenate([np.concatenate([k, v]) for k, v in tiles]).astype(np.int8)
-        self.kv_bytes = [(k.size, v.size) for k, v in tiles]
-        self.h_kv, self.h_w, self.h_c = {}, {}, {}
-        for m in sorted(set(self.mem.values())):
-            self.h_kv[m] = st.put_hbm(f"{T}_kv_m{m:02x}", cache, mem_chip=(m >> 4, m & 15))
+        self.h_kv, self.h_w, self.h_c, self.h_wkv, self.h_kc = {}, {}, {}, {}, {}
+        if self.fresh:
+            # W_KVA, once in each memory chip's HBM; the 16-token pieces and their landed flags in every chip's L3
+            wkv = np.concatenate(d.kva_chunks()).astype(np.int8)
+            for m in sorted(set(self.mem.values())):
+                self.h_wkv[m] = st.put_hbm(f"{T}_wkv_m{m:02x}", wkv, mem_chip=(m >> 4, m & 15))
+            st.put_zeros(f"{T}_kv", "int8_t", (self.T // 16) * KVP, preload=True)
+            st.put_zeros(f"{T}_kvflag", "uint8_t", self.NCH * 64)          # a chunk's pieces landed (multicast)
+            st.put_zeros(f"{T}_kvnflag", "uint8_t", (self.T // 16) * 64)   # a piece landed on the root
+            if self.kv_cols:
+                # each chip's W_KVA slice in its memory chip's HBM; per owned tile the gathered kv and a flag a chip
+                self.h_wkvc = {k: st.put_hbm(f"{T}_wkvc_k{k:02x}", d.kva_cols(16 * self.kvg[k][0], 16 * self.kvg[k][1]),
+                                             mem_chip=(self.mem[k] >> 4, self.mem[k] & 15)) for k in self.chips}
+                st.put_zeros(f"{T}_kvraw", "uint8_t", self.KVR_TILES * self.KVD)
+                st.put_zeros(f"{T}_kvrflag", "uint8_t", self.KVR_TILES * len(self.chips) * 64)
+            # per chip: W_KVA's dequantisation (D layout [16, 576]), then each of its tiles' RoPE tables (cos,
+            # sin_signed), KC_TILE bytes a tile
+            kva = d.scale_tile(d.kva_scale()).view(np.uint8)
+            for k in self.chips:
+                tabs = []
+                for q in self.kv_tiles[k]:
+                    cs, sn = d.rope_tables(16 * q, 16)
+                    tabs += [np.asarray(t, dtype=np.float16).view(np.uint8) for t in (cs, sn)]
+                img = np.concatenate([kva] + tabs)
+                self.h_kc[k] = st.put_hbm(f"{T}_kc_k{k:02x}", img.astype(np.uint8),
+                                          mem_chip=(self.mem[k] >> 4, self.mem[k] & 15))
+            self.KC_ROPE, self.KC_TILE = kva.size, 2 * 16 * ROPE * 2
+            self.KC_BYTES = kva.size + len(self.kv_tiles[self.ROOT]) * self.KC_TILE
+        else:
+            # the cache, once in each memory chip's HBM, tile by tile K0 V0 K1 V1 ...
+            tiles = d.cache_tiles()
+            cache = np.concatenate([np.concatenate([k, v]) for k, v in tiles]).astype(np.int8)
+            self.kv_bytes = [(k.size, v.size) for k, v in tiles]
+            for m in sorted(set(self.mem.values())):
+                self.h_kv[m] = st.put_hbm(f"{T}_kv_m{m:02x}", cache, mem_chip=(m >> 4, m & 15))
         # per head: the weights as the ring streams them, and the dequantisation constants
         self.w_off = {}
         for k in self.chips:
             h = self.head[k]
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
-            chunks = d.weight_chunks(h)
+            chunks = d.weight_chunks(h, wo_block=h if self.wo_cols else None)
             self.w_off[k], off = [], 0
             for nm, b in chunks:
                 self.w_off[k].append((nm, off, b.size))
@@ -283,13 +643,34 @@ class FaBuild(cm.ChipletBuild):
             # of them element by element
             sq = np.concatenate([np.tile(d.scale_tile(d.q_scale(h)[64 * r:64 * (r + 1)]), self.ROWS // 16)
                                  for r in range(3)])
-            const = np.concatenate([sq.view(np.uint8), d.scale_tile(d.qt_scale(h)).view(np.uint8),
-                                    d.scale_tile(d.uv_scale(h)).view(np.uint8)])
+            sqt, suv = d.scale_tile(d.qt_scale(h)), d.scale_tile(d.uv_scale(h))
+            if self.dq_fused:
+                # q_nope's 128 scales and o's in the A layout of the cluster's rows, q~'s of one query tile, where the
+                # fused tasks multiply the reshaped values; q_pe's stay D (RoPE reads them dequantised)
+                qs = d.q_scale(h)
+                sq = np.concatenate([d.scale_tile_a(qs[:Q_NOPE], self.ROWS).view(np.uint8),
+                                     np.tile(d.scale_tile(qs[Q_NOPE:]), self.ROWS // 16).view(np.uint8)])
+                sqt, suv = d.scale_tile_a(d.qt_scale(h), 16), d.scale_tile_a(d.uv_scale(h), self.ROWS)
+            masks = d.mask_bias_patterns() if self.mask_c else [m.astype(np.float16) for m in d.mask_patterns]
+            const = np.concatenate([sq.view(np.uint8), sqt.view(np.uint8), suv.view(np.uint8)]
+                                   + ([np.concatenate([m.reshape(-1) for m in masks]).view(np.uint8)]
+                                      if self.fresh else []))
             self.h_c[k] = st.put_hbm(f"{T}_c_k{k:02x}", const.astype(np.uint8), mem_chip=loc)
+        if self.o_land:
+            st.put_zeros(f"{T}_oland", "int8_t", 2 * self.NC * len(self.chips) * self.ROWS * Q_NOPE, preload=True)
+        if self.wo_cols:
+            st.put_zeros(f"{T}_oflag", "uint8_t", self.NCH * self.NC * len(self.chips) * 64)   # a head's o8 landed (root)
+            st.put_zeros(f"{T}_omflag", "uint8_t", self.NCH * 64)                             # the root's multicast landed
+            st.put_zeros(f"{T}_yflag", "uint8_t", self.NCH * self.G * 64)                    # a cluster's y landed
+            st.put_zeros(f"{T}_ydum", "uint8_t", self.G * 64)                                # the flag puts' 64 bytes
         self.SQ_B = (self.ROWS // 16) * 2048           # one W_q block's scales: 16 rows x 64 FP16 a row tile
         self.C_SQ, self.C_QT = 0, 3 * self.SQ_B
         self.C_UV = self.C_QT + 16384
-        self.C_BYTES = self.C_UV + 4096
+        # fresh: the causal masks after the scales, FP16 [bc, 16] each (fa_prefill_data.py tile_plan), or under mask_c
+        # the score matmul's INT32 [bc, 16] biases
+        self.C_MASK = self.C_UV + (self.ROWS * Q_NOPE * 2 if self.dq_fused else 4096)
+        self.MASK_B = self.bc * BR * (4 if self.mask_c else 2)
+        self.C_BYTES = self.C_MASK + (len(d.mask_patterns) * self.MASK_B if self.fresh else 0)
 
     def _make_rings(self):
         """One ring a chip, shared by its two clusters: the per-chip schedule is the same for both."""
@@ -310,7 +691,7 @@ class FaBuild(cm.ChipletBuild):
         self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", self.n_slots * 64)
         self.h_rec = st.put_zeros(f"{T}_rec_l3", "uint8_t", 128)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", self.n_slots * self.slot_bytes, preload=True)
-        self.rings, self.prefetch, self.ring_take = {}, {}, {}
+        self.rings, self.prefetch, self.ring_take, self.ring_pos = {}, {}, {}, {}
         from bingo_kernel_args import HostBingoKernelWeightPrefetchArgs
         for k in self.chips:
             self.rings[k] = WeightRings(
@@ -318,6 +699,7 @@ class FaBuild(cm.ChipletBuild):
                 slot_bytes=self.slot_bytes, batch=self.ring_batch, head=self.ring_head,
                 batch_head=self.ring_batch_head)
             self.ring_take[k] = []
+            self.ring_pos[k] = {}
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
@@ -326,18 +708,27 @@ class FaBuild(cm.ChipletBuild):
                     batch=self.ring_batch, policy=int(wr.get("policy", 1)), engine=self.engine[k],
                     queued=self.ring_queued, head=self.ring_head, batch_head=self.ring_batch_head))
         self.ld_node = {}
+        # (chip, ring chunk) whose slot cluster 1's read releases, after cluster 0's; every other chunk's slot is
+        # released by cluster 0's read
+        self.ring_rel1 = set()
 
     def _src(self, k, n):
         """(HBM address, bytes) of chip k's ring chunk n."""
-        r = n % self.per_chunk()
+        if n < self.kva_in_ring() and self.kv_cols:  # the chip's W_KVA slice (fresh, kv_cols)
+            g0, g1 = self.kvg[k]
+            return self.h_wkvc[k].address, HIDDEN * 16 * (g1 - g0) * self.wbits // 8
+        if n < self.kva_in_ring():                  # W_KVA's blocks (fresh)
+            nb = HIDDEN * 64 * self.wbits // 8
+            return self.h_wkv[self.mem[k]].address + n * nb, nb
+        r = (n - self.kva_in_ring()) % self.per_chunk()
         if r < 4:                                   # W_q x 3, W_UK
             nm, off, size = self.w_off[k][r]
             return self.h_w[k].address + off, size
-        if r < 4 + 2 * self.NT:                     # K, V
+        if r < 4 + self.kv_in_ring():               # K, V
             j, v = divmod(r - 4, 2)
             off = sum(a + b for a, b in self.kv_bytes[:j]) + (self.kv_bytes[j][0] if v else 0)
             return self.h_kv[self.mem[k]].address + off, self.kv_bytes[j][v]
-        nm, off, size = self.w_off[k][4 + r - 4 - 2 * self.NT]      # W_UV, W_O x 2
+        nm, off, size = self.w_off[k][4 + r - 4 - self.kv_in_ring()]      # W_UV, W_O x 2
         return self.h_w[k].address + off, size
 
     # ---- buffers --------------------------------------------------------------------------------
@@ -352,13 +743,44 @@ class FaBuild(cm.ChipletBuild):
                                     a_exp=d.a_exp, a_n_f32bits=d.a_n_bits, gemm_async=self.gemm_async)
         self.consts = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{self.TAG}_consts", self.C_BYTES)
                        for g in range(self.G)}
+        # fresh: W_KVA's dequantisation and the chip's tiles' RoPE tables, on each cluster that makes keys (stage_kv)
+        self.kvc = ({(k, c): self.cx_chip(k).at(c).l1(f"{self.TAG}_kvc", self.KC_BYTES)
+                     for k in self.chips for c in self.kv_cls(k)} if self.fresh else {})
         self._bufs, self._dst, self._slot, self._root_wait = {}, {}, {}, {}
 
-    def dst(self, i, c):
-        """The root's cluster c landing buffer of chunk i's reduce: the reduced rows, then stored."""
-        if (i, c) not in self._dst:
-            self._dst[i, c] = self.cx_chip(self.ROOT).at(c).l1(f"{self.TAG}_dst_i{i}", self.YB)
-        return self._dst[i, c]
+    def y_root(self, i, half=None):
+        """The chip that collects and stores chunk i's y (half `half`: its W_O block): params y_roots, else the root."""
+        if not self.y_roots:
+            return self.ROOT
+        r = self.y_roots[(2 * i + (half or 0)) % len(self.y_roots)]
+        if r not in self.order:
+            raise ValueError(f"y_roots: chip {r:02x} is not a compute chip")
+        return r
+
+    def y_order(self, r):
+        """The fold cycle from collector r: r, then the cycle on from it (self.order is one cycle, so every hop of a
+        chain stays between neighbours)."""
+        j = self.order.index(r)
+        return self.order[j:] + self.order[:j]
+
+    def y_fold_heads(self, r):
+        """The heads in the order collector r's chain adds their partials: the chain's chips, r's own partial last."""
+        o = self.y_order(r)
+        return [self.head[k] for k in o[1:] + o[:1]]
+
+    def dst_shared(self, i):
+        """y_dst_shared: chunk i's two blocks land in one buffer (every chunk but the last)."""
+        return self.y_dst_shared and i < self.NCH - 1
+
+    def dst(self, i, c, half=None):
+        """The collector's cluster c landing buffer of chunk i's reduce: the reduced rows, then stored (y_store_halves:
+        each half's own buffer; y_dst_shared: one buffer the two halves take in turn)."""
+        h = "s" if half is not None and self.dst_shared(i) else half
+        key = (i, c) if not self.y_store_halves or half is None else (i, c, h)
+        if key not in self._dst:
+            name, nb = (f"{self.TAG}_dst_i{i}", self.YB) if len(key) == 2 else (f"{self.TAG}_dst_i{i}h{h}", self.YB // 2)
+            self._dst[key] = self.cx_chip(self.y_root(i, half)).at(c).l1(name, nb)
+        return self._dst[key]
 
     def slot(self, i, c):
         """The root arm's two landing slices of the pulled partials."""
@@ -376,6 +798,11 @@ class FaBuild(cm.ChipletBuild):
             return BingoMemSymbol(name, offset=base + off)
         return BingoMemSymbol(name, offset=base + off, chip_id=chip_id)
 
+    def y_sym_local(self, i, c, off=0):
+        """y_sym as a C expression of the local address (the same on every chip), for a chain's hop."""
+        s = self.y_sym(i, c, off)
+        return f"((uintptr_t){s.symbol_name} + {s.offset})"
+
     def bufs(self, g, i):
         """The buffers of chunk i on cluster g. A chunk has its own, so the static L1 planner overlays
         the ones whose lifetimes cannot meet (the projection's with the previous sweep's, say)."""
@@ -386,16 +813,28 @@ class FaBuild(cm.ChipletBuild):
         l1 = lambda name, nb: self.cx_chip(k).at(c).l1(f"{self.TAG}_{name}_i{i}", nb)
         b = {}
         b["xrows"] = l1("xrows", rows * HIDDEN)
-        b["ropeb"] = l1("ropeb", 2 * self.ROPE_B)
+        if self.wo_cols:
+            # every head's o8 of the cluster's rows, A layout [rows, 2048], and the cluster's 128 columns of y; named to
+            # sort right after the x rows, whose bytes the first takes (the static packer places by name, first fit)
+            b["xrowso"] = l1("xrowso", rows * HIDDEN)
+            b["xrowsy"] = l1("xrowsy", rows * 128 * 2)
         # q: three D regions of 64 columns (the last is q_pe), rows x 64 FP16 each
-        b["q"] = [l1(f"q{r}", rows * 64 * 2) for r in range(3)]
+        if self.rope_fused:
+            # simd_rope's operand block [x | cos | xswap | sin], ROPE_B each: q_pe's GEMM and dequantisation write
+            # slot 0, the tables slots 1 and 3, the pair swap slot 2
+            b["rope4"] = l1("rope4", 4 * self.ROPE_B)
+            b["q"] = [l1(f"q{r}", rows * 64 * 2) for r in range(2)] + [b["rope4"]]
+        else:
+            b["ropeb"] = l1("ropeb", 2 * self.ROPE_B)
+            b["q"] = [l1(f"q{r}", rows * 64 * 2) for r in range(3)]
         b["a16n"] = l1("a16n", rows * Q_NOPE * 2)             # q_nope, A layout FP16
         b["qn8"] = l1("qn8", rows * Q_NOPE)
         b["qt"] = l1("qt", rows * KV_RANK * 2)                # q~, D layout FP16
         b["a16q"] = l1("a16q", rows * KV_RANK * 2)
-        b["xs"] = l1("xs", rows * ROPE * 2)
-        b["t1"] = l1("t1", rows * ROPE * 2)
-        b["t2"] = l1("t2", rows * ROPE * 2)
+        if not self.rope_fused:
+            b["xs"] = l1("xs", rows * ROPE * 2)
+            b["t1"] = l1("t1", rows * ROPE * 2)
+            b["t2"] = l1("t2", rows * ROPE * 2)
         b["pe"] = l1("pe", rows * ROPE * 2)
         b["a16p"] = l1("a16p", rows * ROPE * 2)
         b["q8"] = [l1(f"q8_{q}", D_QK * BR) for q in range(nq)]
@@ -411,28 +850,37 @@ class FaBuild(cm.ChipletBuild):
         return b
 
     # ---- the ring's loads -----------------------------------------------------------------------
-    def load(self, g, n, name, deps=(), slab=None):
+    def load(self, g, n, name, deps=(), slab=None, dst=None):
         """Ring chunk n of chip(g) into cluster g's next slab: cluster 1 reads it, cluster 0 reads it and
-        releases the slot, after cluster 1's read. Returns (load task, slab index, slab)."""
+        releases the slot, after cluster 1's read. Returns (load task, slab index, slab). dst: into that L1
+        buffer instead, outside the cluster's load stream (slab index None, no WAR edge)."""
         k, c, dm = self.chip(g), self.c(g), self.roles["dm"]
-        takes = self.ring_take[k]
-        if n == len(takes):
+        takes, pos = self.ring_take[k], self.ring_pos[k]
+        if n not in pos:
+            # a chunk's place in the ring is the order the program first asks for it; that is chunk n's
+            # own place, except under chunk_pipeline: chunk i's front asks before chunk i-1's last W_O block
+            if n != len(takes) and not self.chunk_pipeline:
+                raise ValueError(f"ring chunk {n} of chip {k:#04x} asked for before {len(takes)}")
             src, nb = self._src(k, n)
+            pos[n] = len(takes)
             takes.append(self.rings[k].take_ex(0, src=src, nbytes=nb) + (nb, self.rings[k].last_take))
-        elif n > len(takes):
-            raise ValueError(f"ring chunk {n} of chip {k:#04x} asked for before {len(takes)}")
-        sl, fl, rl, seq, _, _, nb, ex = takes[n]
+        sl, fl, rl, seq, _, _, nb, ex = takes[pos[n]]
         ls = self.ls[g]
-        si, slab, war = ls.take(nb) if slab is None else ls.take_at(slab, nb)
+        if dst is not None:
+            si, slab, war = None, dst, []
+        else:
+            si, slab, war = ls.take(nb) if slab is None else ls.take_at(slab, nb)
         prev = [self.last_ld[g]] if g in self.last_ld else []
-        # the slot is released by cluster 0's read, which follows every other cluster's read of it
-        readers = [self.ld_node[(k, c2, n)] for c2 in range(1, self.NC) if (k, c2, n) in self.ld_node] \
-            if c == 0 else []
+        # the slot is released by one cluster's read (cluster 0's, or cluster 1's for a chunk in ring_rel1), which
+        # follows every other cluster's read of it
+        rel = 1 if (k, n) in self.ring_rel1 else 0
+        readers = [self.ld_node[(k, c2, n)] for c2 in range(self.NC) if c2 != rel and (k, c2, n) in self.ld_node] \
+            if c == rel else []
         ld = self.node(k, c, dm, f"{name}", "__snax_bingo_kernel_idma_ring_load",
-                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl if c == 0 else 0),
+                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl if c == rel else 0),
                        list(dict.fromkeys(war + prev + list(deps) + readers)))
-        if c != 0 and (k, 0, n) in self.ld_node:
-            self.dfg.bingo_add_edge(ld, self.ld_node[(k, 0, n)])
+        if c != rel and (k, rel, n) in self.ld_node:
+            self.dfg.bingo_add_edge(ld, self.ld_node[(k, rel, n)])
         self.last_ld[g] = ld
         ld.exec_chunk = ex
         self.ld_node[(k, c, n)] = ld
@@ -444,10 +892,21 @@ class FaBuild(cm.ChipletBuild):
         k, c = self.chip(g), self.c(g)
         args = SnaxBingoKernelGemmFullArgs(
             input_A_addr=a, input_B_addr=b, input_C_addr=0, output_D_addr=d, M=M, K=K, N=N, array_shape_idx=0,
-            transpose_A=0, transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=0, d_shift=k_shift)
+            transpose_A=0, transpose_B=0, accumPrevC=0, int32tofp16_enable=1,
+            int4_b_enable=INT4_B_LAYOUT_PAIRED if self.wbits == 4 else 0, d_shift=k_shift)
         if not self.gemm_async:
             return self.node(k, c, self.roles["gemm"], name, "__snax_bingo_kernel_gemm_full", args, list(deps))
-        return GemmQueue.of(self.dfg, True).dispatch(self.at(k, c), name, args, list(deps), phase)
+        shape_addr = 0
+        if self.gemm_shape_l1:
+            if (k, c) not in self.gsh:
+                buf = self.cx_chip(k).at(c).l1(f"{self.TAG}_gsh", SnaxBingoKernelGemmShapeInitArgs.BYTES)
+                self.node(k, c, self.roles["gemm"], "gsh_init", "__snax_bingo_kernel_gemm_shape_init",
+                          SnaxBingoKernelGemmShapeInitArgs(buf, 0), [])
+                self.gsh[(k, c)] = buf
+            shape_addr = self.gsh[(k, c)]
+        q = GemmQueue.of(self.dfg, True)
+        q.cfg_ahead, q.cfg_ahead_fa, q.cfg_hoist = self.gemm_cfg_ahead, self.fa_cfg_ahead, self.gemm_cfg_hoist
+        return q.dispatch(self.at(k, c), name, args, list(deps), phase, shape_addr=shape_addr)
 
     def simd_mul(self, g, name, a, b, out, nelems, deps):
         k, c = self.chip(g), self.c(g)
@@ -458,6 +917,12 @@ class FaBuild(cm.ChipletBuild):
         k, c = self.chip(g), self.c(g)
         return self.node(k, c, self.roles["simd"], name, "__snax_bingo_kernel_simd_stream_elementwise",
                          SnaxBingoKernelSimdAddF16Args(a, b, out, nelems // 32, 32), list(deps))
+
+    def mul_quant(self, g, name, a, scale, dst, nelems, inv_bits, deps):
+        """dst = quantise(a (.) scale): a dequantisation and the quantise after it in one SIMD task (dq_fused)."""
+        k, c = self.chip(g), self.c(g)
+        return self.node(k, c, self.roles["simd"], name, "__snax_bingo_kernel_simd_stream_elementwise",
+                         SnaxBingoKernelSimdMulI8Args(a, scale, dst, nelems // 32, 32, inv_bits), list(deps))
 
     def quant(self, g, name, src, dst, nbytes, inv_bits, deps):
         k, c = self.chip(g), self.c(g)
@@ -482,13 +947,30 @@ class FaBuild(cm.ChipletBuild):
                              BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB),
                              BingoMemSymbol(f"{T}_xland", offset=i * self.XB), self.XB,
                              BingoMemSymbol(f"{T}_xflag", offset=i * 64), value=1, bcast=True, also_here=True),
-                         list(after))
+                         list(after) + list(self.x_ready.get(i, [])))
 
     def stage_x(self, g, i, put, deps):
         """Cluster g's rows of chunk i into its L1: behind the landed flag, or pulled from the root."""
         T, k, c = self.TAG, self.chip(g), self.c(g)
         half = self.XB // self.NC
         xb = self.bufs(g, i)["xrows"]
+        if self.x_resident:
+            return self.node(k, c, self.roles["dm"], f"x_copy_i{i}", "__snax_bingo_kernel_idma_1d_copy",
+                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB + self.xh(i, c) * half),
+                                                           xb, half), list(deps))
+        if self.owner_bcast:
+            # the cluster's rows are tiles q0 .. q0 + n - 1 of chunk i, each multicast by its owner with its own flag
+            n, q0 = self.ROWS // 16, self.r0(i, c) // 16
+            puts = [t for t in self.x_ready.get(i, [])]
+            nd = self.node(k, c, self.roles["dm"], f"x_wait_i{i}", "__snax_bingo_kernel_idma_fetch_flagged",
+                           SnaxBingoKernelIdmaFetchFlaggedArgs(
+                               BingoMemSymbol(f"{T}_xland", offset=i * self.XB + self.xh(i, c) * half), xb, half,
+                               BingoMemSymbol(f"{T}_xtflag", offset=q0 * 64), n, 1),
+                           list(deps) + [t for t in puts if self.flag_dep(t, k, c)])
+            for t in puts:
+                if not self.flag_dep(t, k, c):
+                    self.dfg.bingo_add_order_edge(t, nd)
+            return nd
         if self.bcast_impl == "bcast_l1" and k == self.ROOT and self.x_root == "poll2d":
             # the flagged fetch's two DMAs as two tasks: the 4-byte 2D read of the flag into the rows'
             # buffer, then the 1D copy of the rows from the landing buffer
@@ -496,11 +978,11 @@ class FaBuild(cm.ChipletBuild):
                              SnaxBingoKernelIdma2dCopyArgs(BingoMemSymbol(f"{T}_xflag", offset=i * 64), xb, 4, 64, 4, 1),
                              list(deps) + [put])
             return self.node(k, c, self.roles["dm"], f"x_copy_i{i}", "__snax_bingo_kernel_idma_1d_copy",
-                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xland", offset=i * self.XB + c * half),
+                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xland", offset=i * self.XB + self.xh(i, c) * half),
                                                            xb, half), [poll])
         if self.bcast_impl == "bcast_l1" and k == self.ROOT and self.x_root == "copy":
             return self.node(k, c, self.roles["dm"], f"x_copy_i{i}", "__snax_bingo_kernel_idma_1d_copy",
-                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB + c * half),
+                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB + self.xh(i, c) * half),
                                                            xb, half), list(deps) + [put])
         if self.bcast_impl == "bcast_l1":
             # the root's clusters poll the same L3 flag word: cluster c starts its fetch after cluster c-1's
@@ -512,7 +994,7 @@ class FaBuild(cm.ChipletBuild):
                                        list(deps) + first))
             nd = self.node(k, c, self.roles["dm"], f"x_wait_i{i}", "__snax_bingo_kernel_idma_fetch_flagged",
                            SnaxBingoKernelIdmaFetchFlaggedArgs(
-                               BingoMemSymbol(f"{T}_xland", offset=i * self.XB + c * half), xb, half,
+                               BingoMemSymbol(f"{T}_xland", offset=i * self.XB + self.xh(i, c) * half), xb, half,
                                BingoMemSymbol(f"{T}_xflag", offset=i * 64), 1, 1),
                            list(deps) + first + ([put] if k == self.ROOT else []))
             if k == self.ROOT:
@@ -522,7 +1004,7 @@ class FaBuild(cm.ChipletBuild):
             return nd
         return self.node(k, c, self.roles["dm"], f"x_pull_i{i}", "__snax_bingo_kernel_idma_1d_copy",
                          SnaxBingoKernelIdma1dCopyArgs(
-                             BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB + c * half, chip_id=self.ROOT), xb, half),
+                             BingoMemSymbol(f"{T}_xsrc", offset=i * self.XB + self.xh(i, c) * half, chip_id=self.ROOT), xb, half),
                          list(deps))
 
     def stage_proj(self, g, i, x):
@@ -545,45 +1027,76 @@ class FaBuild(cm.ChipletBuild):
             self.ls[g].release(si, gm)
             gq.append(gm)
         # ---- dequantise the three regions --------------------------------------------------------
-        dq = [self.simd_mul(g, f"dq{r}_i{i}", b["q"][r], sq[r], b["q"][r], rows * 64, [gq[r]]) for r in range(3)]
+        dq = [None if self.dq_fused and r < 2 else
+              self.simd_mul(g, f"dq{r}_i{i}", b["q"][r], sq[r], b["q"][r], rows * 64, [gq[r]]) for r in range(3)]
         # ---- q_nope: D -> A (FP16) per row block and half, then quantise -------------------------
         d2a = []
         for r in range(2):
             for m in range(mt):
                 d2a.append(self.xd(g, f"d2an{r}{m}_i{i}", d_to_a_args(
                     mesh, 1, 4, 16, b["q"][r].view(m * 4 * TILE16), b["a16n"].view(m * 16 * Q_NOPE * 2 + r * 16 * 64 * 2)),
-                    [dq[r]]))
-        qn = self.quant(g, f"qn_i{i}", b["a16n"], b["qn8"], rows * Q_NOPE * 2, self.fbits(d.s_qn.inv),
-                        d2a)
+                    [gq[r]] if self.dq_fused else [dq[r]]))
+        if self.dq_fused:
+            qn = self.mul_quant(g, f"qn_i{i}", b["a16n"], sq[0], b["qn8"], rows * Q_NOPE, self.fbits(d.s_qn.inv), d2a)
+        else:
+            qn = self.quant(g, f"qn_i{i}", b["a16n"], b["qn8"], rows * Q_NOPE * 2, self.fbits(d.s_qn.inv),
+                            d2a)
         # ---- absorb: q~ = q_nope W_UK ----------------------------------------------------------------
         ldu, siu, slabu = self.load(g, self.chunk_index(i, "head") + 3, f"Ld_wuk_i{i}")
         ga = self.gmm(g, f"gab_i{i}", b["qn8"], slabu, b["qt"], mt, Q_NOPE // 4, KV_RANK // 16, d.k_uk,
                       [ldu, qn], "proj")
         self.ls[g].release(siu, ga)
         sqt = self.consts[g].view(self.C_QT)
-        dqt = [self.simd_mul(g, f"dqt{m}_i{i}", b["qt"].view(m * (KV_RANK // 16) * TILE16), sqt,
-                             b["qt"].view(m * (KV_RANK // 16) * TILE16), 16 * KV_RANK, [ga]) for m in range(mt)]
+        dqt = [ga] if self.dq_fused else \
+            [self.simd_mul(g, f"dqt{m}_i{i}", b["qt"].view(m * (KV_RANK // 16) * TILE16), sqt,
+                           b["qt"].view(m * (KV_RANK // 16) * TILE16), 16 * KV_RANK, [ga]) for m in range(mt)]
         d2q = self.xd(g, f"d2aq_i{i}", d_to_a_args(mesh, mt, KV_RANK // 16, KV_RANK // 4, b["qt"], b["a16q"]),
                       dqt)
         # ---- q_pe: RoPE in the D layout, then D -> A and quantise ------------------------------------
-        ldr = self.dm_copy(g, f"rope_ld_i{i}", BingoMemSymbol(f"{self.TAG}_rope", offset=2 * (i * self.NC + c) * self.ROPE_B),
-                           b["ropeb"], 2 * self.ROPE_B, [])
-        sw = self.node(k, c, self.roles["dm"], f"swap_i{i}", "__snax_bingo_kernel_idma_pairwise_swap",
-                       SnaxBingoKernelIdmaPairwiseSwapArgs(b["q"][2], b["xs"], rows * ROPE, 2), [dq[2]])
-        n_pe = rows * ROPE
-        m1 = self.simd_mul(g, f"rope_cos_i{i}", b["q"][2], b["ropeb"], b["t1"], n_pe, [dq[2], ldr])
-        m2 = self.simd_mul(g, f"rope_sin_i{i}", b["xs"], b["ropeb"].view(self.ROPE_B), b["t2"], n_pe, [sw, ldr])
-        ad = self.simd_add(g, f"rope_add_i{i}", b["t1"], b["t2"], b["pe"], n_pe, [m1, m2])
+        rope_src = BingoMemSymbol(f"{self.TAG}_rope", offset=2 * (i * self.NC + c) * self.ROPE_B)
+        if self.rope_fused:
+            # cos into slot 1, sin_signed into slot 3: the two tables are adjacent in L3, a slot apart in the block
+            R4 = b["rope4"]
+            ldr = self.node(k, c, self.roles["dm"], f"rope_ld_i{i}", "__snax_bingo_kernel_idma_2d_copy",
+                            SnaxBingoKernelIdma2dCopyArgs(rope_src, R4.view(self.ROPE_B), self.ROPE_B, self.ROPE_B,
+                                                          2 * self.ROPE_B, 2), [])
+            if self.rope_perm:
+                # each row tile's D layout is its four 16-column blocks: the swap is the first two and the last two
+                # exchanged, one 2-D copy for each direction
+                half, mtb = (ROPE // 32) * TILE16, (ROPE // 16) * TILE16
+                sw = [self.node(k, c, self.roles["dm"], f"swap{h}_i{i}", "__snax_bingo_kernel_idma_2d_copy",
+                                SnaxBingoKernelIdma2dCopyArgs(R4.view((1 - h) * half), R4.view(2 * self.ROPE_B + h * half),
+                                                              half, mtb, mtb, mt), [dq[2]]) for h in range(2)]
+            else:
+                sw = [self.node(k, c, self.roles["dm"], f"swap_i{i}", "__snax_bingo_kernel_idma_pairwise_swap",
+                                SnaxBingoKernelIdmaPairwiseSwapArgs(R4, R4.view(2 * self.ROPE_B), rows * ROPE, 2),
+                                [dq[2]])]
+            ad = self.node(k, c, self.roles["simd"], f"rope_i{i}", "__snax_bingo_kernel_simd_rope",
+                           SnaxBingoKernelSimdRopeArgs(R4, b["pe"], ROPE, rows), [dq[2], ldr] + sw)
+        else:
+            ldr = self.dm_copy(g, f"rope_ld_i{i}", rope_src, b["ropeb"], 2 * self.ROPE_B, [])
+            sw = self.node(k, c, self.roles["dm"], f"swap_i{i}", "__snax_bingo_kernel_idma_pairwise_swap",
+                           SnaxBingoKernelIdmaPairwiseSwapArgs(b["q"][2], b["xs"], rows * ROPE, 2), [dq[2]])
+            n_pe = rows * ROPE
+            m1 = self.simd_mul(g, f"rope_cos_i{i}", b["q"][2], b["ropeb"], b["t1"], n_pe, [dq[2], ldr])
+            m2 = self.simd_mul(g, f"rope_sin_i{i}", b["xs"], b["ropeb"].view(self.ROPE_B), b["t2"], n_pe, [sw, ldr])
+            ad = self.simd_add(g, f"rope_add_i{i}", b["t1"], b["t2"], b["pe"], n_pe, [m1, m2])
         d2p = self.xd(g, f"d2ap_i{i}", d_to_a_args(mesh, mt, 4, 16, b["pe"], b["a16p"]),
                       [ad])
         # ---- Q8 per query tile ---------------------------------------------------------------------
         q8 = {}
         for q in range(self.NQ):
-            qa = self.quant(g, f"q8a{q}_i{i}", b["a16q"].view(q * 16 * KV_RANK * 2), b["q8"][q], 16 * KV_RANK * 2,
-                            self.fbits(d.s_qt.inv), [d2q])
+            if self.dq_fused:
+                qa = self.mul_quant(g, f"q8a{q}_i{i}", b["a16q"].view(q * 16 * KV_RANK * 2), sqt, b["q8"][q],
+                                    16 * KV_RANK, self.fbits(d.s_qt.inv), [d2q])
+            else:
+                qa = self.quant(g, f"q8a{q}_i{i}", b["a16q"].view(q * 16 * KV_RANK * 2), b["q8"][q], 16 * KV_RANK * 2,
+                                self.fbits(d.s_qt.inv), [d2q])
             qp = self.quant(g, f"q8p{q}_i{i}", b["a16p"].view(q * 16 * ROPE * 2), b["q8"][q].view(16 * KV_RANK),
                             16 * ROPE * 2, self.fbits(d.s_qpe.inv), [d2p])
             q8[q] = (b["q8"][q], [qa, qp])
+        if self.q_tiles:
+            return q8
         # the sweep starts behind every projection task, so its buffers and the projection's can share L1
         done = [t for q in q8.values() for t in q[1]]
         return {q: (h, done) for q, (h, _) in q8.items()}
@@ -591,6 +1104,265 @@ class FaBuild(cm.ChipletBuild):
     @staticmethod
     def fbits(inv):
         return int(np.asarray(inv, dtype=np.float32).reshape(()).view(np.uint32))
+
+    # ---- a fresh prompt's keys ------------------------------------------------------------------
+    def fresh_tiles(self, go):
+        """The block alone with a fresh prompt (no layer making x on the device): each chip's 16-token tiles of x8, A
+        layout, from its own copy of the staged x source into the L1 of the cluster that makes their keys
+        (kv_cluster): kv_src, as a layer's input norm leaves it."""
+        T, dm, rows = self.TAG, self.roles["dm"], 16
+        for k in self.chips:
+            for q in self.kv_tiles[k]:
+                c = self.kv_cluster(k, q)
+                buf = self.cx_chip(k).at(c).l1(f"{T}_kx{q}", rows * HIDDEN)
+                ld = self.node(k, c, dm, f"kx_ld_q{q}", "__snax_bingo_kernel_idma_1d_copy",
+                               SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc", offset=q * rows * HIDDEN),
+                                                             buf, rows * HIDDEN), [go[k]])
+                self.kv_src[q] = (buf, [ld])
+
+    def stage_kv(self, k):
+        """Chip k's 16-token pieces of a fresh prompt's keys (kv_cluster: cluster 0, or with params kv_clusters each
+        tile's own), from the x8 tiles the layer's input norm left there (kv_src {tile: (x8 handle, [ready
+        tasks])}): stage_kv_on for each cluster that makes keys."""
+        if not self.kv_cols and any(q not in self.kv_src for q in self.kv_tiles[k]):
+            raise ValueError("fresh: every chip's input-norm tiles come from the layer (params layer.tiles chips)")
+        for c in self.kv_cls(k):
+            self.stage_kv_on(k, c)
+
+    def stage_kv_on(self, k, c):
+        """Chip k cluster c's tiles of keys. Each W_KVA block from the ring serves every tile of the cluster, a GEMM
+        a tile into the tile's own kv; the rest runs a tile at a time through one set of buffers, each tile's first
+        writers of them behind the previous tile's put (kv_put {tile: the put that leaves its piece in the root's
+        L3})."""
+        d, T = self.d, self.TAG
+        mesh = d.mesh
+        g, chip_tiles = self.chips.index(k) * self.NC + c, self.kv_tiles[k]
+        tiles = [q for q in chip_tiles if self.kv_cluster(k, q) == c]
+        simd, xdma, dm = self.roles["simd"], self.roles["xdma"], self.roles["dm"]
+        l1 = lambda name, nb: self.cx_chip(k).at(c).l1(f"{T}_kv_{name}", nb)
+        # the chip's first tile keeps the names of one tile a chip; the chip's tile t >= 1 adds _t{t}
+        sfx = lambda t: "" if t == 0 else f"_t{t}"
+        ts = [chip_tiles.index(q) for q in tiles]                               # each tile's index on the chip
+        kvds = [l1("d" + sfx(t), 16 * D_QK * 2) for t in ts]                    # kv, D layout [16, 576], FP16
+        crow, cu = l1("crow", 16 * KV_RANK * 2), l1("cu", 16 * KV_RANK * 2)
+        scr = l1("scr", SnaxBingoKernelSimdRmsnormArgs(0, 0, 16, KV_RANK).scratch_bytes())
+        ca, vt, va = l1("ca", 16 * KV_RANK * 2), l1("vt", 16 * KV_RANK * 2), l1("va", 16 * KV_RANK * 2)
+        xs, t1, t2, pe, pa = (l1(nm, 16 * ROPE * 2) for nm in ("xs", "t1", "t2", "pe", "pa"))
+        piece, kvc = l1("piece", KVP), self.kvc[(k, c)]
+        kr4 = l1("rope4", 4 * 16 * ROPE * 2) if self.kv_rope_fused else None
+        # kv = x8 W_KVA: a GEMM a block of 64 columns and a tile, each block from the ring once a cluster; one
+        # dequantisation (kv_cols: the tile's rows gathered from every chip's slice in this chip's L3)
+        gs = {n: [] for n in range(len(tiles))}
+        for n, q in enumerate(tiles):
+            if not self.kv_cols:
+                break
+            lt = chip_tiles.index(q)
+            fl = BingoMemSymbol(f"{T}_kvrflag", offset=lt * len(self.chips) * 64)
+            puts = [self.kvc_put[(q, k2)] for k2 in self.chips]
+            w = self.node(k, c, dm, f"kvr_wait{sfx(ts[n])}", "__snax_bingo_kernel_wait_flags",
+                          SnaxBingoKernelWaitFlagsArgs(fl, len(self.chips), 1),
+                          [t for t in puts if self.flag_dep(t, k, c)])
+            for t in puts:
+                if not self.flag_dep(t, k, c):
+                    self.dfg.bingo_add_order_edge(t, w)
+            gs[n].append(self.dm_copy(g, f"kvr_ld{sfx(ts[n])}", BingoMemSymbol(f"{T}_kvraw", offset=lt * self.KVD),
+                                      kvds[n], self.KVD, [w]))
+        for r in range(0 if self.kv_cols else self.kva_in_ring()):
+            ld, si, slab = self.load(g, r, f"Ld_wkv{r}")
+            if c and r and (k, 0, r - 1) in self.ld_node:
+                # both clusters read the W_KVA blocks: cluster c's next read follows cluster 0's last, so the reads
+                # alternate and their edges each way share one dependency tag instead of taking one a block
+                self.edge(self.ld_node[(k, 0, r - 1)], ld)
+            for n, q in enumerate(tiles):
+                x8, ready = self.kv_src[q]
+                gm = self.gmm(g, f"gkv{r}{sfx(ts[n])}", x8, slab, kvds[n].view(r * 4 * TILE16), 1, HIDDEN // 4, 4,
+                              d.k_x, [ld] + list(ready), "proj")
+                gs[n].append(gm)
+            self.ls[g].release(si, gm)
+        R = self.ROOT
+        on_root = lambda name, off: BingoMemSymbol(name, offset=off, chip_id=None if k == R else R)
+        put = None
+        for n, q in enumerate(tiles):
+            t = ts[n]
+            s, kvd = sfx(t), kvds[n]
+            after = [put] if put is not None else []        # the previous tile's put: its last reader of the buffers
+            dq = self.simd_mul(g, f"kv_dq{s}", kvd, kvc, kvd, 16 * D_QK, gs[n])
+            # c~: D -> row major, RMSNorm; the key rows' first 512 columns (A layout, quantised) and, transposed, the
+            # value columns (the A layout of c8^T [512, 16])
+            cv = self.xd(g, f"kv_crm{s}", convert_args("D", "row_major", 16, KV_RANK, mesh, 2, kvd, crow), [dq] + after)
+
+            def c_head():
+                return self.node(k, c, simd, f"kv_rms{s}", "__snax_bingo_kernel_simd_rmsnorm",
+                                 SnaxBingoKernelSimdRmsnormArgs(crow, cu, 16, KV_RANK, scratch_addr=scr), [cv])
+
+            def c_tail(rn):
+                ka = self.xd(g, f"kv_ca{s}", convert_args("row_major", "A", 16, KV_RANK, mesh, 2, cu, ca), [rn])
+                kq = self.quant(g, f"kv_c8{s}", ca, piece, 16 * KV_RANK * 2, self.fbits(d.s_c.inv), [ka])
+                tr = self.node(k, c, xdma, f"kv_vt{s}", "__snax_bingo_kernel_xdma_transpose_2d",
+                               SnaxBingoKernelXdmaTranspose2dArgs(cu, vt, 16, KV_RANK, 2), [rn])
+                vv = self.xd(g, f"kv_va{s}", convert_args("row_major", "A", KV_RANK, 16, mesh, 2, vt, va), [tr])
+                vq = self.quant(g, f"kv_v8{s}", va, piece.view(KB), 16 * KV_RANK * 2, self.fbits(d.s_c.inv), [vv])
+                return kq, vq
+
+            # k_pe: RoPE in the D layout (columns 512 .. 575, D blocks 32 .. 35), D -> A, quantised: the key rows' last
+            # 64; the tile's own RoPE tables
+            src, n_pe, rc = kvd.view((KV_RANK // 16) * TILE16), 16 * ROPE, self.KC_ROPE + t * self.KC_TILE
+
+            def rope():
+                if self.kv_rope_fused:
+                    # kv_rope_fused: one simd_rope over [x | cos | xswap | sin], 2 KB each, as q_pe's (the same
+                    # roundings); the DM core copies x into slot 0, the two swapped halves into slot 2 and the tile's
+                    # cos and sin (adjacent in kvc) into slots 1 and 3
+                    rb, half = n_pe * 2, (ROPE // 32) * TILE16
+                    cx = self.node(k, c, dm, f"kv_xcp{s}", "__snax_bingo_kernel_idma_1d_copy",
+                                   SnaxBingoKernelIdma1dCopyArgs(src, kr4, rb), [dq] + after)
+                    sw = [self.node(k, c, dm, f"kv_swap{h}{s}", "__snax_bingo_kernel_idma_1d_copy",
+                                    SnaxBingoKernelIdma1dCopyArgs(src.view((1 - h) * half), kr4.view(2 * rb + h * half),
+                                                                  half), [dq] + after) for h in range(2)]
+                    tb = self.node(k, c, dm, f"kv_tab{s}", "__snax_bingo_kernel_idma_2d_copy",
+                                   SnaxBingoKernelIdma2dCopyArgs(kvc.view(rc), kr4.view(rb), rb, rb, 2 * rb, 2), after)
+                    return self.node(k, c, simd, f"kv_rope{s}", "__snax_bingo_kernel_simd_rope",
+                                     SnaxBingoKernelSimdRopeArgs(kr4, pe, ROPE, 16), [dq, cx, tb] + sw)
+                if self.rope_perm:
+                    # one row tile: the swap is the rotary part's two 1 KB halves exchanged
+                    half = (ROPE // 32) * TILE16
+                    sw = [self.node(k, c, dm, f"kv_swap{h}{s}", "__snax_bingo_kernel_idma_1d_copy",
+                                    SnaxBingoKernelIdma1dCopyArgs(src.view((1 - h) * half), xs.view(h * half), half),
+                                    [dq] + after) for h in range(2)]
+                else:
+                    sw = [self.node(k, c, dm, f"kv_swap{s}", "__snax_bingo_kernel_idma_pairwise_swap",
+                                    SnaxBingoKernelIdmaPairwiseSwapArgs(src, xs, n_pe, 2), [dq] + after)]
+                m1 = self.simd_mul(g, f"kv_cos{s}", src, kvc.view(rc), t1, n_pe, [dq] + after)
+                m2 = self.simd_mul(g, f"kv_sin{s}", xs, kvc.view(rc + n_pe * 2), t2, n_pe, sw)
+                return self.simd_add(g, f"kv_rope{s}", t1, t2, pe, n_pe, [m1, m2])
+
+            pa_ = lambda ad: self.xd(g, f"kv_pa{s}", d_to_a_args(mesh, 1, 4, 16, pe, pa), [ad])
+            p8_ = lambda d2p: self.quant(g, f"kv_p8{s}", pa, piece.view(16 * KV_RANK), n_pe * 2,
+                                         self.fbits(d.s_kpe.inv), [d2p])
+            if self.kv_rope_first:
+                # kv_rope_first: the in-order SIMD core takes RoPE right after the dequantisation (while the xDMA
+                # reorders c) and k_pe's quantisation right after the RMSNorm (while the xDMA lays out c)
+                d2p = pa_(rope())
+                rn = c_head()
+                pq = p8_(d2p)
+                kq, vq = c_tail(rn)
+            else:
+                rn = c_head()
+                kq, vq = c_tail(rn)
+                pq = p8_(pa_(rope()))
+            put = self.node(k, c, dm, f"kv_put{s}", "__snax_bingo_kernel_idma_put_flagged",
+                            (SnaxBingoKernelIdmaPutFlaggedArgs(piece, BingoMemSymbol(f"{T}_kv", offset=q * KVP), KVP,
+                                                               BingoMemSymbol(f"{T}_kvtflag", offset=q * 64), value=1,
+                                                               bcast=True, also_here=True) if self.owner_bcast else
+                             SnaxBingoKernelIdmaPutFlaggedArgs(piece, on_root(f"{T}_kv", q * KVP), KVP,
+                                                               on_root(f"{T}_kvnflag", q * 64), value=1)), [kq, vq, pq])
+            self.kv_put[q] = put
+
+    def stage_kv_cols(self, go):
+        """params kv_cols: every cluster's W_KVA slice for its tiles of the prompt (cluster c: tiles q = c mod NC), a
+        GEMM a tile from x8 rows copied from the chip's staged x, and each tile's slice put into its owner's L3 (kvraw,
+        the D layout's granules g0 .. g1 - 1 of the tile's [16, 576]) behind the chip's flag there (kvc_put)."""
+        d, T, dm = self.d, self.TAG, self.roles["dm"]
+        self.kvc_put = {}
+        for j, k in enumerate(self.chips):
+            g0, g1 = self.kvg[k]
+            nb = (g1 - g0) * TILE16
+            for c in range(self.NC):
+                g = j * self.NC + c
+                tiles = [q for q in range(self.T // 16) if q % self.NC == c]
+                l1 = lambda name, size: self.cx_chip(k).at(c).l1(f"{T}_kc_{name}", size)
+                xb, ob = [l1(f"x{b}", 16 * HIDDEN) for b in range(2)], [l1(f"o{b}", nb) for b in range(2)]
+                kx = lambda n: self.node(k, c, dm, f"kx_ld_q{tiles[n]}", "__snax_bingo_kernel_idma_1d_copy",
+                                         SnaxBingoKernelIdma1dCopyArgs(
+                                             BingoMemSymbol(f"{T}_xsrc", offset=tiles[n] * 16 * HIDDEN), xb[n % 2],
+                                             16 * HIDDEN), [go[k]] + ([gm[n - 2]] if n >= 2 else []))
+                gm, put, ld_x = {}, {}, {0: kx(0)}
+                ld, si, slab = self.load(g, 0, "Ld_wkvc")
+                if len(tiles) > 1:
+                    ld_x[1] = kx(1)
+                for n, q in enumerate(tiles):
+                    o = self.kv_owner[q]
+                    lt = self.kv_tiles[o].index(q)
+                    on = lambda name, off: BingoMemSymbol(name, offset=off, chip_id=None if o == k else o)
+                    gm[n] = self.gmm(g, f"gkvc_q{q}", xb[n % 2], slab, ob[n % 2], 1, HIDDEN // 4, g1 - g0, d.k_x,
+                                     [ld, ld_x[n]] + ([put[n - 2]] if n >= 2 else []), "proj")
+                    put[n] = self.node(k, c, dm, f"kvc_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
+                                       SnaxBingoKernelIdmaPutFlaggedArgs(
+                                           ob[n % 2], on(f"{T}_kvraw", lt * self.KVD + g0 * TILE16), nb,
+                                           on(f"{T}_kvrflag", (lt * len(self.chips) + j) * 64), value=1), [gm[n]])
+                    self.kvc_put[(q, k)] = put[n]
+                    if n + 2 < len(tiles):
+                        ld_x[n + 2] = kx(n + 2)
+                self.ls[g].release(si, gm[len(tiles) - 1])
+
+    def stage_kv_bcast(self):
+        """The root multicasts a fresh prompt's keys a chunk's pieces at a time, from its L3 into every other chip's,
+        once their pieces have landed (on the DM core that multicasts x, after x). Their puts are ordering edges, as
+        every flagged collective's."""
+        R, T, P = self.ROOT, self.TAG, self.C // 16
+        c, dm = self.x_put_cluster, self.roles["dm"]
+        self.kv_mc = []
+        for h in range(self.NCH):
+            puts = [self.kv_put[q] for q in range(h * P, (h + 1) * P)]
+            w = self.node(R, c, dm, f"kv_nwait_h{h}", "__snax_bingo_kernel_wait_flags",
+                          SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_kvnflag", offset=h * P * 64), P, 1),
+                          [t for t in puts if self.flag_dep(t, R, c)] + self.kv_mc[-1:])
+            for t in puts:
+                if not self.flag_dep(t, R, c):
+                    self.dfg.bingo_add_order_edge(t, w)
+            src = BingoMemSymbol(f"{T}_kv", offset=h * P * KVP)
+            self.kv_mc.append(self.node(R, c, dm, f"kv_bput_h{h}", "__snax_bingo_kernel_idma_put_flagged",
+                                        SnaxBingoKernelIdmaPutFlaggedArgs(src, src, P * KVP,
+                                                                          BingoMemSymbol(f"{T}_kvflag", offset=h * 64),
+                                                                          value=1, bcast=True), [w]))
+
+    def kv_wait(self, g, i):
+        """Cluster g's wait, before chunk i's sweep, until the keys of chunks 0 .. i have landed in its chip's L3: the
+        root's multicasts' flags, or on the root its pieces' own. The puts are ordering edges; the flags prove the
+        landing. The pieces gather on getattr(self, "kv_root") where a builder sets one (s3_root), else the root."""
+        k, c, R, T = self.chip(g), self.c(g), getattr(self, "kv_root", self.ROOT), self.TAG
+        if self.owner_bcast:
+            n = (i + 1) * (self.C // 16)
+            puts = [self.kv_put[q] for q in range(n)]
+            args = SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_kvtflag"), n, 1)
+        elif k == R:
+            n = (i + 1) * (self.C // 16)
+            puts = [self.kv_put[q] for q in range(n)]
+            args = SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_kvnflag"), n, 1)
+        else:
+            puts = self.kv_mc[:i + 1]
+            args = SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_kvflag"), i + 1, 1)
+        w = self.node(k, c, self.roles["dm"], f"kv_wait_i{i}", "__snax_bingo_kernel_wait_flags", args,
+                      [t for t in puts if self.flag_dep(t, k, c)])
+        for t in puts:
+            if not self.flag_dep(t, k, c):
+                self.dfg.bingo_add_order_edge(t, w)
+        return w
+
+    def ot8_bits(self):
+        """fa_sweep's ot8: the quantiser's scale of o~ under ot8_fused, else None."""
+        return self.fbits(self.d.s_ot.inv) if self.ot8_fused else None
+
+    def xt_ref(self, h, r0):
+        """The sweep's xt for the query tile at row r0 of head h: (bytes, length): o~ FP16 rows, or under ot8_fused
+        o~ INT8 in the A layout of one 16-row tile."""
+        d = self.d
+        if self.ot8_fused:
+            return d.layout.to_a(d.head(h)["ot8"][r0:r0 + BR], d.mesh).astype(np.int8).view(np.uint8), D_V * BR
+        return d.head(h)["ot16"][r0:r0 + BR].astype(np.float16).view(np.uint8), D_V * BR * 2
+
+    def xh(self, i, c):
+        """The half of chunk i's rows that cluster c takes."""
+        return c ^ (i & 1) if self.row_swap else c
+
+    def r0(self, i, c):
+        """The first row of chunk i that cluster c takes."""
+        return i * self.C + self.xh(i, c) * self.ROWS
+
+    def mask_of(self, g, plan):
+        """fa_sweep's mask hook for cluster g: a masked pair's pattern in the cluster's constants, else None."""
+        return lambda j, q: (None if plan.get((j, q)) is None
+                             else self.consts[g].view(self.C_MASK + plan[(j, q)] * self.MASK_B))
 
     def stage_post_a(self, g, i, sweep):
         """o~ -> W_UV -> o of chunk i (INT8, A layout): everything before the W_O matmuls.
@@ -600,18 +1372,58 @@ class FaBuild(cm.ChipletBuild):
         mesh = d.mesh
         # o~ rows, FP16 row-major [16, 512] a query tile -> A layout FP16 -> INT8
         cv = []
-        for q in range(self.NQ):
+        if self.ot8_fused:
+            # the sweep's xt[q] is already W_UV's A operand (INT8, one 16-row tile)
+            ld, si, slab = self.load(g, self.chunk_index(i, "tail"), f"Ld_wuv_i{i}")
+            gu = [self.gmm(g, f"guv{q}_i{i}", sweep["xt"][q], slab, b["uv"].view(q * (Q_NOPE // 16) * TILE16), 1,
+                           D_V // 4, Q_NOPE // 16, d.k_uv, [ld, sweep["tr"][q]], "post") for q in range(self.NQ)]
+            self.ls[g].release(si, gu[-1])
+            cv = list(gu)
+        for q in range(self.NQ if not self.ot8_fused else 0):
             cv.append(self.xd(g, f"o2a{q}_i{i}", convert_args("row_major", "A", 16, D_V, mesh, 2, sweep["xt"][q],
-                                                              b["a16o"].view(q * 16 * D_V * 2)), list(sweep["tr"])))
-        qo = self.quant(g, f"ot8_i{i}", b["a16o"], b["ot8"], rows * D_V * 2, self.fbits(d.s_ot.inv), cv)
-        ld, si, slab = self.load(g, self.chunk_index(i, "tail"), f"Ld_wuv_i{i}")
-        gu = self.gmm(g, f"guv_i{i}", b["ot8"], slab, b["uv"], mt, D_V // 4, Q_NOPE // 16, d.k_uv, [ld, qo], "post")
-        self.ls[g].release(si, gu)
+                                                              b["a16o"].view(q * 16 * D_V * 2)),
+                              [sweep["tr"][q]] if self.o_tiles else list(sweep["tr"])))
+        if self.ot8_fused:
+            pass
+        elif self.o_tiles:
+            ld, si, slab = self.load(g, self.chunk_index(i, "tail"), f"Ld_wuv_i{i}")
+            # a query tile's A rows, its INT8 rows and its D rows are each a contiguous run of the chunk's
+            gu = []
+            for q in range(self.NQ):
+                qo = self.quant(g, f"ot8{q}_i{i}", b["a16o"].view(q * 16 * D_V * 2), b["ot8"].view(q * 16 * D_V),
+                                16 * D_V * 2, self.fbits(d.s_ot.inv), [cv[q]])
+                gu.append(self.gmm(g, f"guv{q}_i{i}", b["ot8"].view(q * 16 * D_V), slab,
+                                   b["uv"].view(q * (Q_NOPE // 16) * TILE16), 1, D_V // 4, Q_NOPE // 16, d.k_uv,
+                                   [ld, qo], "post"))
+            self.ls[g].release(si, gu[-1])
+        else:
+            qo = self.quant(g, f"ot8_i{i}", b["a16o"], b["ot8"], rows * D_V * 2, self.fbits(d.s_ot.inv), cv)
+            ld, si, slab = self.load(g, self.chunk_index(i, "tail"), f"Ld_wuv_i{i}")
+            gu = [self.gmm(g, f"guv_i{i}", b["ot8"], slab, b["uv"], mt, D_V // 4, Q_NOPE // 16, d.k_uv, [ld, qo],
+                           "post")] * mt
+            self.ls[g].release(si, gu[0])
         suv = self.consts[g].view(self.C_UV)
-        du = [self.simd_mul(g, f"dqu{m}_i{i}", b["uv"].view(m * (Q_NOPE // 16) * TILE16), suv,
-                            b["uv"].view(m * (Q_NOPE // 16) * TILE16), 16 * Q_NOPE, [gu]) for m in range(mt)]
+        if self.post_tiles:
+            # the scale tile is per column, the same for every 16 rows; o8's tiles are each a contiguous run (the A
+            # layout is row-tile major); the SIMD core runs the four in order, so the last one's end is all four's
+            qq, qs = None, []
+            for q in range(self.NQ):
+                d2q = self.xd(g, f"d2au{q}_i{i}", d_to_a_args(mesh, 1, Q_NOPE // 16, Q_NOPE // 4,
+                                                             b["uv"].view(q * (Q_NOPE // 16) * TILE16),
+                                                             b["a16u"].view(q * 16 * Q_NOPE * 2)), [gu[q]])
+                qq = self.mul_quant(g, f"o8{q}_i{i}", b["a16u"].view(q * 16 * Q_NOPE * 2), suv,
+                                    b["o8"].view(q * 16 * Q_NOPE), 16 * Q_NOPE, self.fbits(d.s_o.inv), [d2q])
+                qs.append(qq)
+            self._o8_tiles[(g, i)] = qs
+            return cv, qq
+        du = sorted(set(gu), key=gu.index) if self.dq_fused else \
+            [self.simd_mul(g, f"dqu{m}_i{i}", b["uv"].view(m * (Q_NOPE // 16) * TILE16), suv,
+                           b["uv"].view(m * (Q_NOPE // 16) * TILE16), 16 * Q_NOPE, [gu[m]]) for m in range(mt)]
         d2u = self.xd(g, f"d2au_i{i}", d_to_a_args(mesh, mt, Q_NOPE // 16, Q_NOPE // 4, b["uv"], b["a16u"]), du)
-        qq = self.quant(g, f"o8_i{i}", b["a16u"], b["o8"], rows * Q_NOPE * 2, self.fbits(d.s_o.inv), [d2u])
+        if self.dq_fused:
+            qq = self.mul_quant(g, f"o8_i{i}", b["a16u"], suv, b["o8"], rows * Q_NOPE, self.fbits(d.s_o.inv), [d2u])
+        else:
+            qq = self.quant(g, f"o8_i{i}", b["a16u"], b["o8"], rows * Q_NOPE * 2, self.fbits(d.s_o.inv), [d2u])
         return cv, qq
 
     def stage_post_wo(self, g, i, qq, r, after):
@@ -638,44 +1450,150 @@ class FaBuild(cm.ChipletBuild):
         parts = [(0, mt)] if not self.wo_split_rows else [(m0, 2) for m0 in range(0, mt, 2)]
         for r in range(2):
             ld, si, slab = self.load(g, self.chunk_index(i, "tail") + 1 + r, f"Ld_wo{r}_i{i}")
+            # sym_per_block: only the previous chunk's chains of this block read the half it writes
+            free = self._sym_blk[(k, c)][r] if self.sym_per_block and (k, c) in self._sym_blk else list(sym_after)
             for m0, mm in parts:
                 sfx = "" if len(parts) == 1 else f"m{m0}"
+                rows_o8 = self._o8_tiles[(g, i)][m0:m0 + mm] if self.wo_row_pipe else [qq]
                 go = self.gmm(g, f"gwo{r}{sfx}_i{i}", b["o8"].view(m0 * 16 * Q_NOPE), slab,
                               self.sym[(k, c)].view(r * half + m0 * 64 * TILE16), mm, Q_NOPE // 4, 64,
-                              d.k_wo, [ld, qq] + list(sym_after), "post")
+                              d.k_wo, [ld] + rows_o8 + list(free), "post")
             self.ls[g].release(si, go)
             self._wo_blk[(k, c, i, r)] = go
         return go
 
+    def y_raw(self, r0, rows, fold=None):
+        """Rows r0 .. r0 + rows - 1 of the raw y the collector stores: the heads' partials folded in the chain's order
+        (fold, default the root's), or (wo_cols) one sum over every head."""
+        return self.d.y_cols(r0, rows) if self.wo_cols else self.d.reduce(fold or self.fold_heads, r0, rows)
+
+    def stage_wo_cols(self, i, post, xs):
+        """Chunk i's W_O by columns (params wo_cols): every head's o8 of each cluster's rows into the root's L3, the
+        root's multicast of them, each cluster's gather into its L1 (A layout [rows, 2048]), its two GEMMs of 64 of its
+        chip's 128 columns over the full depth, and its block of y stored into the root's y (the layout of y_halves:
+        two halves of 1024 columns, D layout). Returns each cluster's last W_O GEMM."""
+        T, R, G, dm = self.TAG, self.ROOT, self.G, self.roles["dm"]
+        NH, OB = len(self.chips), self.ROWS * Q_NOPE
+        # o_land: the chunk's own area; else the root's landing area of x_i
+        oname, base = ((f"{T}_oland", (i % 2) * self.NC * NH * OB) if self.o_land else (f"{T}_xland", i * self.XB))
+        on_root = lambda name, off, k: BingoMemSymbol(name, offset=off, chip_id=None if k == R else R)
+        rg = [g for g in range(G) if self.chip(g) == R]
+        puts = {}
+        for g in range(G):
+            k, c = self.chip(g), self.c(g)
+            h = self.head[k]
+            # into the root's landing area of x_i, after the root's fetches of x_i (o_land: its own area, whose
+            # chunk-before-last o8 every chip has gathered before its chunk i computes)
+            puts[g] = self.node(k, c, dm, f"o_put_i{i}", "__snax_bingo_kernel_idma_put_flagged",
+                                SnaxBingoKernelIdmaPutFlaggedArgs(
+                                    self.bufs(g, i)["o8"], on_root(oname, base + (c * NH + h) * OB, k), OB,
+                                    on_root(f"{T}_oflag", ((i * self.NC + c) * NH + h) * 64, k), value=1),
+                                [post[g][1]] + ([] if self.o_land else [xs[r] for r in rg]))
+        # wo_prefetch: the W_O loads next on each DM core (ring chunks in their order, after W_UV's)
+        wo_ld = {g: [self.load(g, self.chunk_index(i, "tail") + 1 + t, f"Ld_wo{t}_i{i}") for t in range(2)]
+                 for g in range(G)} if self.wo_prefetch else {}
+        xc = self.x_put_cluster
+        w = self.node(R, xc, dm, f"o_nwait_i{i}", "__snax_bingo_kernel_wait_flags",
+                      SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_oflag", offset=i * self.NC * NH * 64),
+                                                   self.NC * NH, 1), [puts[g] for g in rg])
+        for g in range(G):
+            if self.chip(g) != R:
+                self.dfg.bingo_add_order_edge(puts[g], w)
+        run = Q_NOPE // 4 * 64                           # a head's columns in a row tile of the A layout
+
+        def gather(g, deps):
+            c = self.c(g)
+            return self.node(self.chip(g), c, dm, f"o_get_i{i}", "__snax_bingo_kernel_idma_2d_copy",
+                             SnaxBingoKernelIdma2dCopyArgs(BingoMemSymbol(oname, offset=base + c * NH * OB),
+                                                           self.bufs(g, i)["xrowso"], run, run, HIDDEN // 4 * 64,
+                                                           self.ROWS // 16, outer=NH, src_outer=OB, dst_outer=run),
+                             list(deps))
+        gets = {g: gather(g, [w]) for g in rg}
+        # the multicast after the root's own gathers (the stores of y that land over this area follow it)
+        mc = self.node(R, xc, dm, f"o_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
+                       SnaxBingoKernelIdmaPutFlaggedArgs(BingoMemSymbol(oname, offset=base),
+                                                         BingoMemSymbol(oname, offset=base), self.NC * NH * OB,
+                                                         BingoMemSymbol(f"{T}_omflag", offset=i * 64), value=1, bcast=True),
+                       [w] + [gets[g] for g in rg])
+        for g in range(G):
+            if self.chip(g) == R:
+                continue
+            ow = self.node(self.chip(g), self.c(g), dm, f"o_wait_i{i}", "__snax_bingo_kernel_wait_flags",
+                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_omflag", offset=i * 64), 1, 1), [])
+            self.dfg.bingo_add_order_edge(mc, ow)
+            gets[g] = gather(g, [ow])
+        last = {}
+        for g in range(G):
+            k, c = self.chip(g), self.c(g)
+            q, yb = self.head[k], self.bufs(g, i)["xrowsy"]
+            r, nb0 = q // 8, (q % 8) * 8                 # the half and the first column tile of the chip's columns
+            for t in range(2):
+                ld, si, slab = (wo_ld[g][t] if wo_ld else
+                                self.load(g, self.chunk_index(i, "tail") + 1 + t, f"Ld_wo{t}_i{i}"))
+                gm = self.gmm(g, f"gwo{t}_i{i}", self.bufs(g, i)["xrowso"], slab, yb.view(t * 4 * (self.ROWS // 16) * TILE16),
+                              self.ROWS // 16, HIDDEN // 4, 4, self.d.k_wo, [ld, gets[g]], "post")
+                self.ls[g].release(si, gm)
+                last[g] = gm
+                # its 4 column tiles of each row tile into the half's D layout (64 tiles a row tile)
+                dst = self.y_sym(i, c, r * (self.YB // 2) + (nb0 + 4 * t) * TILE16, chip_id=None if k == R else R)
+                st = self.node(k, c, dm, f"y_st{t}_i{i}", "__snax_bingo_kernel_idma_2d_copy",
+                               SnaxBingoKernelIdma2dCopyArgs(yb.view(t * 4 * (self.ROWS // 16) * TILE16), dst,
+                                                             4 * TILE16, 4 * TILE16, 64 * TILE16, self.ROWS // 16),
+                               [gm] + ([mc] if k == R else []))
+            # the cluster's flag after its stores (one in-order DM core): every block of y it made has landed
+            self._y_last.append(self.node(k, c, dm, f"y_flag_i{i}", "__snax_bingo_kernel_idma_put_flagged",
+                                          SnaxBingoKernelIdmaPutFlaggedArgs(
+                                              yb, on_root(f"{T}_ydum", g * 64, k), 64,
+                                              on_root(f"{T}_yflag", (i * G + g) * 64, k), value=1), [st]))
+        return last
+
     # ---- the reduce of one chunk ------------------------------------------------------------------
-    def stage_reduce(self, i, parts, war, gate=None, half=None, src_off=0):
+    def stage_reduce(self, i, parts, war, gate=None, half=None, src_off=0, clusters=None):
         """Cluster index c's partials of chunk i into the root's cluster c: ChainGather (chain) or the
         root's pulls and adds (root). parts {(k, c): [tasks after which the partial is there]}, war
         {c: [tasks the destination waits for]}, gate {c: [tasks the reduce starts behind]} (the root's
-        sweep read out, whose L1 the destination takes). Returns {c: the last task of the reduce}."""
-        R, xdma, dm, simd = self.ROOT, self.roles["xdma"], self.roles["dm"], self.roles["simd"]
-        others = self.order[1:]
+        sweep read out, whose L1 the destination takes). Returns {c: the last task of the reduce}. With y_roots the
+        partials fold into that block's collector instead, along the cycle from it."""
+        R, xdma, dm, simd = self.y_root(i, half), self.roles["xdma"], self.roles["dm"], self.roles["simd"]
+        if R != self.ROOT and self.reduce_impl != "chain":
+            raise ValueError("y_roots: reduce chain only")
+        others = self.y_order(R)[1:]
         out = {}
         before = {}
-        for c in range(self.NC):
+        cs = list(clusters) if clusters is not None else list(range(self.NC))
+        for c in cs:
             before[c] = [t for k in self.chips for t in parts[(k, c)]] + list((gate or {}).get(c, []))
         if self.sync == "barrier":
             bar = self.barrier({k: [t for c in range(self.NC) for t in parts[(k, c)]] for k in self.chips})
             for c in range(self.NC):
                 before[c] = [bar[R]] + list((gate or {}).get(c, []))
             self.bar_reduce = bar
-        for c in range(self.NC):
-            dstb = self.dst(i, c)
+        for c in cs:
             size, doff, tag = (self.YB, 0, "") if half is None else (self.YB // 2, half * self.YB // 2, f"_h{half}")
-            dst = f"((uint64_t)({dstb.get_c_var_name()}) + {doff})"
+            if self.y_chain_l3 and half is not None:
+                # the block's y straight into the collector's L3, where its store would have put it
+                dstb = None
+                dst = self.y_sym_local(i, c, doff)
+            else:
+                dstb = self.dst(i, c, half)
+                if self.y_store_halves and half is not None:
+                    doff = 0
+                dst = f"((uint64_t)({dstb.get_c_var_name()}) + {doff})"
             if self.reduce_impl == "chain":
                 ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
                     cm.remote, R, c, others, src=self.sx(c, src_off), dst=dst, size=size,
-                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[dstb])
+                    junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[dstb] if dstb is not None else [])
                 serial = [] if self.chain_concurrent or self._last_chain is None else [self._last_chain]
+                if self.last_pair_chains and i == self.NCH - 1 and half is not None and len(cs) == self.NC:
+                    if self._pair_prev is None:
+                        self._pair_prev = [self._last_chain] if self._last_chain is not None else []
+                    serial = list(self._pair_prev) + [self.prefetch[k] for k in self.chips]
+                if self.chain_gate_prefetch:
+                    serial = list(serial) + [self.prefetch[k] for k in self.chips]
                 out[c] = self.node(R, c, xdma, f"y_chain_c{c}_i{i}{tag}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                    before[c] + list(war.get(c, [])) + serial)
                 self._last_chain = out[c]
+                self._chains.append(out[c])
                 continue
             ns = self.YB // self.SL
             pulls, adds = [], []
@@ -696,23 +1614,28 @@ class FaBuild(cm.ChipletBuild):
                                           [cp] + before[c] + adds[-1:]))
                     n += 1
             out[c] = adds[-1]
+        if self.last_pair_chains and i == self.NCH - 1 and half is not None and len(cs) == self.NC:
+            self._pair_prev = [out[c] for c in cs]
         return out
 
-    def stage_store(self, i, red):
-        """The root's cluster c stores chunk i's rows of y to its L3."""
-        R, dm = self.ROOT, self.roles["dm"]
+    def stage_store(self, i, red, half=None, clusters=None):
+        """The collector's cluster c stores chunk i's rows of y (y_store_halves: one half of them) to its L3."""
+        R, dm = self.y_root(i, half), self.roles["dm"]
         st = {}
-        for c in range(self.NC):
-            st[c] = self.node(R, c, dm, f"y_store_c{c}_i{i}", "__snax_bingo_kernel_idma_1d_copy",
+        for c in (list(clusters) if clusters is not None else range(self.NC)):
+            nb, off, tag = (self.YB, 0, "") if half is None else (self.YB // 2, half * self.YB // 2, f"_h{half}")
+            st[c] = self.node(R, c, dm, f"y_store_c{c}_i{i}{tag}", "__snax_bingo_kernel_idma_1d_copy",
                               SnaxBingoKernelIdma1dCopyArgs(
-                                  self.dst(i, c), self.y_sym(i, c),
-                                  self.YB), list(red[c]) if isinstance(red[c], (list, tuple)) else [red[c]])
+                                  self.dst(i, c, half), self.y_sym(i, c, off),
+                                  nb), list(red[c]) if isinstance(red[c], (list, tuple)) else [red[c]])
         return st
 
     # ---- the prefill ------------------------------------------------------------------------------
     def build(self):
         d, R = self.d, self.ROOT
         dm = self.roles["dm"]
+        if self.x_hbm:
+            raise ValueError("params x_hbm: the stage workloads' builder (fa_stages_mc.py) runs it")
         self.last_ld = {}
         # a slab is never loaded again before the reader of its last load is known
         for ls in self.ls:
@@ -726,15 +1649,22 @@ class FaBuild(cm.ChipletBuild):
                 g = self.chips.index(k) * self.NC + c
                 pre[k] = [self.dm_copy(g, f"const_ld_g{g}", self.h_c[k].address, self.consts[g],
                                        self.C_BYTES, pre[k])]
+                if self.fresh and (k, c) in self.kvc:
+                    pre[k] = [self.dm_copy(g, f"kvc_ld_g{g}", self.h_kc[k].address, self.kvc[(k, c)], self.KC_BYTES,
+                                           pre[k])]
+        if self.fresh and (self.kv_slabs not in ("split", "split4", "split_kb") or self.stop != "full"):
+            raise ValueError("fresh: kv_slabs split, split4 or split_kb (FreshTileSource's slabs), stop full")
         go = self.setup(extra=pre)
         if self.p.get("relay_per_gather", True):
             self.dfg.relay_one_consumer_cores = [self.roles["xdma"]]
         # chunk-major: every cluster's chunk i, then the barriers and the reduce in the order the arm needs
         puts = []
         swp_res, post_res, parts_ready = {}, {}, {}
+        xs, self._y_last = {}, []
         red, stores = {}, {}
         sym_free = {}
-        if self.bcast_impl == "bcast_l1" and self.x_puts_first:
+        pend = None
+        if self.bcast_impl == "bcast_l1" and self.x_puts_first and not self.owner_bcast and not self.x_resident:
             for i in range(self.NCH):
                 puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
             # prefetch_after_x: the memory chips start pushing once the root's x multicasts are done, so no
@@ -742,15 +1672,28 @@ class FaBuild(cm.ChipletBuild):
             if self.prefetch_after_x:
                 for k in self.chips:
                     self.edge(puts[-1], self.prefetch[k])
+        if self.fresh:
+            if self.kv_cols:
+                self.stage_kv_cols(go)
+            elif not self.x_device:
+                self.fresh_tiles(go)
+            for k in self.chips:
+                self.stage_kv(k)
+            if not self.owner_bcast:
+                self.stage_kv_bcast()
         for i in range(self.NCH):
-            if self.bcast_impl == "bcast_l1" and not self.x_puts_first:
+            if i:
+                self.chunk_start(i)
+            if self.bcast_impl == "bcast_l1" and not self.x_puts_first and not self.owner_bcast and not self.x_resident:
                 puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
             sweeps = {}
             for g in range(self.G):
                 k, c = self.chip(g), self.c(g)
-                # the rows land once the previous chunk's sweep has been read out (its L1 is theirs)
+                # the rows land once the previous chunk's sweep has been read out (its L1 is theirs; wo_cols: once its
+                # W_O GEMMs are done with the gathered o8, whose bytes the rows then take)
                 x = self.stage_x(g, i, puts[i] if puts else None,
                                  [go[k]] + (list(post_res[g]["xt_rd"]) if g in post_res else []))
+                xs[g] = x
                 if self.stop == "x":
                     # with x_ring, the chunk's W_q and W_UK loads as in q8, each slab freed by its own load
                     rd = [x]
@@ -763,13 +1706,26 @@ class FaBuild(cm.ChipletBuild):
                     post_res[g] = dict(xt_rd=[x])
                     continue
                 q8 = self.stage_proj(g, i, x)
+                if self.reduce_early and i > 0 and k == R:
+                    # chunk i-1's chains of this root cluster, behind its q side of chunk i in its xDMA core's program
+                    w = {c: [stores[(i - 2, c)]] if (i - 2, c) in stores else []}
+                    self._block_chains(i - 1, [c], w, None, red, stores, sym_free)
                 if self.stop == "q8":
-                    parts_ready[(k, c, i)] = list(q8[0][1])
+                    # every query tile's Q8 (q_tiles: each tile has its own ready tasks)
+                    parts_ready[(k, c, i)] = list(dict.fromkeys(t for q in sorted(q8) for t in q8[q][1]))
                     post_res[g] = dict(xt_rd=parts_ready[(k, c, i)])
                     continue
-                sw = fa_sweep(self.at(k, c), self.sweep_cfg, self.bufs(g, i)["swp"], TileSource(self, g, i), q8,
-                              self.roles, name=f"s{i}_",
-                              early=2 if len(self.ls[g].slabs) >= 4 else 1)
+                early = 2 if len(self.ls[g].slabs) >= 4 else 1
+                if self.fresh:
+                    # the key tiles up to the chunk's end, the causal masks on the scores
+                    nt, plan = d.tile_plan(self.r0(i, c))
+                    sw = fa_sweep(self.at(k, c), dataclasses.replace(self.sweep_cfg, nt=nt), self.bufs(g, i)["swp"],
+                                  FreshTileSource(self, g, i, nt), q8, self.roles, name=f"s{i}_", early=early,
+                                  mask=self.mask_of(g, plan), mask_c=self.mask_c, ot8=self.ot8_bits(),
+                                  sm_batch=self.sm_batch, prologue=self.sm_prologue, geom_core=self.sm_geom)
+                else:
+                    sw = fa_sweep(self.at(k, c), self.sweep_cfg, self.bufs(g, i)["swp"], TileSource(self, g, i), q8,
+                                  self.roles, name=f"s{i}_", early=early, sm_batch=self.sm_batch, prologue=self.sm_prologue, geom_core=self.sm_geom)
                 swp_res[g] = sw
                 if self.stop == "sweep":
                     parts_ready[(k, c, i)] = list(sw["tr"])
@@ -782,9 +1738,23 @@ class FaBuild(cm.ChipletBuild):
             # is written again by W_O, which waits for that reduce); the reduce starts once the root's
             # sweep is read out, so its landing buffer can take the sweep's L1
             post = {g: self.stage_post_a(g, i, sweeps[g]) for g in range(self.G)}
+            if self.wo_cols:
+                last = self.stage_wo_cols(i, post, xs)
+                for g in range(self.G):
+                    post_res[g] = dict(xt_rd=list(post[g][0]) + [last[g]])
+                continue
             if self.y_halves:
                 # W_O block 0 everywhere, its gather, block 1 behind that gather, its gather, the store
                 gate = {c: post[self.chips.index(R) * self.NC + c][0] for c in range(self.NC)}
+                if self.chunk_pipeline:
+                    # chunk i-1's block 1, held back until chunk i's front is made, then chunk i's block 0
+                    if pend is not None:
+                        self._halves(*pend, red, stores, sym_free, blocks=(1,))
+                    pend = (i, post, gate, {}, parts_ready, [])
+                    self._halves(*pend, red, stores, sym_free, blocks=(0,))
+                    for g in range(self.G):
+                        post_res[g] = dict(xt_rd=post[g][0])
+                    continue
                 rh, gos = [], {}
                 for r in range(2):
                     for g in range(self.G):
@@ -797,16 +1767,20 @@ class FaBuild(cm.ChipletBuild):
                         rh.append({c: gos[self.chips.index(R) * self.NC + c] for c in range(self.NC)})
                         continue
                     parts = {(k, c): [gos[self.chips.index(k) * self.NC + c]] for k in self.chips for c in range(self.NC)}
-                    rh.append(self.stage_reduce(i, parts, {}, gate if r == 0 else None, half=r))
+                    war = ({c: [sth[c]] for c in range(self.NC)} if self.y_store_halves and r == 1 else {})
+                    rh.append(self.stage_reduce(i, parts, war, gate if r == 0 else None, half=r))
+                    if self.y_store_halves and self.stop == "full":
+                        sth = self.stage_store(i, rh[r], half=r)
                 if self.stop == "full":
-                    st = self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in range(self.NC)})
+                    st = (sth if self.y_store_halves else
+                          self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in range(self.NC)}))
                     for c in range(self.NC):
                         red[(i, c)] = rh[1][c]
                         stores[(i, c)] = st[c]
                         for k in self.chips:
                             sym_free[(k, c)] = [rh[1][c]]
                 continue
-            if self.stop == "full" and self.sync != "barrier" and i > 0:
+            if self.stop == "full" and self.sync != "barrier" and i > 0 and not self.reduce_early:
                 gate = {c: post[self.chips.index(R) * self.NC + c][0] for c in range(self.NC)}
                 self._reduce_chunk(i - 1, parts_ready, red, stores, sym_free, gate)
             for g in range(self.G):
@@ -815,9 +1789,20 @@ class FaBuild(cm.ChipletBuild):
                 parts_ready[(k, c, i)] = [self.stage_post_b(g, i, post[g][1], sym_free.get((k, c), []))]
             if self.stop == "full" and self.sync == "barrier":
                 self._reduce_chunk(i, parts_ready, red, stores, sym_free)
-        if self.stop == "full" and self.sync != "barrier" and not self.y_halves:
+        if self.stop == "full" and self.sync != "barrier" and not self.y_halves and not self.wo_cols:
             self._reduce_chunk(self.NCH - 1, parts_ready, red, stores, sym_free)
-        if stores:
+        if pend is not None:
+            self._halves(*pend, red, stores, sym_free, blocks=(1,))
+        if self.wo_cols:
+            # every cluster's blocks of every chunk have landed: one wait on the root, on their flags
+            yw = self.node(R, self.x_put_cluster, dm, "y_wait", "__snax_bingo_kernel_wait_flags",
+                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{self.TAG}_yflag"), self.NCH * self.G, 1),
+                           [t for t in self._y_last if t.assigned_chiplet_id == R])
+            for t in self._y_last:
+                if t.assigned_chiplet_id != R:
+                    self.dfg.bingo_add_order_edge(t, yw)
+            ends = [yw]
+        elif stores:
             ends = [stores[(self.NCH - 1, c)] for c in range(self.NC)]
         else:
             # a stop before the reduce: one probe a chip behind that chip's last chunk, the root's last
@@ -828,21 +1813,81 @@ class FaBuild(cm.ChipletBuild):
         self.end_window(ends)
         self._checks(swp_res, post_res)
 
+    def _halves(self, i, post, gate, gos, parts_ready, rh, red, stores, sym_free, blocks):
+        """chunk_pipeline: W_O blocks `blocks` of chunk i (y_halves), each everywhere, then its reduce; block 1 behind
+        block 0's reduce; the store after block 1's. rh carries block 0's reduce to block 1."""
+        R = self.ROOT
+        for r in blocks:
+            for g in range(self.G):
+                k, c = self.chip(g), self.c(g)
+                after = sym_free.get((k, c), []) if r == 0 else [rh[0][c]]
+                gos[g] = self.stage_post_wo(g, i, post[g][1], r, after)
+                parts_ready[(k, c, i)] = [gos[g]]
+            parts = {(k, c): [gos[self.chips.index(k) * self.NC + c]] for k in self.chips for c in range(self.NC)}
+            rh.append(self.stage_reduce(i, parts, {}, gate if r == 0 else None, half=r))
+            if r == 1:
+                st = self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in range(self.NC)})
+                for c in range(self.NC):
+                    red[(i, c)] = rh[1][c]
+                    stores[(i, c)] = st[c]
+                    for k in self.chips:
+                        sym_free[(k, c)] = [rh[1][c]]
+
+    def _block_chains(self, i, cs, war, gate, red, stores, sym_free, store_at=None):
+        """y_block_chains: root clusters cs's chains of chunk i, one a W_O block, and their stores (y_store_halves: each
+        block's sum in its own half-size buffer, stored right after its chain; else one store of the whole). y_dst_shared:
+        block 1's chain waits for block 0's store (one buffer), and block 0's store of cluster c goes right behind
+        store_at[c] in its DM core's program."""
+        cs = list(cs)
+        half = self.YB // 2
+        rh, st, st0 = [], {}, {}
+        late = self.store_late and self.y_store_halves and i < self.NCH - 1 and not self.y_chain_l3
+        shared = self.dst_shared(i)
+        for r in range(2):
+            parts = {(k, c): [self._wo_blk[(k, c, i, r)]] for k in self.chips for c in cs}
+            w_r = war if r == 0 else ({c: [st0[c]] for c in cs} if shared else {})
+            rh.append(self.stage_reduce(i, parts, w_r, gate if r == 0 else None, half=r, src_off=r * half, clusters=cs))
+            if self.y_chain_l3:
+                # the chain wrote the block into L3 itself: it stands for the store
+                st = {c: rh[r][c] for c in cs}
+            elif late:
+                self._late_stores.append((i, r, rh[r], cs))
+            elif self.y_store_halves:
+                st = self.stage_store(i, rh[r], half=r, clusters=cs)
+                if r == 0 and shared:
+                    st0 = st
+                    for c in cs:
+                        if store_at and store_at.get(c) is not None:
+                            st[c].order_key = store_at[c].node_id + 0.5
+        if not self.y_store_halves:
+            st = self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in cs}, clusters=cs)
+        for c in cs:
+            red[(i, c)] = rh[1][c]
+            if not late:
+                stores[(i, c)] = st[c]
+            for k in self.chips:
+                sym_free[(k, c)] = [rh[0][c], rh[1][c]]
+                self._sym_blk[(k, c)] = {0: [rh[0][c]], 1: [rh[1][c]]}
+
+    def flush_late_stores(self, stores):
+        """store_late: the held stores, in the order their chains were made."""
+        for i, r, rh_r, cs in self._late_stores:
+            st = self.stage_store(i, rh_r, half=r, clusters=cs)
+            if r == 1:
+                for c in cs:
+                    stores[(i, c)] = st[c]
+        self._late_stores = []
+
+    def chunk_start(self, i):
+        """Where the tasks of chunk i (i >= 1) begin, in the order they are made: nothing here; a layer
+        starts an args phase (dsv2_prefill_mc.py)."""
+
     def _reduce_chunk(self, i, parts_ready, red, stores, sym_free, gate=None):
         war = {c: [stores[(i - 1, c)]] if (i - 1, c) in stores else [] for c in range(self.NC)}
         if self.y_block_chains:
             # one gather per W_O block, each right behind that block on every chip: block 0's runs under
             # block 1's GEMM (the symmetric buffer holds both blocks)
-            half = self.YB // 2
-            rh = [self.stage_reduce(i, {(k, c): [self._wo_blk[(k, c, i, r)]] for k in self.chips for c in range(self.NC)},
-                                    war if r == 0 else {}, gate if r == 0 else None, half=r, src_off=r * half)
-                  for r in range(2)]
-            st = self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in range(self.NC)})
-            for c in range(self.NC):
-                red[(i, c)] = rh[1][c]
-                stores[(i, c)] = st[c]
-                for k in self.chips:
-                    sym_free[(k, c)] = [rh[0][c], rh[1][c]]
+            self._block_chains(i, range(self.NC), war, gate, red, stores, sym_free)
             return
         parts = {(k, c): parts_ready[(k, c, i)] for k in self.chips for c in range(self.NC)}
         r = self.stage_reduce(i, parts, war, gate)
@@ -862,12 +1907,33 @@ class FaBuild(cm.ChipletBuild):
         lay, T, R, d = self.lay, self.TAG, self.ROOT, self.d
         checks = []
         n = 2048
+        if self.fresh:
+            # the keys as they landed: in the root's L3 (kv_checks_at, set by a layer whose L3 reuses the root's: that
+            # chip's) the first piece's key and value heads and the last's tails; on the chip in the middle of the fold
+            # order (the multicast's landing) the last piece's value tail
+            last, far = self.T // 16 - 1, self.order[len(self.order) // 2]
+            kc = getattr(self, "kv_checks_at", R)
+            # params x_checks_first (a debug list of x tiles): those tiles' x as it sits in L3 at the end (the head of
+            # the first, the tail of the last), on the root, the chip in the middle of the fold order and the last
+            # chip, ahead of every other check
+            for t in self.p.get("x_checks_first", []):
+                off = int(t) * self.XT + (self.XT - n if int(t) == self.T // 16 - 1 else 0)
+                for k in dict.fromkeys((R, far, self.order[-1])):
+                    checks.append((f"x_k{k:02x}_t{t}", BingoMemSymbol(f"{T}_xsrc", offset=off,
+                                                                    chip_id=None if k == R else k),
+                                   self.xsrc[off:off + n].view(np.uint8), n))
+            for nm, q, lo, kk in (("k0a", 0, 0, kc), ("v0a", 0, KB, kc), ("kLb", last, KB - n, kc),
+                                  ("vLb", last, KVP - n, kc), ("vLf", last, KVP - n, far)):
+                img = d.kv_piece(16 * q).view(np.uint8)
+                checks.append((f"kv_{nm}", BingoMemSymbol(f"{T}_kv", offset=q * KVP + lo, chip_id=kk), img[lo:lo + n], n))
         if self.stop == "full":
             for i in range(self.NCH):
                 for c in range(self.NC):
-                    y = d.reduce(self.fold_heads, i * self.C + c * self.ROWS, self.ROWS)
                     half = HIDDEN // 2
-                    img = np.concatenate([lay.to_d(y[:, :half], d.mesh), lay.to_d(y[:, half:], d.mesh)]
+                    # each W_O block folded in its collector's chain order (y_roots), read from that collector's L3
+                    yh = [self.y_raw(self.r0(i, c), self.ROWS, self.y_fold_heads(self.y_root(i, h))
+                                     if self.y_roots else None) for h in range(2)]
+                    img = np.concatenate([lay.to_d(yh[0][:, :half], d.mesh), lay.to_d(yh[1][:, half:], d.mesh)]
                                          ).astype(np.float16).view(np.uint8)
                     # y_halves or y_windows 4: the head and the tail of each half (each half is a W_O block)
                     wins = (((f"y_i{i}c{c}_a", 0), (f"y_i{i}c{c}_m", self.YB // 2 - n // 2), (f"y_i{i}c{c}_b", self.YB - n))
@@ -875,13 +1941,14 @@ class FaBuild(cm.ChipletBuild):
                             ((f"y_i{i}c{c}_h0a", 0), (f"y_i{i}c{c}_h0b", self.YB // 2 - n),
                              (f"y_i{i}c{c}_h1a", self.YB // 2), (f"y_i{i}c{c}_h1b", self.YB - n)))
                     for nm, off in wins:
-                        checks.append((nm, self.y_sym(i, c, off, chip_id=R), img[off:off + n], n))
+                        yr = self.y_root(i, 0 if off < self.YB // 2 else 1) if self.y_roots else R
+                        checks.append((nm, self.y_sym(i, c, off, chip_id=yr), img[off:off + n], n))
         if self.stop == "x":
             # the last chunk's rows in the root's cluster 0 and in cluster 1 of the chip in the middle of the fold order
             i, half = self.NCH - 1, self.XB // self.NC
             for k, c in ((R, 0), (self.order[len(self.order) // 2], 1)):
                 g = self.chips.index(k) * self.NC + c
-                base = i * self.XB + c * half
+                base = i * self.XB + self.xh(i, c) * half
                 # three 2 KiB windows (head, middle, tail): the host compares from uncached L3, byte by byte
                 for nm, off in (("a", 0), ("m", half // 2 - 1024), ("b", half - 2048)):
                     name = f"x_k{k:02x}c{c}_{nm}"
@@ -897,15 +1964,15 @@ class FaBuild(cm.ChipletBuild):
             for c in range(self.NC):
                 g = self.chips.index(far) * self.NC + c
                 for q in sorted({0, self.NQ - 1}):
-                    r0 = i * self.C + c * self.ROWS + q * BR
+                    r0 = self.r0(i, c) + q * BR
                     tag = f"c{c}" if q == 0 else f"c{c}q{q}"
                     q8 = d.q8_a(h, r0)
                     stage.append((f"q8_{tag}", self.stash(f"q8_{tag}", far, c, self.bufs(g, i)["q8"][q], D_QK * BR, []),
                                   q8.view(np.uint8), D_QK * BR))
                     if (self.stop in ("sweep",) or self.checks_kind == "stages") and g in swp_res:
-                        ot = d.head(h)["ot16"][r0:r0 + BR].astype(np.float16).view(np.uint8)
-                        stage.append((f"xt_{tag}", self.stash(f"xt_{tag}", far, c, swp_res[g]["xt"][q], D_V * BR * 2,
-                                                              []), ot, D_V * BR * 2))
+                        ot, nb = self.xt_ref(h, r0)
+                        stage.append((f"xt_{tag}", self.stash(f"xt_{tag}", far, c, swp_res[g]["xt"][q], nb,
+                                                              []), ot, nb))
             checks = stage + checks
         self.run_checks(checks)
 
@@ -916,8 +1983,49 @@ class FaBuild(cm.ChipletBuild):
         dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
         return GemmQueue.of(self.dfg, self.gemm_async).program_order(self.dfg, dev, tag=self.TAG)
 
+    def _check_csr_primed(self):
+        """cfg_reuse: every GEOM_CSR_PRIMED softmax follows a softmax on its SIMD core in the program's order (order
+        keys, then creation order): it skips the shared CSRs, which any other SIMD kernel in between rewrites. Raises
+        otherwise."""
+        from bingo_kernel_args import SnaxBingoKernelSimdFaSoftmaxArgs as SM
+        simd, progs = self.roles["simd"], {}
+        for t in self.dfg.node_list:
+            if t.assigned_core_id == simd:
+                progs.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id), []).append(t)
+        bad = []
+        for ts in progs.values():
+            ts.sort(key=program_key)
+            for a, b in zip(ts, ts[1:]):
+                if (b.kernel_name.endswith("simd_fa_softmax") and b.kernel_args.geom_mode == SM.GEOM_CSR_PRIMED
+                        and not a.kernel_name.endswith("simd_fa_softmax")):
+                    bad.append((a.node_name, b.node_name))
+        if bad:
+            raise ValueError(f"cfg_reuse: {len(bad)} CSR_PRIMED softmax(es) after another SIMD kernel: {bad[:6]}")
+
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
+        if self.fresh and not self.x_device:
+            # alone, a fresh prompt's W_KVA loads run behind the cluster's tile loads (fresh_tiles): its first part of x
+            x_prefixes = tuple(x_prefixes) + ("kx_ld_",)
         self.chain_program_order()
+        if self.p.get("args_phase_bytes"):
+            # params args_phase_bytes: each cluster's device args in phases of at most this many bytes (estimate), two
+            # alternating L1 regions (mini_compiler passes/bingo_args_phases.py); a long block's args beside its static buffers
+            # overflow L1 otherwise
+            from bingo_args_phases import split_args_phases
+            split_args_phases(self, int(self.p["args_phase_bytes"]), [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")])
+        if self.p.get("cfg_reuse", False):
+            # params cfg_reuse: queued FA matmuls that repeat their cluster's previous dispatch write only their
+            # operand addresses, and softmaxes skip the geometry and shared CSRs an earlier one left (bingo_cfg_reuse)
+            n = reuse_gemm_fa_config(self.dfg, [self.roles["gemm"]])
+            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
+            print(f"[{self.TAG}] cfg_reuse: {n} FA matmuls REUSE, softmax {primed} PRIMED + {csr} CSR_PRIMED")
+            self._check_csr_primed()
+        if self.p.get("gemm_reuse", False):
+            # params gemm_reuse: queued projection GEMMs (gemm_start) that repeat their cluster's previous dispatch
+            # write only their operand addresses (bingo_cfg_reuse reuse_gemm_start_config)
+            n = reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
+            n_cfg = sum(t.kernel_name.endswith("gemm_start") and t.kernel_args.stage != 2 for t in self.dfg.node_list)
+            print(f"[{self.TAG}] gemm_reuse: {n} of {n_cfg} gemm_start configurations reuse")
         self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 

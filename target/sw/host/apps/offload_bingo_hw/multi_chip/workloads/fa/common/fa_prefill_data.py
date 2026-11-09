@@ -3,16 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""Data of the fa prefill workloads: DeepSeek-V2-Lite's layer-1 MLA attention for a prompt of T tokens
-(the last T positions of a real 8K-token cache), from the checkpoint, to the device's arithmetic.
+"""Data of the fa prefill workloads: DeepSeek-V2-Lite's layer-1 MLA attention for a prompt of T tokens,
+from the checkpoint, to the device's arithmetic. Two cases:
+
+    cached (default)   the last T positions of a real 8K-token cache: the queries attend to every cached key,
+                       the causal block among their own keys left out; the cache is an input
+    fresh              a fresh prompt (no cache): the first T positions of the same sequence, causal, and the
+                       keys are the prompt's own, made from its hidden states as the device makes them
 
 THE INPUTS are real: sweep/llm_blocks/fa/real_kv_cache.py's cache (per token the normalised latent
 c_unit [512] and the rotated k_pe [64], and the hidden state x1 entering layer 1), and the
-checkpoint's layer-1 q_proj, kv_b_proj, o_proj and the two norm gains (sweep/common/weights).
-The queries are the hidden states of the last T cached positions; they attend to every cached key,
-the causal block among their own keys left out.
+checkpoint's layer-1 q_proj, kv_b_proj, o_proj and the two norm gains (sweep/common/weights); fresh
+adds kv_a_proj_with_mqa (W_KVA, 2048 -> 576). A fresh prompt's float cache is the file's first T rows:
+the model is causal, so a token's latent does not depend on what follows it.
 
-THE WEIGHTS are quantised with snax_cluster's util/pack.py, INT8 per output column. The
+THE WEIGHTS are quantised with util/sim/common/pack.py per output column, INT8 or (wbits 4) INT4 in the paired
+layout the ring streams (pack._blob: B layout in blocks of 32 columns, nibble-packed). The
 input_layernorm gain is NOT folded into W_Q's rows (a real gain spans a wide range, so folded, a few
 rows would set every column's scale): the host applies it to the normed input before the input is
 quantised, as the FFN's data does. The kv_a_layernorm gain is folded as the dsv2 golden folds it,
@@ -26,7 +32,9 @@ head, all T tokens at once (every stage is per row, and the attention per query 
     q_pe      = RoPE at the token's position                                three elementwise stages
     q~        = d_port(quant_i8(q_nope, s_qn) @ W_UK,h, k_uk) (.) s_uk      512 columns
     Q8        = [quant_i8(q~, s_qt) | quant_i8(q_pe, s_qpe)]                576 columns
-    O^T, l    = the online softmax over key tiles of Bc, per lane           util/hwmodel.mla_attention
+    O^T, l    = the online softmax over key tiles of Bc, per lane           hwmodel.mla_attention
+                (fresh: a query block of `chunk` / 2 rows sweeps the key tiles up to its chunk's end, and
+                MASKED_SCORE is added to a key after a query, tile_plan)
     o~        = d_port(O, k_o) (.) c / l                                    per token
     o_h       = d_port(quant_i8(o~, s_ot) @ W_UV,h, k_uv) (.) s_uv
     part_h    = d_port(quant_i8(o_h, s_o) @ W_O[head h rows, :], k_wo)      FP16, 2048 columns
@@ -34,6 +42,14 @@ head, all T tokens at once (every stage is per row, and the attention per query 
 
 An FP16 sum depends on its order, so `reduce` takes the order the device folds in. The dequantisation
 of the output (s_o s_wo 2^k_wo per column) is applied after the reduce, as the FFN's.
+
+THE KEYS of a fresh prompt (fa_prefill_mc.py stage_kv, per 16-token tile):
+    kv        = d_port(hq @ W_KVA, k_x) (.) f_kva                           576 columns
+    c~        = rmsnorm(kv[:, :512])                                        the gain folded into W_UK, W_UV
+    k_pe      = RoPE(kv[:, 512:]) at the token's position
+    c8, kpe8  = quant_i8(c~, s_c), quant_i8(k_pe, s_kpe)                    the rows [c8 | kpe8]
+f_kva's latent columns carry a power of two that brings the latent to rms ~1: RMSNorm ignores a scale,
+and the SIMD's FP16 sum of squares over 512 columns must not overflow.
 """
 
 import hashlib
@@ -43,9 +59,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ffn",
-                                "common"))
-from ffn_data import _bf16, import_util  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "llm"))
+from model_data import import_golden, read_bf16  # noqa: E402
 
 D_QK, D_V, KV_RANK, ROPE, Q_NOPE, V_HEAD = 576, 512, 512, 64, 128, 128
 Q_HEAD = Q_NOPE + ROPE
@@ -54,24 +69,50 @@ LAYER = 1
 
 
 class FaPrefillData:
-    def __init__(self, kv_path, weights_cache, dsv2_dir, tokens=256, keys=8192, bc=256, n_calib=32,
-                 model="dsv2-lite-bf16", threads=None):
-        fp, hm, layout, pack, ref = import_util(dsv2_dir)
-        from util import model as mdl, simd
+    def __init__(self, kv_path, weights_cache, tokens=256, keys=8192, bc=256, n_calib=32,
+                 model="dsv2-lite-bf16", threads=None, fresh=False, chunk=None, rope_perm=False, mask_c=False,
+                 wbits=8, skip_masked=False):
+        fp, hm, layout, pack, ref = import_golden()
+        import dsv2_model as mdl
+        import simd
         self.fp, self.hm, self.layout, self.pack, self.ref, self.simd, self.mdl = \
             fp, hm, layout, pack, ref, simd, mdl
         self.mesh = layout.MESH
+        self.skip_masked = skip_masked
         d = self.dims = mdl.load()
         self.H, self.T, self.keys, self.bc = d.heads, int(tokens), int(keys), int(bc)
+        self.fresh = bool(fresh)
+        # rope_perm: every rotary part's 64 columns as the pairs' first elements, then their second (0, 2, .., 62,
+        # 1, 3, .., 63), in W_q's and W_KVA's columns and the RoPE tables alike, so a pair's partner sits 32 columns
+        # away instead of next to it. q_pe and k_pe share the order, so their dot product, and every score, keeps
+        # its value; the swap RoPE needs moves whole halves instead of adjacent FP16 values (fa_prefill_mc.py)
+        self.rope_perm = bool(rope_perm)
+        if self.rope_perm and not self.fresh:
+            raise ValueError("rope_perm: needs fresh (a cache holds its keys' rotary part in pair order)")
+        self.rp = (np.concatenate([np.arange(0, ROPE, 2), np.arange(1, ROPE, 2)]) if self.rope_perm
+                   else np.arange(ROPE))
+        # mask_c: the causal mask as the score matmul's INT32 C (mask_bias where masked, mask_bias_patterns), added
+        # before the D port's conversion: a masked score is RNE(S * 2^-k_s + MASKED_SCORE), one rounding, where the
+        # SIMD add makes it RNE(RNE(S * 2^-k_s) + MASKED_SCORE). Either is P = 0 after the softmax's exponential
+        self.mask_c = bool(mask_c)
+        if self.mask_c and not self.fresh:
+            raise ValueError("mask_c: needs fresh (a cache's sweep has no causal mask)")
         if keys % bc or bc % 16:
             raise ValueError(f"{keys} keys are not whole tiles of {bc} (a multiple of 16)")
+        if self.fresh:
+            # a query block is a cluster's rows of a chunk; both blocks of a chunk sweep every tile up to its end, so a
+            # tile may straddle the two blocks (its keys past a block's rows are masked)
+            self.C = int(chunk or 0)
+            if self.keys != self.T or not self.C or self.T % self.C or self.C % bc:
+                raise ValueError(f"fresh: keys {keys} must be the {self.T} tokens, chunk {chunk} a divisor of them "
+                                 f"that is whole tiles of {bc}")
         z = np.load(kv_path)
         if z["c_unit"].shape[0] < keys or self.T > keys:
             raise ValueError(f"{kv_path}: {z['c_unit'].shape[0]} tokens; need {keys} keys and "
                              f"{self.T} query tokens")
         self.c_unit = z["c_unit"][:keys].astype(np.float32)
         self.kpe = z["kpe"][:keys].astype(np.float32)
-        self.pos = np.arange(keys - self.T, keys)
+        self.pos = np.arange(0, self.T) if self.fresh else np.arange(keys - self.T, keys)
         x1 = z["x1"][self.pos].astype(np.float32)
         # ---- the checkpoint's layer-1 attention ----------------------------------------------
         with open(os.path.join(weights_cache, "manifest.json")) as f:
@@ -79,7 +120,7 @@ class FaPrefillData:
         t = m["tensors"]
         base = os.path.join(weights_cache, m["repo"].replace("/", "__"))
         pre = f"model.layers.{LAYER}."
-        rd = lambda n: _bf16(os.path.join(base, pre + n + ".bin"), t[pre + n]["shape"])
+        rd = lambda n: read_bf16(os.path.join(base, pre + n + ".bin"), t[pre + n]["shape"])
         self.in_norm = rd("input_layernorm.weight")
         self.kv_norm = rd("self_attn.kv_a_layernorm.weight")
         wq = rd("self_attn.q_proj.weight").T                          # [2048, 3072]
@@ -89,11 +130,26 @@ class FaPrefillData:
         self.w_uk = [wkvb[:, h * (Q_NOPE + V_HEAD):h * (Q_NOPE + V_HEAD) + Q_NOPE] for h in range(H)]
         self.w_uv = [wkvb[:, h * (Q_NOPE + V_HEAD) + Q_NOPE:(h + 1) * (Q_NOPE + V_HEAD)]
                      for h in range(H)]
-        self.wq = pack.pack("wq", wq)
-        self.wuk = pack.pack_heads("wuk", [w.T for w in self.w_uk], col_gain=self.kv_norm)
-        self.wuv = pack.pack_heads("wuv", self.w_uv, row_gain=self.kv_norm)
-        self.wo = pack.pack("wo", wo)
+        wq_dev = wq.copy() if self.rope_perm else wq
+        if self.rope_perm:
+            for h in range(H):
+                pe = h * Q_HEAD + Q_NOPE
+                wq_dev[:, pe:pe + ROPE] = wq[:, pe + self.rp]
+        if wbits not in (8, 4):
+            raise ValueError(f"wbits {wbits}: the weights are INT8 or INT4")
+        self.wbits = wbits
+        self.wq = pack.pack("wq", wq_dev, wbits=wbits)
+        self.wuk = pack.pack_heads("wuk", [w.T for w in self.w_uk], col_gain=self.kv_norm, wbits=wbits)
+        self.wuv = pack.pack_heads("wuv", self.w_uv, row_gain=self.kv_norm, wbits=wbits)
+        self.wo = pack.pack("wo", wo, wbits=wbits)
         self._float = dict(wq=wq, wo=wo)
+        if self.fresh:
+            wkva = rd("self_attn.kv_a_proj_with_mqa.weight").T              # [2048, 576]
+            wkva_dev = wkva.copy() if self.rope_perm else wkva
+            if self.rope_perm:
+                wkva_dev[:, KV_RANK:] = wkva[:, KV_RANK + self.rp]
+            self.wkva = pack.pack("wkva", wkva_dev, wbits=wbits)
+            self._float["wkva"] = wkva
         # ---- the D-port shifts: no INT8 GEMM of the depth can overflow after them ---------------
         s = fp.d_shift_for_depth
         self.k_x, self.k_uk, self.k_uv, self.k_s = s(HIDDEN), s(Q_NOPE), s(KV_RANK), s(D_QK)
@@ -104,6 +160,9 @@ class FaPrefillData:
         # ---- the device's arithmetic -----------------------------------------------------------
         self.hq = np.stack([self._input(x) for x in x1])              # [T, 2048] int8
         self._cos_sin()
+        if self.fresh:
+            self._device_kv()
+            self._tile_plans()
         self._heads = {}
         self.x1 = x1
         # a head's chain takes about five seconds: kept on disk, keyed by everything it depends on
@@ -112,7 +171,10 @@ class FaPrefillData:
             src = f.read()
         self._cache_dir = os.path.join(os.path.dirname(os.path.abspath(kv_path)), "fa_prefill_golden")
         self._cache_key = hashlib.sha1(repr((st.st_size, int(st.st_mtime), model, self.T, self.keys, self.bc,
-                                             int(n_calib), hashlib.sha1(src).hexdigest())).encode()
+                                             int(n_calib), self.fresh, getattr(self, "C", None), self.rope_perm,
+                                             self.mask_c, self.wbits,
+                                             hashlib.sha1(src).hexdigest()) + ((1,) if self.skip_masked else ())
+                                             ).encode()
                                        ).hexdigest()[:16]
 
     # ---- the input and the float reference ------------------------------------------------------
@@ -146,9 +208,10 @@ class FaPrefillData:
             qt, qpe, qn, _ = self._float_query(x1[i], int(self.pos[i]))
             a_xg = max(a_xg, amax(self._gained(x1[i])))
             a_qn, a_qt, a_qpe = max(a_qn, amax(qn)), max(a_qt, amax(qt)), max(a_qpe, amax(qpe))
-            sc = (qt @ self.c_unit.T + qpe @ self.kpe.T) * d.softmax_scale     # [H, keys]
+            kk = int(self.pos[i]) + 1 if self.fresh else self.keys        # fresh: causal, the keys up to the token
+            sc = (qt @ self.c_unit[:kk].T + qpe @ self.kpe[:kk].T) * d.softmax_scale     # [H, keys]
             p = self.ref.softmax(sc)
-            ot = (p @ self.c_unit).astype(np.float32)                         # [H, 512] unit latent
+            ot = (p @ self.c_unit[:kk]).astype(np.float32)                    # [H, 512] unit latent
             o = np.stack([(ot[h] * self.kv_norm) @ self.w_uv[h] for h in range(self.H)])
             a_ot, a_o = max(a_ot, amax(ot)), max(a_o, amax(o))
             if i == self.T - 1:
@@ -177,6 +240,8 @@ class FaPrefillData:
         self.sin_sgn = np.empty((self.T, ROPE), dtype=F16)
         self.sin_sgn[:, 0::2] = -sin
         self.sin_sgn[:, 1::2] = sin
+        if self.rope_perm:
+            self.cos_rep, self.sin_sgn = self.cos_rep[:, self.rp], self.sin_sgn[:, self.rp]
 
     # ---- the device's arithmetic, one head at a time -------------------------------------------
     @staticmethod
@@ -186,18 +251,122 @@ class FaPrefillData:
         return np.rint(np.asarray(a, dtype=np.float64) @ np.asarray(b, dtype=np.float64)).astype(np.int64)
 
     def rope(self, x16):
-        """RoPE of [T, 64] FP16 rows at their positions: x cos + swap(x) sin_signed, one rounding a stage."""
+        """RoPE of [T, 64] FP16 rows at their positions: x cos + swap(x) sin_signed, one rounding a stage. The swap
+        exchanges each pair's two values: neighbours, or under rope_perm the two halves."""
         fp = self.fp
         xs = np.empty_like(x16)
-        xs[:, 0::2], xs[:, 1::2] = x16[:, 1::2], x16[:, 0::2]
+        if self.rope_perm:
+            h = ROPE // 2
+            xs[:, :h], xs[:, h:] = x16[:, h:], x16[:, :h]
+        else:
+            xs[:, 0::2], xs[:, 1::2] = x16[:, 1::2], x16[:, 0::2]
         return fp.add16(fp.mul16(x16, self.cos_rep), fp.mul16(xs, self.sin_sgn))
+
+    # ---- a fresh prompt's keys and its causal sweep -------------------------------------------------
+    def kva_scale(self):
+        """Dequantisation of W_KVA's 576 columns, FP16; the latent's 512 carry c_fold."""
+        s = np.asarray(self.hm.dequant_scale(self.s_x.s, self.wkva.s, self.k_x), dtype=np.float64)
+        s[:KV_RANK] *= self.c_fold
+        return s.astype(np.float16)
+
+    def _device_kv(self):
+        """The prompt's keys as stage_kv makes them (THE KEYS): kv16, c_unit16, kpe16, and the rows c8 | kpe8."""
+        fp, hm = self.fp, self.hm
+        raw = fp.d_port(self._mm(self.hq, self.wkva.q), self.k_x)
+        lat = np.asarray(fp.mul16(raw[:, :KV_RANK], np.asarray(
+            hm.dequant_scale(self.s_x.s, self.wkva.s[:KV_RANK], self.k_x), dtype=np.float16)[None, :]), dtype=np.float64)
+        rms = float(np.max(np.sqrt(np.mean(lat ** 2, axis=1))))
+        self.c_fold = float(2.0 ** -np.ceil(np.log2(rms))) if rms > 0 else 1.0
+        self.kv16 = fp.mul16(raw, self.kva_scale()[None, :])
+        if not np.all(np.isfinite(self.kv16)):
+            raise FloatingPointError("the KV projection overflows FP16")
+        self.c_unit16 = hm.rmsnorm(self.kv16[:, :KV_RANK])
+        if not np.all(np.isfinite(self.c_unit16)):
+            raise FloatingPointError("the latent's RMSNorm overflows FP16")
+        self.kpe16 = self.rope(np.ascontiguousarray(self.kv16[:, KV_RANK:]))
+        self.c8 = fp.quant_i8(self.c_unit16, self.s_c.inv)
+        self.kpe8 = fp.quant_i8(self.kpe16, self.s_kpe.inv)
+        self.rows = np.concatenate([self.c8, self.kpe8], axis=1).astype(np.int8)
+
+    def _tile_plans(self):
+        """Per query block (r0 a multiple of chunk / 2, a cluster's rows of a chunk): the key tiles it sweeps -- every
+        tile up to its chunk's end, so a chunk's two blocks sweep the same tiles; skip_masked: every tile up to the
+        block's own last row, so no tile is wholly masked -- and its masked (tile j, query tile u) pairs, each a
+        pattern of mask_patterns: FP16 [bc, 16], 0 or MASKED_SCORE where the key comes after the query (S^T: a key a
+        row, a query a lane)."""
+        R, bc = self.C // 2, self.bc
+        self.mask_patterns, self._plans = [], {}
+        for r0 in range(0, self.T, R):
+            nt = -(-(r0 + R) // bc) if self.skip_masked else (r0 // self.C + 1) * self.C // bc
+            plan = {}
+            for j in range(nt):
+                for u in range(R // 16):
+                    keys = j * bc + np.arange(bc)[:, None]
+                    qs = r0 + 16 * u + np.arange(16)[None, :]
+                    m = np.where(keys > qs, np.float16(self.hm.MASKED_SCORE), np.float16(0)).astype(np.float16)
+                    if not np.any(m):
+                        continue
+                    for i, p in enumerate(self.mask_patterns):
+                        if np.array_equal(p, m):
+                            plan[(j, u)] = i
+                            break
+                    else:
+                        plan[(j, u)] = len(self.mask_patterns)
+                        self.mask_patterns.append(m)
+            self._plans[r0] = (nt, plan)
+
+    @property
+    def mask_bias(self):
+        """(mask_c) The INT32 bias of a masked score: MASKED_SCORE at the D port's scale 2^k_s."""
+        return int(round(self.hm.MASKED_SCORE * 2.0 ** self.k_s))
+
+    def mask_bias_patterns(self):
+        """(mask_c) mask_patterns as the score matmul's C: INT32 [bc, 16], 0 or mask_bias."""
+        return [np.where(m != 0, self.mask_bias, 0).astype(np.int32) for m in self.mask_patterns]
+
+    def tile_plan(self, r0):
+        """(fresh) (key tiles, {(j, u): mask pattern}) of the query block whose first row is r0."""
+        return self._plans[r0]
+
+    def wblob(self, q):
+        """Weight columns as the ring streams them: B layout (INT8), or wbits 4 the paired INT4 layout."""
+        return self.pack._blob(q, self.wbits, self.mesh).astype(np.int8)
+
+    def kva_chunks(self):
+        """W_KVA as the ring streams it (fresh): blocks of 64 columns."""
+        return [self.wblob(self.wkva.q[:, 64 * i:64 * (i + 1)]) for i in range(D_QK // 64)]
+
+    def kva_cols(self, c0, c1):
+        """W_KVA's columns c0 .. c1 - 1 as one ring chunk, B layout (fresh, params kv_cols: a chip's slice)."""
+        return self.wblob(self.wkva.q[:, c0:c1])
+
+    def kv_piece(self, t0):
+        """Tokens t0 .. t0 + 15 as stage_kv multicasts them: their key rows (the A layout of [16, 576], one 16-row
+        block of the key tiles), then their value columns (the A layout of c8^T [512, 16])."""
+        lay, mesh = self.layout, self.mesh
+        k = lay.to_a(self.rows[t0:t0 + 16], mesh)
+        v = lay.to_a(np.ascontiguousarray(self.c8[t0:t0 + 16].T), mesh)
+        return np.concatenate([k, v]).astype(np.int8)
 
     def attention(self, q8):
         """hwmodel.mla_attention for the lanes of q8 [L, 576] (one query a lane, independent) over
-        every key, in tiles of bc: (O^T int64 [512, L], l FP16 [L])."""
+        every key, in tiles of bc: (O^T int64 [512, L], l FP16 [L]). Fresh: lane t is token t, and each
+        query block sweeps its tile_plan."""
+        if not self.fresh:
+            return self._sweep(q8, self.keys // self.bc, {})
+        R, L = self.C // 2, q8.shape[0]
+        o = np.zeros((D_V, L), dtype=np.int64)
+        l16 = np.zeros(L, dtype=np.float16)
+        for r0 in range(0, L, R):
+            nt, plan = self.tile_plan(r0)
+            o[:, r0:r0 + R], l16[r0:r0 + R] = self._sweep(q8[r0:r0 + R], nt, plan)
+        return o, l16
+
+    def _sweep(self, q8, nt, plan):
+        """The online softmax of the lanes of q8 over key tiles 0 .. nt - 1, plan's masks added to the scores."""
         hm, fp, simd = self.hm, self.fp, self.simd
         F16, F32, F64 = np.float16, np.float32, np.float64
-        bc, nt, L = self.bc, self.keys // self.bc, q8.shape[0]
+        bc, L = self.bc, q8.shape[0]
         a32 = F32(self.a_exp)
         Q = q8.astype(F64).T                                           # [576, L]
         K8, V8 = self.rows.astype(F64), self.c8.astype(F64)
@@ -209,6 +378,15 @@ class FaPrefillData:
             S16 = fp.d_port(S, self.k_s)
             if not np.all(np.isfinite(S16)):
                 raise FloatingPointError("a score overflows FP16 after the D-port shift")
+            for u in range(L // 16):
+                pi = plan.get((j, u))
+                if pi is None:
+                    continue
+                if self.mask_c:
+                    bias = np.where(self.mask_patterns[pi] != 0, self.mask_bias, 0)
+                    S16[:, 16 * u:16 * (u + 1)] = fp.d_port(S[:, 16 * u:16 * (u + 1)] + bias, self.k_s)
+                else:
+                    S16[:, 16 * u:16 * (u + 1)] = fp.add16(S16[:, 16 * u:16 * (u + 1)], self.mask_patterns[pi])
             rmax = simd.reduce_lanewise(S16, simd.MAX)
             mnew = simd.reduce_lanewise(np.stack([rmax, m16]), simd.MAX)
             corr16 = hm.exp16(fp.add16(m16, -mnew), a32)
@@ -290,6 +468,11 @@ class FaPrefillData:
         """One row tile of a per-column factor in the D layout: `vec` repeated on 16 rows."""
         return self.layout.to_d(np.tile(np.asarray(vec, dtype=np.float16), (16, 1)), self.mesh)
 
+    def scale_tile_a(self, vec, rows):
+        """A per-column factor in the A layout of `rows` rows (a multiple of 16): `vec` repeated on every row, as
+        the D -> A reshape leaves the values it scales (fa_prefill_mc.py dq_fused)."""
+        return self.layout.to_a(np.tile(np.asarray(vec, dtype=np.float16), (rows, 1)), self.mesh)
+
     def rope_tables(self, r0, rows):
         """cos and sin_signed of tokens r0 .. r0 + rows - 1 in the D layout (FP16 [rows, 64])."""
         lay = self.layout
@@ -301,16 +484,21 @@ class FaPrefillData:
         """Rows r0 .. r0 + rows - 1 of the quantised input in the A layout (INT8)."""
         return self.layout.to_a(self.hq[r0:r0 + rows], self.mesh).astype(np.int8)
 
-    def weight_chunks(self, h):
+    def weight_chunks(self, h, wo_block=None):
         """Head h's weights as the ring streams them, in order: [(name, int8 bytes)]: W_q in three
-        blocks of 64 columns, W_UK, W_UV, W_O in two blocks of 1024 columns, B layout."""
-        lay, mesh = self.layout, self.mesh
+        blocks of 64 columns, W_UK, W_UV, W_O in two blocks of 1024 columns, B layout. wo_block q (W_O by
+        columns): W_O's columns 128 q .. 128 q + 127 over every head's rows, in two blocks of 64."""
+        b = self.wblob
         wq = self.wq.q[:, h * Q_HEAD:(h + 1) * Q_HEAD]
-        wo = self.wo.q[h * V_HEAD:(h + 1) * V_HEAD, :]
-        out = [(f"wq{i}", lay.to_b(wq[:, 64 * i:64 * (i + 1)], mesh).astype(np.int8)) for i in range(3)]
-        out.append(("wuk", lay.to_b(self.wuk.q[h], mesh).astype(np.int8)))
-        out.append(("wuv", lay.to_b(self.wuv.q[h], mesh).astype(np.int8)))
-        out += [(f"wo{i}", lay.to_b(wo[:, 1024 * i:1024 * (i + 1)], mesh).astype(np.int8)) for i in range(2)]
+        out = [(f"wq{i}", b(wq[:, 64 * i:64 * (i + 1)])) for i in range(3)]
+        out.append(("wuk", b(self.wuk.q[h])))
+        out.append(("wuv", b(self.wuv.q[h])))
+        if wo_block is None:
+            wo = self.wo.q[h * V_HEAD:(h + 1) * V_HEAD, :]
+            out += [(f"wo{i}", b(wo[:, 1024 * i:1024 * (i + 1)])) for i in range(2)]
+        else:
+            c0 = 128 * wo_block
+            out += [(f"wo{i}", b(self.wo.q[:, c0 + 64 * i:c0 + 64 * (i + 1)])) for i in range(2)]
         return out
 
     def cache_tiles(self):
@@ -348,6 +536,12 @@ class FaPrefillData:
             acc = add16(acc, self.head(h)["part"][r0:r0 + rows])
         return acc
 
+    def y_cols(self, r0, rows):
+        """Rows r0 .. r0 + rows - 1 of y as W_O by columns makes it: every head's o8 side by side through all of W_O,
+        one INT32 sum over the full depth, off the D port. FP16 [rows, 2048]."""
+        o8 = np.concatenate([self.head(h)["o8"][r0:r0 + rows] for h in range(self.H)], axis=1)
+        return self.fp.d_port(self._mm(o8, self.wo.q), self.k_wo)
+
     def y16(self, y_raw):
         return self.fp.mul16(y_raw, self.out_scale()[None, :])
 
@@ -358,8 +552,16 @@ class FaPrefillData:
         cos = float(y @ ref / max(np.linalg.norm(y) * np.linalg.norm(ref), 1e-30))
         rel = float(np.linalg.norm(y - ref) / max(np.linalg.norm(ref), 1e-30))
         sc = lambda q: f"{q.s:.4g}"
-        return [f"DeepSeek-V2-Lite layer {LAYER} MLA attention, the last {self.T} of {self.keys} cached "
-                f"tokens against all {self.keys} keys, {self.H} heads, INT8 per column",
+        if self.fresh:
+            a, b = np.asarray(self.c_unit16, dtype=np.float64).ravel(), self.c_unit.astype(np.float64).ravel()
+            ccos = float(a @ b / max(np.linalg.norm(a) * np.linalg.norm(b), 1e-30))
+            what = (f"a fresh prompt of {self.T} tokens (causal, no cache): the keys made on the device (W_KVA, "
+                    f"RMSNorm, RoPE; latent vs the model's cosine {ccos:.5f}, c_fold {self.c_fold:g}), "
+                    f"{len(self.mask_patterns)} mask patterns, {self.H} heads, INT{self.wbits} per column")
+        else:
+            what = (f"the last {self.T} of {self.keys} cached tokens against all {self.keys} keys, {self.H} heads, "
+                    f"INT{self.wbits} per column")
+        return [f"DeepSeek-V2-Lite layer {LAYER} MLA attention, {what}",
                 f"D-port shifts k_x={self.k_x} k_uk={self.k_uk} k_uv={self.k_uv} k_s={self.k_s} "
                 f"k_o={self.k_o} k_wo={self.k_wo}; scales s_x={sc(self.s_x)} s_qn={sc(self.s_qn)} "
                 f"s_qt={sc(self.s_qt)} s_qpe={sc(self.s_qpe)} s_c={sc(self.s_c)} s_ot={sc(self.s_ot)} "

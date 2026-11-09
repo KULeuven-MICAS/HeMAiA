@@ -6,18 +6,17 @@
 """The shared driver of the fa workloads (workloads/fa/<model>/<variant>/): DeepSeek-V2-Lite's
 layer-1 MLA attention for one decode token over a REAL 8K-token latent cache, split by key over
 every cluster of the 16 + 4 chiplet platform (the platform, the rings, the anchors, the sync arm,
-the broadcast and the reduce are ffn/common/chiplet_mc.py's; the data and the golden are
+the broadcast and the reduce are util/sim/multichip/chiplet_mc.py's; the data and the golden are
 fa_data.py's).
 
 THE CACHE STREAMS. The cache lives in HBM: every cluster's shard of key tiles in its memory chip,
 tile-major -- its K tiles (the key copy's rows, 64 keys x 576 B) then its V tiles (the value
 copy's 512 x 64 B columns, as the attention reads them) -- and goes through the cluster's weight
-ring like a weight (plain INT8; weight_crest, kept but not in the ablation, would push CREST
-records expanded in place by the xDMA). Each tile
+ring like a weight (plain INT8). Each tile
 is one chunk: K0..K(n-1) for pass 1, then V0..V(n-1) for pass 2, so the V tiles stream in while
 the clusters exchange their maxima.
 
-THE SPLIT (dsv2_datagen.split_attention_golden, mode key). The query (Q8, BR lanes x 576 B) is
+THE SPLIT (by key; its golden is fa_data.FaData.golden). The query (Q8, BR lanes x 576 B) is
 broadcast into every cluster. Pass 1: per K tile S^T = K Q^T (gemm_fa_qk) and the FA softmax
 with its own seed -- the shard's row maximum. The maxima meet: each chip's two on its cluster 0
 (the softmax kernel run over the two beats as a lanewise max), then across the chips -- m*, the
@@ -38,11 +37,11 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))     # workloads/common
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "multichip"))
+sys.path.insert(0, os.path.join(os.path.abspath(__file__).split("/target/sw/host/")[0], "util", "sim", "common"))
 from driver import repo_root, run_driver  # noqa: E402
 REPO = repo_root(__file__)
 sys.path.insert(0, f"{REPO}/target/sw/host/runtime/libbingo/mini_compiler")
-sys.path.insert(0, os.path.join(HERE, "..", "..", "ffn", "common"))
 sys.path.insert(0, HERE)
 
 import _bingo_paths  # noqa: F401,E402
@@ -108,7 +107,7 @@ class FaBuild(cm.ChipletBuild):
         kv = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
                                                   "dsv2_l1_kv_8193.npz"))
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = fa_data.FaData(kv, cache, args.dsv2_dir, keys=self.keys)
+        d = self.d = fa_data.FaData(kv, cache, keys=self.keys)
         # every cluster a contiguous shard of NT tiles, in cluster order
         self.shards = {g: (g * NT, NT) for g in range(self.G)}
         self.gold = d.golden(self.shards, {k: self.gs(k) for k in self.chips},
@@ -119,7 +118,7 @@ class FaBuild(cm.ChipletBuild):
               f"{[f'{k:02x}' for k in self.order]}")
         self._stage()
         self.make_streams()
-        self.make_rings(self.cimg)
+        self.make_rings()
         # ---- the symmetric buffer of every cluster -----------------------------------------
         # the flags and the arenas on whole transfer units (64 B)
         self.OFF_X, self.OFF_FLAG = 0, QB
@@ -139,7 +138,7 @@ class FaBuild(cm.ChipletBuild):
     def _stage(self):
         st, d, T = self.st, self.d, self.TAG
         self.h_q8 = st.put(f"{T}_q8", "int8_t", d.q8_a().reshape(-1))
-        self.img, self.cimg = {}, {}
+        self.img = {}
         for g, (t0, nt) in self.shards.items():
             k = self.chip(g)
             tl = d.tiles(t0, nt)
@@ -147,11 +146,6 @@ class FaBuild(cm.ChipletBuild):
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
             hd = st.put_hbm(f"{T}_kv_g{g}", img, mem_chip=loc)
             self.img[g] = hd
-            if self.crest:
-                cap = img.nbytes + 64 * 1024
-                self.cimg[g] = (hd.address, img.view(np.uint8).reshape(-1),
-                                st.put_hbm(f"{T}_ckv_g{g}", np.zeros(cap, np.uint8), mem_chip=loc),
-                                cap)
 
     # ---- the ring loads -------------------------------------------------------------------
     def _load(self, g, name, off, nbytes, deps=()):
@@ -160,12 +154,11 @@ class FaBuild(cm.ChipletBuild):
         k, c = self.chip(g), self.c(g)
         ls = self.ls[g]
         si, slab, war = ls.take(nbytes)
-        ld, ex, _ = ls.rings.load_chunk(
+        ld, _ = ls.rings.load_chunk(
             lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
             f"Ld_{name}", src=self.img[g].address + off, nbytes=nbytes, slab=slab, war=war,
-            deps=deps, dm=self.roles["dm"], xdma=self.roles["xdma"], slab_bytes=ls.slab_bytes,
-            expand_name=f"Ex_{name}")
-        return ld, ld if ex is None else ex, si, slab
+            deps=deps, dm=self.roles["dm"])
+        return ld, si, slab
 
     def _l1(self, g, name, nbytes):
         return self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{self.TAG}_{name}", nbytes)
@@ -188,7 +181,7 @@ class FaBuild(cm.ChipletBuild):
             p8 = self._l1(g, "p8a", FA.p8_bytes(BC, BR, FA.EXACT))
             sm = []
             for i in range(NT):
-                _, ready, si, slab = self._load(g, f"K{i}_g{g}", i * KB, KB)
+                ready, si, slab = self._load(g, f"K{i}_g{g}", i * KB, KB)
                 qk = self.node(k, c, gemm, f"qk{i}_g{g}", "__snax_bingo_kernel_gemm_fa_qk",
                                SnaxBingoKernelGemmFaQkArgs(
                                    slab, q8, 0, at_offset(s16, i * SB + BEAT),
@@ -283,7 +276,7 @@ class FaBuild(cm.ChipletBuild):
                 first, last = i == 0, i == NT - 1
                 deps = [marr[(k, c)]] if i >= pre else []
                 deps += [bm[k]] if bm and c == 0 and i == 0 else []
-                ld, ready, si, slab = self._load(g, f"V{i}_g{g}", NT * KB + i * VB, VB, deps)
+                ld, si, slab = self._load(g, f"V{i}_g{g}", NT * KB + i * VB, VB, deps)
                 if i == pre - 1:
                     for t in [marr[(k, c)]] + (duties if (k, c) == (R, 0) else []) + \
                             ([mbar[k]] if mbar and c == 0 else []):
@@ -302,7 +295,7 @@ class FaBuild(cm.ChipletBuild):
                                         N=BR // 16, flags=flags,
                                         corr_addr=0 if first else at_offset(p8[i % 2], corr),
                                         d_shift=d.k_o if last else 0),
-                                    [sm[i], ready] + pv[-1:]))
+                                    [sm[i], ld] + pv[-1:]))
                 self.ls[g].release(si, pv[i])
             lcp = self.node(k, c, dm, f"l_cp_g{g}", "__snax_bingo_kernel_idma_1d_copy",
                             SnaxBingoKernelIdma1dCopyArgs(self.sv(k, c, self.OFF_A2 + LRUN),
@@ -338,7 +331,7 @@ class FaBuild(cm.ChipletBuild):
 
 def _app_name(S):
     return (f"DeepSeek-V2-Lite layer 1 MLA attention, one token over {S.keys} keys, "
-            f"{len(S.chips)} chips x {S.NC} clusters, crest={int(S.crest)} "
+            f"{len(S.chips)} chips x {S.NC} clusters, "
             f"bcast={S.bcast_impl} reduce={S.reduce_impl} sync={S.sync}")
 
 
