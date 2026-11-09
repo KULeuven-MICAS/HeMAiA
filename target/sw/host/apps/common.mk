@@ -492,7 +492,9 @@ endif
 # the list) are generated.
 PER_CHIP_IDS  := $(if $(OFFLOAD_H),$(wildcard $(dir $(OFFLOAD_H))per_chip_ids))
 PER_CHIP_TOOL  = $(abspath $(HOST_DIR)/apps/per_chip_image.py)
-PER_CHIP_IMAGE = python3 $(PER_CHIP_TOOL) --ids $(PER_CHIP_IDS) \
+# PER_CHIP_JOBS: at most this many chiplets compile at once (default: one a core). A workload whose header makes each
+# compile large sets it in its Makefile: the compiles of a whole-layer graph together exceed the machine's memory.
+PER_CHIP_IMAGE = python3 $(PER_CHIP_TOOL) --ids $(PER_CHIP_IDS) $(if $(PER_CHIP_JOBS),--jobs $(PER_CHIP_JOBS)) \
                  --cc "$(RISCV_CC)" --cflags "$(RISCV_CFLAGS)" --ldflags "$(RISCV_LDFLAGS)" \
                  --objcopy "$(RISCV_OBJCOPY)"
 
