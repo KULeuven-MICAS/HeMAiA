@@ -147,7 +147,7 @@ COPIES = ("__snax_bingo_kernel_idma_1d_copy", "__snax_bingo_kernel_idma_2d_copy"
 
 class _AttnHooks:
     """The attention block in the layer: its window opened by the layer, x made by the layer's input norm, y kept in the
-    root's L3, its checks the layer's (made after the layer's end anchor: BLOCK._checks)."""
+    root's L3, its checks the layer's (made after the layer's end stamp: BLOCK._checks)."""
     x_on_host = False
     y_to_hbm = False
 
@@ -169,7 +169,7 @@ class _AttnHooks:
         self.layer.attn_fin = dict(zip(self.chips, after))
 
     def _checks(self):
-        """Made by the layer once its end anchor exists (a stage check copies after it)."""
+        """Made by the layer once its end stamp exists (a stage check copies after it)."""
 
     def run_checks(self, checks):
         self.layer.part_checks += list(checks)
@@ -370,7 +370,7 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the window and the input norm --------------------------------------------------------------------------------
     def open_window(self, extra):
-        """Before the window: the layer's constants into the root's L1, its FP16 a_row zeroed. The start anchor after
+        """Before the window: the layer's constants into the root's L1, its FP16 a_row zeroed. The start stamp after
         every chip's set-up, the attention's prefetchers behind it, the input norm. Returns {chip: the start}."""
         b = self.b
         pre = [self._copy("c_ld", self.h_c, b["c"], self.CB, []),
@@ -387,7 +387,7 @@ class LayerBuild(cm.ChipletBuild):
                                                                     SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), prev)]
                 pre += prev
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])] + pre
-        self.start = self.anchor("start", ends)
+        self.start = self.stamp("start", ends)
         self.go = {k: self.start for k in self.chips}
         for k in self.chips:
             self.edge(self.start, self.attn.prefetch[k])
@@ -470,7 +470,7 @@ class LayerBuild(cm.ChipletBuild):
         return st
 
     def end_window(self, after):
-        """The end anchor after `after` and (attn ks) the attention's append."""
+        """The end stamp after `after` and (attn ks) the attention's append."""
         super().end_window(list(after) + self.kv_app)
 
     def run_checks(self, checks):
@@ -520,7 +520,7 @@ class LayerBuild(cm.ChipletBuild):
         self.ffn.build()
 
     def all_checks(self, ffn_checks):
-        """The attention's checks (made now, after the end anchor), the layer's, the FFN's; then compared."""
+        """The attention's checks (made now, after the end stamp), the layer's, the FFN's; then compared."""
         A, R = self.attn, self.ROOT
         A.end, A.check_copies = self.end, self.check_copies
         A.BLOCK._checks(A)

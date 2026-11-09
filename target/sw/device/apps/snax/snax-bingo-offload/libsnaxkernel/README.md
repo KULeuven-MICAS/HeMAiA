@@ -20,7 +20,7 @@ libsnaxkernel/
 │                              the active cluster cfg (validate_shapes.py --emit);
 │                              exposes DATA_H so every kernel TU depends on it
 ├── offload_sw_kernels/     — cluster-level kernels (bingo-sw flow)
-│   ├── basic.h             — dummy / sync_probe / csr / check_results /
+│   ├── basic.h             — dummy / stamp / csr / check_results /
 │   │                          check_results_full / load_compute_store /
 │   │                          double_buffer
 │   ├── idma.h              — idma_1d_copy
@@ -28,7 +28,7 @@ libsnaxkernel/
 │   └── gemm.h              — versacore_load_compute_store /
 │                              minimal_cfg_start_gemm_and_wait
 └── offload_hw_kernels/     — core-level kernels (bingo-hw flow)
-    ├── basic.h             — dummy / sync_probe / sync_mark / chip_barrier / exit
+    ├── basic.h             — dummy / stamp / chip_barrier / exit
     ├── idma.h              — iDMA 1d/2d copies, broadcast, flagged put/fetch with
     │                          wait_flags, pairwise swap, slot copy, ring load
     ├── xdma.h              — xDMA data movement: 1d/6d copies, memset

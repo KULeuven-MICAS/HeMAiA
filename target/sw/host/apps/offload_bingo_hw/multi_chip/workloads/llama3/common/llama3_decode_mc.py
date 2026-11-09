@@ -6,7 +6,7 @@
 """Llama-3-8B's grouped-query attention for ONE decode token over a KV cache of `ctx` positions, on the prefill's
 head-parallel mapping (llama3_attn_mc.py): a query head a cluster, a key/value group on a column's chip pair (x, 2 y),
 (x, 2 y + 1), each chip of the pair projecting half of the group's K (cluster 0) and half of its V (cluster 1), whole
-RoPE chunk pairs (kv_split, rope_pairs chunks). The platform, the rings, the anchors and the checks are chiplet_mc.py's;
+RoPE chunk pairs (kv_split, rope_pairs chunks). The platform, the rings, the stamps and the checks are chiplet_mc.py's;
 the data and the golden are LlamaDecodeData's below (LlamaAttnData over a fresh causal prompt of ctx + 1 positions, the
 decode token the last).
 

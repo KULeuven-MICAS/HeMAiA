@@ -61,7 +61,7 @@ from bingo_kernel_args import (  # noqa E402
     BingoKernelArgs,
     HostBingoKernelChipBarrierArgs,
     SnaxBingoKernelCerfStaticArgs,
-    SnaxBingoKernelSyncProbeArgs,
+    SnaxBingoKernelStampArgs,
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
@@ -165,8 +165,8 @@ def main():
                     HostCerfNodeNopArgs())
 
     def probe(chip, name, stamp=0):
-        return node(chip, 0, DM_CORE, name, "__snax_bingo_kernel_sync_probe",
-                    SnaxBingoKernelSyncProbeArgs(stamp_buf=stamp, slot=0))
+        return node(chip, 0, DM_CORE, name, "__snax_bingo_kernel_stamp",
+                    SnaxBingoKernelStampArgs(stamp_buf=stamp, slot=0))
 
     # Every chiplet clears its chip-barrier state before any chiplet's first barrier: all the
     # inits before one join on 0x00, which starts everything else.
@@ -187,11 +187,11 @@ def main():
         dfg.bingo_add_edge(cur, src)
         fork = dfg.bingo_conditional_fork(src, {"mode": "static", "write_mask": 1 if on else 0})
         core = 0 if device else DM_CORE
-        n = node(chip, 0, core, f"{arm}_node_{r}", "__snax_bingo_kernel_sync_probe",
-                 SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0))
+        n = node(chip, 0, core, f"{arm}_node_{r}", "__snax_bingo_kernel_stamp",
+                 SnaxBingoKernelStampArgs(stamp_buf=0, slot=0))
         fork.branch([n])
-        after = node(chip, 0, core, f"{arm}_after_{r}", "__snax_bingo_kernel_sync_probe",
-                     SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0))
+        after = node(chip, 0, core, f"{arm}_after_{r}", "__snax_bingo_kernel_stamp",
+                     SnaxBingoKernelStampArgs(stamp_buf=0, slot=0))
         fork.combine(after, inputs=[n], kind="sum")
         rows.append((arm, r, src, n, after))
         cur = after
@@ -221,12 +221,12 @@ def main():
     tiles = []
     for s_ in range(len(counts)):
         for t in range(tile_count):
-            tile = node(SRC_CHIP, 1, s_, f"tile_s{s_}_t{t}", "__snax_bingo_kernel_sync_probe",
-                        SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0))
+            tile = node(SRC_CHIP, 1, s_, f"tile_s{s_}_t{t}", "__snax_bingo_kernel_stamp",
+                        SnaxBingoKernelStampArgs(stamp_buf=0, slot=0))
             tfork.branch([tile], slot=s_, tile=t)
             tiles.append((s_, t, tile))
-    tafter = node(SRC_CHIP, 1, DM_CORE, "tiles_after", "__snax_bingo_kernel_sync_probe",
-                  SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0))
+    tafter = node(SRC_CHIP, 1, DM_CORE, "tiles_after", "__snax_bingo_kernel_stamp",
+                  SnaxBingoKernelStampArgs(stamp_buf=0, slot=0))
     tfork.combine(tafter, inputs=[t for _, _, t in tiles], kind="sum")
     cur = tafter
 

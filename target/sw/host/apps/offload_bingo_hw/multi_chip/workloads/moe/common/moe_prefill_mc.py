@@ -6,7 +6,7 @@
 """The shared driver of the moe prefill workloads (workloads/moe/<model>_prefill/<variant>/):
 DeepSeek-V2-Lite's layer-1 MoE over a prompt of T tokens on the 16 + 4 chiplet platform, every
 GEMM on VersaCore's (8, 8, 16) shape (array shape 3) with INT4 weights. The platform, the weight
-rings and the anchors are chiplet_mc.py's; the data and the golden moe_prefill_data.py's.
+rings and the stamps are chiplet_mc.py's; the data and the golden moe_prefill_data.py's.
 
 THE ROUTE runs once, on the root's cluster 0, row block by row block of X: the router GEMM, its
 column factors, the softmax and the top 6 of every token (moe_topk_rows, in tasks of TOPK_CHUNK
@@ -45,7 +45,7 @@ PER CLUSTER, in the order the arrays run it:
                      cluster, after its own cluster's previous gather, so cluster 0's and cluster 1's
                      run at the same time (params chain_concurrent false: after the previous gather of
                      either cluster); the root stores the slice
-TIMING: the start anchor after every chip's setup; the end anchor after the last store.
+TIMING: the start stamp after every chip's setup; the end stamp after the last store.
 """
 
 import os
@@ -1159,7 +1159,7 @@ class MBuild(cm.ChipletBuild):
         self.rw_ld = {}
         if self.route_dist:
             # every routing cluster's router weights and their factors, ahead of the window on its DM core; its
-            # router GEMM and factors wait for them on the chip (only the root's setup holds the start anchor,
+            # router GEMM and factors wait for them on the chip (only the root's setup holds the start stamp,
             # whose dependency cell would otherwise collect every chip's). x_hbm: inside the window (below)
             for g in (() if self.x_hbm else range(self.G)):
                 if self.rt_tiles[g]:
@@ -1188,7 +1188,7 @@ class MBuild(cm.ChipletBuild):
                     wz_init = self.node(k, c, dm, "wz_init", "__snax_bingo_kernel_idma_1d_copy",
                                         SnaxBingoKernelIdma1dCopyArgs(zero, wz, 1024))
                     # one column tile: INT8 B with the paired layout, which takes whole pairs only
-                    # the root's warm-up holds the start anchor; another chip's only runs first on its cores
+                    # the root's warm-up holds the start stamp; another chip's only runs first on its cores
                     warm = pre[k] if k == R else []
                     warm.append(self.gemm(k, c, "warm_gemm", wz, 32, wz.view(256), wz.view(512), 1, 2, 1, 0,
                                           [wz_init], int4=0 if self.w4_paired else 1))
@@ -2301,7 +2301,7 @@ class MBuild(cm.ChipletBuild):
         return GemmQueue.of(self.dfg, self.gemm_async).program_order(self.dfg, dev, tag=self.TAG)
 
     def check_window_local(self):
-        """sync barrier: no dependency edge crosses chips between the start barrier and the end anchor; only the
+        """sync barrier: no dependency edge crosses chips between the start barrier and the end stamp; only the
         barriers synchronise the chips there (data a chip waits for by its flag is an order edge, not a dependency).
         Returns the offending edges."""
         import networkx as nx

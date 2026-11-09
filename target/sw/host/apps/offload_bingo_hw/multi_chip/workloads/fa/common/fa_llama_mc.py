@@ -6,7 +6,7 @@
 """The driver of workloads/fa/llama3_decode/<variant>/: Llama-3-8B's grouped-query attention for ONE decode token over a
 KV cache of `keys` positions (synthetic INT4 weights, fa_llama_data.py), split by key over every cluster of the 16 + 4
 chiplet platform -- fa_mc.py's mapping (DeepSeek-V2-Lite's MLA) for the 32 heads of a GQA layer. The platform, the
-rings, the anchors, the sync arm, the broadcast and the reduce are util/sim/multichip/chiplet_mc.py's.
+rings, the stamps, the sync arm, the broadcast and the reduce are util/sim/multichip/chiplet_mc.py's.
 
 EVERY INPUT COMES FROM HBM. The query (both halves, 16 KiB) sits in the HBM of the root's memory chip: the root's host
 has that memory chip's push engine copy it into the root's L3 behind a flag (__host_bingo_kernel_hbm_ucast, before the

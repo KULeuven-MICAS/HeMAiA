@@ -6,7 +6,7 @@
 one pass on 16 chips (workloads/ffn/dsv2_l0_prefill_ablation, runs/stg_abl64_<rung>[_n]): the newest run of each
 rung unless one is named; base and all with no run of their own take the scaling sweep's 16-chip runs (DEFAULT_TAGS:
 the same params, workloads/ffn/scaling/base_n16 and all_n16). Per rung:
-the verdict and the root's checks, the window from the root's SYNC line (start -> end anchor, in cycles of the 500 MHz
+the verdict and the root's checks, the window from the root's SYNC line (start -> end stamp, in cycles of the 500 MHz
 cluster clock), the MAC-bound time over it (the 32 arrays' peak), the step over the rung below and over base, and the
 chip barriers in the window. Writes results/ablation_t64.{csv,md}; a rung with no finished run is TBD."""
 import csv

@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the fa workloads (workloads/fa/<model>/<variant>/): DeepSeek-V2-Lite's
 layer-1 MLA attention for one decode token over a REAL 8K-token latent cache, split by key over
-every cluster of the 16 + 4 chiplet platform (the platform, the rings, the anchors, the sync arm,
+every cluster of the 16 + 4 chiplet platform (the platform, the rings, the stamps, the sync arm,
 the broadcast and the reduce are util/sim/multichip/chiplet_mc.py's; the data and the golden are
 fa_data.py's).
 

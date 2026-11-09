@@ -212,7 +212,7 @@ class AttnPart(fam.FaBuild):
         self.layer.part_checks += list(checks)
 
     def stash(self, *a, **kw):
-        raise ValueError("the attention's stage checks need the end anchor: params attn.checks y, stop full")
+        raise ValueError("the attention's stage checks need the end stamp: params attn.checks y, stop full")
 
 
 class MoePart(mom.MBuild):
@@ -434,9 +434,9 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the window ---------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start anchor (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
+        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
-        start = self.anchor("start", ends)
+        start = self.stamp("start", ends)
         go = {k: start for k in self.chips}
         for k in self.chips:
             self.edge(start, self.attn.prefetch[k])
@@ -725,7 +725,7 @@ class LayerBuild(cm.ChipletBuild):
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
         if self.attn.fresh:
             # a fresh prompt's W_KVA loads run on cluster 0 before its x fetch, behind the chip's input-norm put: the
-            # cluster's first part of x, and after the start anchor and (on the root) the x multicasts the pushes wait
+            # cluster's first part of x, and after the start stamp and (on the root) the x multicasts the pushes wait
             # for, so no ring load spins ahead of what its chunks depend on (chiplet_mc.py check_core_order)
             x_prefixes = tuple(x_prefixes) + ("n_put_",)
         if self.l3_arena:                                   # every name within its place in dl_act

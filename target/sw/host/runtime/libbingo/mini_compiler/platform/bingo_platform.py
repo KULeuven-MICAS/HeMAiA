@@ -396,7 +396,7 @@ def guard_chiplet_count(param, platform, output_dir, output_offload_file_name):
 # device-side SNAX_EXPORT_FUNC registry agree on.
 #
 # A kernel that touches no accelerator maps to None and is not placed: dummy, exit,
-# sync_probe, check_results, and the scalar helpers (pack_fa_partial), which run wherever
+# stamp, check_results, and the scalar helpers (pack_fa_partial), which run wherever
 # their consumer is. "idma" maps to the "dm" role because that is the role name for the
 # hart carrying the DMA ISA -- a dm* instruction on any other hart traps.
 _ENGINE_BY_KERNEL_TOKEN = {

@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the fa PREFILL workloads (workloads/fa/dsv2_l1_prefill*/<variant>/):
 DeepSeek-V2-Lite's layer-1 MLA attention for a prefill of `tokens` tokens over the REAL 8K-token
-latent cache, head parallel over the 16 + 4 chiplet platform. The platform, the anchors, the
+latent cache, head parallel over the 16 + 4 chiplet platform. The platform, the stamps, the
 barriers and the synchronisation arm are chiplet_mc.py's; the data and the golden are
 fa_prefill_data.py's; the sweep over the cache is libs/blocks/fa_sweep.py's.
 
@@ -1641,8 +1641,8 @@ class FaBuild(cm.ChipletBuild):
         for ls in self.ls:
             ls.strict = True
         # the dequantisation constants of every cluster into its L1 before the start
-        # (one chain a chip, ending on cluster 0: the start anchor sits on the root's cluster 0 DM core
-        # behind that core's previous task, so a chain ending there adds no second edge into the anchor)
+        # (one chain a chip, ending on cluster 0: the start stamp sits on the root's cluster 0 DM core
+        # behind that core's previous task, so a chain ending there adds no second edge into the stamp)
         pre = {k: [] for k in self.chips}
         for k in self.chips:
             for c in reversed(range(self.NC)):
@@ -1806,7 +1806,7 @@ class FaBuild(cm.ChipletBuild):
             ends = [stores[(self.NCH - 1, c)] for c in range(self.NC)]
         else:
             # a stop before the reduce: one probe a chip behind that chip's last chunk, the root's last
-            # (the end anchor sits behind the root's previous task on its core)
+            # (the end stamp sits behind the root's previous task on its core)
             last = {k: [t for c in range(self.NC) for t in parts_ready[(k, c, self.NCH - 1)]] for k in self.chips}
             ends = [self.probe(k, f"fin{k:02x}", last[k]) for k in self.chips if k != R]
             ends.append(self.probe(R, f"fin{R:02x}", last[R]))

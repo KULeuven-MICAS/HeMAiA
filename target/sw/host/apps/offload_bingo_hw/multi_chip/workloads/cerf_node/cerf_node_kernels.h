@@ -186,7 +186,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_node_host_arm_args {
     uint64_t node_chip;      // the chiplet whose node is rebuilt and relaunched
     uint64_t node_task_id;   // the node's task id in that chiplet's compiled list
     uint64_t rounds;         // at most CERF_NODE_MAX_ROUNDS
-    uint64_t flag_addr;      // the node's sync-probe stamp word (its cluster's L1)
+    uint64_t flag_addr;      // the node's stamp word (its cluster's L1)
     uint64_t top_left;       // the barrier rectangle
     uint64_t bottom_right;
     uint64_t scratchpad_ptr;

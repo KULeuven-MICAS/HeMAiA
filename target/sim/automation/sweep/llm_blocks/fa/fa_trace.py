@@ -101,15 +101,15 @@ def main():
         mac += T * (T + 1) // 2 * (576 + 512) * 16 + T * 2048 * 576
     else:
         mac += T * keys * (576 + 512) * 16
-    a0 = next(i for i, r in names.items() if r["name"].startswith("A0_start"))
-    a1 = next(i for i, r in names.items() if r["name"].startswith("A1_end"))
+    a0 = next(i for i, r in names.items() if r["name"].startswith(("S0_start", "A0_start")))   # A<n>_: older runs
+    a1 = next(i for i, r in names.items() if r["name"].startswith(("S1_end", "A1_end")))
     # a run still going (or stopped early): the window ends at the last event so far
     partial = "S" not in ev.get(a1, {})
     t0 = ev[a0]["D"]
     t1 = max(t for e in ev.values() for t in e.values()) if partial else ev[a1]["S"]
     win = t1 - t0
     peak_us = CLUSTERS * MAC_PASS / (CLK_NS * 1e-3)
-    lines = [f"run {run_dir.name}: " + (f"PARTIAL, last event {win:.1f} us after the start anchor ({t0:.1f} to {t1:.1f})"
+    lines = [f"run {run_dir.name}: " + (f"PARTIAL, last event {win:.1f} us after the start stamp ({t0:.1f} to {t1:.1f})"
              if partial else f"window {win:.1f} us ({t0:.1f} to {t1:.1f})") + f"; useful {mac / 1e9:.3f} GMAC; "
              f"ideal {mac / peak_us:.1f} us" + ("" if partial else f"; MAC utilisation {100 * mac / peak_us / win:.1f} %")]
 
@@ -159,7 +159,7 @@ def main():
         sp = spans[(c, kind(r["name"]))]
         sp[0] = min(sp[0], e["S"])
         sp[1] = max(sp[1], e["D"])
-    lines.append("phase spans, us after the start anchor (all clusters):")
+    lines.append("phase spans, us after the start stamp (all clusters):")
     for c in sorted({k[0] for k in spans}):
         row = []
         for ph in ("x", "proj", "sweep", "post", "reduce"):
@@ -241,7 +241,7 @@ def main():
     ax[0].legend(fontsize=7, ncol=4)
     ax[1].fill_between(x, arr_share, step="mid", alpha=0.6)
     ax[1].set_ylabel("arrays, % passes")
-    ax[1].set_xlabel("us after the start anchor")
+    ax[1].set_xlabel("us after the start stamp")
     ax[1].set_ylim(0, 100)
     for c in sorted({k[0] for k in spans}):
         if (c, "sweep") in spans:
@@ -268,7 +268,7 @@ def main():
                 ax.barh(li, e["D"] - e["S"], left=e["S"] - t0, height=0.8, color=colors[kind(r["name"])], lw=0)
     ax.set_yticks(range(len(lanes)))
     ax.set_yticklabels([f"{ch} c{cl} {eng[co]}" for ch, cl, co in lanes], fontsize=7)
-    ax.set_xlabel("us after the start anchor")
+    ax.set_xlabel("us after the start stamp")
     ax.invert_yaxis()
     handles = [plt.Rectangle((0, 0), 1, 1, color=v) for v in colors.values()]
     ax.legend(handles, colors.keys(), fontsize=7, ncol=6, loc="lower right")

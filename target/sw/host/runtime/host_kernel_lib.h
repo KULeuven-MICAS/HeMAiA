@@ -124,14 +124,16 @@ static inline float __bingo_fp16_to_fp32(uint16_t h) {
     return u.f;
 }
 
-// Report the synchronization-latency sweep. Runs as a HOST node at the very end
-// of the DFG, so it never sits on a measured path.
-//
-// Prints one line per phase, keyed by phase INDEX. The meaning of each index (P, hops,
-// edges, mode) is fixed by the generator and emitted alongside as sync_phases.csv -- a
-// DFG memory handle only reserves storage, so there is no way to preload a metadata
-// table into the device image.
-static inline uint64_t __host_bingo_kernel_sync_report(void *arg){
+// Stamp report: reads back the mcycle stamps the device's stamp tasks (__snax_bingo_kernel_stamp)
+// left in stamp_buf[0 .. num_phases] and prints one line per phase, the cycles from stamp ph to
+// stamp ph + 1, keyed by phase INDEX. Runs as a HOST node after the last stamp, so it never sits
+// on a measured path. A multi-chip workload's stamps (chiplet_mc.py end_window()) make phase 0 its
+// window; the synchronisation-latency sweep makes one phase per (P, hops, edges, mode), which its
+// generator writes alongside as sync_phases.csv -- a DFG memory handle only reserves storage, so
+// there is no way to preload a metadata table into the device image. local_phase (the local
+// control's phase, < num_phases) is the baseline the rt-local column subtracts. The line keeps the
+// "SYNC[hw]" tag the run parsers read (sweep/llm_blocks/ffn/parse_ffn.py, sop_ubench/sync).
+static inline uint64_t __host_bingo_kernel_stamp_report(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     volatile uint32_t* stamp = (volatile uint32_t*)(uintptr_t)(((uint64_t *)arg)[0]);
     uint64_t num_phases      = ((uint64_t *)arg)[1];

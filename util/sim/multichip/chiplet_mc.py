@@ -4,17 +4,17 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """What the level-2 workloads share on the 16 + 4 chiplet platform: the topology, the weight rings,
-the anchors, the synchronisation arm, the broadcast of the token, the chips' fold and the reduce,
+the stamps, the synchronisation arm, the broadcast of the token, the chips' fold and the reduce,
 the checks and the emission. The workloads (ffn, moe, fa, and the llama3 and dsv2 layers) build
 their layer between `setup()` and `finish()`. It sits next to fabric.py (FabricBase, its base); a
 caller puts util/sim/multichip and mini_compiler on sys.path before importing it:
 
     S = Workload(args, p, plat, hw)     # its data, S.make_sym(...), S.make_rings(...)
-    go = S.setup()                      # the setup, the start anchor, the first barrier
+    go = S.setup()                      # the setup, the start stamp, the first barrier
     xin = S.broadcast(...)              # the token into every cluster
     ...                                 # the layer: per cluster a partial over every output
     S.reduce(parts)                     # the chips' folds and the reduce into the root's dst
-    S.finish(...)                       # end anchor, report, checks, compile
+    S.finish(...)                       # end stamp, report, checks, compile
 
 THE SWITCHES (params): bcast (bcast_l1 | pull), reduce (chain | root), sync (edge | barrier) and
 barrier_mode (bcast: one 0xFF broadcast store of the chip's checkpoint, then a local poll | sw: the
@@ -46,7 +46,7 @@ def desc_rows(txt):
     rows = [(c, n, t, cl, co) for n, t, c, cl, co in _DESC_IMAGE.findall(txt)]
     return rows or _DESC_STORES.findall(txt)
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelChipBarrierArgs, HostBingoKernelSyncReportArgs,
+    HostBingoKernelChipBarrierArgs, HostBingoKernelStampReportArgs,
     HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
@@ -84,7 +84,7 @@ class ChipletBuild(FabricBase):
     TAG = "l2"                          # the prefix of every staged symbol and printed line
 
     def __init__(self, args, p, plat, hw, shared=None):
-        """`shared`: another build whose graph, staging, anchors and node helpers this one adds to (a block
+        """`shared`: another build whose graph, staging, stamps and node helpers this one adds to (a block
         of a whole layer, dsv2_prefill_mc.py); None makes its own."""
         self.args, self.p, self.plat, self.hw = args, p, plat, hw
         self.T = int(p.get("tokens", 1))
@@ -156,7 +156,7 @@ class ChipletBuild(FabricBase):
         if shared is not None:
             for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark", "ring_scheds"):
                 setattr(self, a, getattr(shared, a))
-            self.n_anchor = 0
+            self.n_stamp = 0
             return
         self.st = DataStaging(plat, on_host=True)
         self.ring_scheds = {}                  # schedule symbol: the WeightRings it holds
@@ -193,7 +193,7 @@ class ChipletBuild(FabricBase):
         self.pipe = Pipeline(self.ctx, verbose=False, gate_sources=True)
         self.jct = {n: writer_junction_index(hw, f"Has{n}Junction")
                     for n in ("Elementwise", "TopK", "SoftmaxStats")}
-        self.n_anchor = 0
+        self.n_stamp = 0
         self.stamps = BingoMemAlloc(f"A_{self.TAG}_stamps", size=4 * 16, mem_level="L2",
                                     chip_id=self.ROOT, cluster_id=0)
         self.mark = BingoMemAlloc(f"zz_{self.TAG}_sram_mark", size=64, mem_level="L1",
@@ -414,7 +414,7 @@ class ChipletBuild(FabricBase):
     # ---- the phases -----------------------------------------------------------------------
     def setup(self, extra=None):
         """Every symmetric buffer zeroed (no flag reads X), the barrier state too with barriers,
-        the start anchor, and what each chip's window opens with: the start (edge) or the
+        the start stamp, and what each chip's window opens with: the start (edge) or the
         chip's first barrier, which every chip parks in before the root stamps the start and
         arrives last. `extra` {chip: [task]}: more of a chip's setup the start waits for.
         Returns {chip: go task}; the prefetchers follow it."""
@@ -437,12 +437,12 @@ class ChipletBuild(FabricBase):
             setup_end[k] = prev
         ends = [t for k in self.chips for t in [setup_end[k]] + list((extra or {}).get(k, [])) if t is not None]
         if self.sync == "edge":
-            start = self.anchor("start", ends)
+            start = self.stamp("start", ends)
             go = {k: start for k in self.chips}
         else:
             ready = self.probe(self.ROOT, "ready", ends)
             armed = {k: self.probe(k, "armed", [ready]) for k in self.chips}
-            start = self.anchor("start", list(armed.values()))
+            start = self.stamp("start", list(armed.values()))
             go = self.barrier({k: [start] if k == self.ROOT else [armed[k]] for k in self.chips})
         for k in self.chips:
             self.edge(go[k], self.prefetch[k])
@@ -527,18 +527,15 @@ class ChipletBuild(FabricBase):
                                list(ports[0].ends) + ([prev] if prev is not None else []))
         self.loc_nodes = dict(loc)
         R, others = self.ROOT, self.order[1:]
-        before = []
         if self.sync == "barrier":
             b = self.barrier({k: [loc[k]] for k in self.chips})
             loc = {k: b[R] for k in self.chips}
-        if self.p.get("anchor_reduce", False):
-            before = [self.anchor("reduce", list(dict.fromkeys(loc.values())))]
         if self.reduce_impl == "chain":
             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
                 remote, R, 0, others, src=self.sx(0, self.OFF_LOC), dst=self.dst_expr(), size=xb,
                 junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.dst_buf])
             gth = self.node(R, 0, xdma, "y_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
-                            before or list(dict.fromkeys(loc[k] for k in self.chips)))
+                            list(dict.fromkeys(loc[k] for k in self.chips)))
             self.reduce_end = [gth]
             return
         pulls, adds = [], []
@@ -547,7 +544,7 @@ class ChipletBuild(FabricBase):
             cp = self.node(R, 0, dm, f"y_pull{i}", "__snax_bingo_kernel_idma_1d_copy",
                            SnaxBingoKernelIdma1dCopyArgs(remote(k, self.sx(0, self.OFF_LOC)),
                                                          slot, xb),
-                           (before or [loc[k]]) + pulls[-1:] + ([adds[i - 2]] if i >= 2 else []))
+                           [loc[k]] + pulls[-1:] + ([adds[i - 2]] if i >= 2 else []))
             pulls.append(cp)
             a_in = self.sv(R, 0, self.OFF_LOC) if i == 0 else self.dst
             add = self.node(R, 0, simd, f"y_add{i}", "__snax_bingo_kernel_simd_stream_elementwise",
@@ -557,7 +554,7 @@ class ChipletBuild(FabricBase):
         self.reduce_end = [adds[-1]]
 
     def stash(self, name, k, c, src, nbytes, after):
-        """A copy of chip k cluster c's `src` into an L3 symbol on chip k, after the end anchor
+        """A copy of chip k cluster c's `src` into an L3 symbol on chip k, after the end stamp
         and `after`: what the root's host compares. Returns the symbol as the root names it."""
         sym = f"{self.TAG}_chk_{name}"
         self.st.put_zeros(sym, "uint8_t", nbytes)
@@ -568,12 +565,12 @@ class ChipletBuild(FabricBase):
         return BingoMemSymbol(sym, chip_id=k)
 
     def end_window(self, after):
-        """The end anchor after `after`, and the root's report of the window."""
-        self.end = self.anchor("end", after)
+        """The end stamp after `after`, and the root's report of the window."""
+        self.end = self.stamp("end", after)
         self.report = self.cx_chip(self.ROOT).host_node(
-            f"{self.TAG}_report", "__host_bingo_kernel_sync_report",
-            HostBingoKernelSyncReportArgs(stamp_buf=self.stamps, num_phases=self.n_anchor - 1,
-                                          local_phase=self.n_anchor - 1), [self.end])
+            f"{self.TAG}_report", "__host_bingo_kernel_stamp_report",
+            HostBingoKernelStampReportArgs(stamp_buf=self.stamps, num_phases=self.n_stamp - 1,
+                                          local_phase=self.n_stamp - 1), [self.end])
         self.check_copies = []
 
     def run_checks(self, checks):
@@ -715,7 +712,7 @@ class ChipletBuild(FabricBase):
         """Every DM core reaches its cluster's x task before its first weight-ring load, in the
         order the hardware runs it: the descriptor list of the emitted header, which is not the
         node-id order. A ring load spins on a chunk the prefetcher pushes only after the start,
-        and the start anchor shares the root's DM core: one ring load ahead of it is a deadlock
+        and the start stamp shares the root's DM core: one ring load ahead of it is a deadlock
         no dependency check sees."""
         names = {str(n.node_id): n.node_name for n in self.dfg.node_list}
         ring = {str(n.node_id) for n in self.dfg.node_list

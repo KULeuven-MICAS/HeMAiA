@@ -7,7 +7,7 @@
 SPLIT BY KEY over every cluster of the 16 + 4 chiplet platform (the FA core of fa/common/fa_llama_mc.py: 32 query heads as
 two halves of 16 SIMD lanes, a block-diagonal query, K / V tiles per half, the softmax statistics met in the fabric, the
 partials reduced by a ChainGather), every projection on VersaCore's one-token GEMV. The platform, the rings, the
-anchors, the broadcast and the checks are chiplet_mc.py's; the projection, W_O and append helpers llama3_decode_mc.py's
+stamps, the broadcast and the checks are chiplet_mc.py's; the projection, W_O and append helpers llama3_decode_mc.py's
 (DBuild); the data LlamaDecodeData's (a fresh causal prompt of ctx + 1 positions, the decode token the last), the
 decode token's attention replaced by the key split's arithmetic (KsDecodeData below).
 
@@ -360,7 +360,7 @@ class KsBuild(lmd.DBuild):
         if self.cache_order not in ("own", "after_wq", "after_q"):
             raise ValueError(f"params cache_order={self.cache_order!r}: own, after_wq or after_q")
         # hbm_checks direct: the root's host compares y and the appended K / V^T tiles where they are, in HBM.
-        # stash: after the end anchor, one iDMA copy each on the root's cluster 0 brings them into the root's L3,
+        # stash: after the end stamp, one iDMA copy each on the root's cluster 0 brings them into the root's L3,
         # where the host compares them (the same bytes, read locally).
         self.hbm_checks = str(p.get("hbm_checks", "direct"))
         if self.hbm_checks not in ("direct", "stash"):
@@ -1266,7 +1266,7 @@ class KsBuild(lmd.DBuild):
             stage.append((f"loc_k{far:02x}", far, 0, self.sv(far, 0, self.OFF_LOC), u8(gd["loc"][far])))
             for nm, k, c, src, img in stage:
                 checks.append((nm, self.stash(nm, k, c, src, img.size, []), img, img.size))
-        # hbm_checks stash: an HBM buffer through the root's L3 (one iDMA copy after the end anchor), else read in place
+        # hbm_checks stash: an HBM buffer through the root's L3 (one iDMA copy after the end stamp), else read in place
         hbm = (lambda nm, h, n: self.stash(nm, R, 0, h, n, [])) if self.hbm_checks == "stash" else \
             (lambda nm, h, n: h)                                                   # noqa: E731
         y = u8(d.y_raw.astype(np.float16))

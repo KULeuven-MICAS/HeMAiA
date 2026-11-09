@@ -363,7 +363,7 @@ class FaStages(fa.FaBuild):
 
     def check_core_order(self, header, x_prefixes):
         """The base check wants an x task before every DM core's first ring load: a ring load spins on a push that only
-        starts after the start anchor, which shares the root's DM core. With kv_wkva_first each Ld_wkvc depends on its
+        starts after the start stamp, which shares the root's DM core. With kv_wkva_first each Ld_wkvc depends on its
         chip's start instead (stage_keys), which the hang check verifies, so it counts as reaching the start. A graph
         without ring loads (stage 2) has nothing to check."""
         if not any((n.kernel_name or "").endswith("idma_ring_load") for n in self.dfg.node_list):
@@ -571,7 +571,7 @@ class FaStages(fa.FaBuild):
                 if self.wkva_first:
                     # kv_wkva_first: the in-order DM core copies the chip's W_KVA first, then the first tiles of x;
                     # the helped pair, needed only later, after them. The copy depends on the chip's start, so a ring
-                    # load queued ahead of the start anchor is a dependency the hang check sees (check_core_order)
+                    # load queued ahead of the start stamp is a dependency the hang check sees (check_core_order)
                     ld, si, slab = self.load(g, 0, "Ld_wkvc", deps=[go[k]], dst=wkva)
                     ld_x[0] = kx(0)
                     if len(tiles) > 1:
@@ -881,7 +881,7 @@ class FaStages(fa.FaBuild):
         ends = []
         for k in self.chips:
             ends += list((extra or {}).get(k, [])) + [self.prefetch[k]]
-        start = self.anchor("start", ends)
+        start = self.stamp("start", ends)
         self.go = {k: start for k in self.chips}
         return self.go
 
@@ -1203,8 +1203,8 @@ class FaStages(fa.FaBuild):
         for ls in self.ls:
             ls.strict = True
         # the dequantisation constants of every cluster into its L1 before the start
-        # (one chain a chip, ending on cluster 0: the start anchor sits on the root's cluster 0 DM core
-        # behind that core's previous task, so a chain ending there adds no second edge into the anchor)
+        # (one chain a chip, ending on cluster 0: the start stamp sits on the root's cluster 0 DM core
+        # behind that core's previous task, so a chain ending there adds no second edge into the stamp)
         post_only = self.stage == "678"
         if post_only:
             pre = self.stage678_preload()
@@ -1468,7 +1468,7 @@ class FaStages(fa.FaBuild):
             ends = [stores[(self.NCH - 1, c)] for c in range(self.NC)]
         else:
             # a stop before the reduce: one probe a chip behind that chip's last chunk, the root's last
-            # (the end anchor sits behind the root's previous task on its core)
+            # (the end stamp sits behind the root's previous task on its core)
             last = {k: [t for c in range(self.NC) for t in parts_ready[(k, c, self.NCH - 1)]] for k in self.chips}
             ends = [self.probe(k, f"fin{k:02x}", last[k]) for k in self.chips if k != R]
             ends.append(self.probe(R, f"fin{R:02x}", last[R]))
@@ -1747,7 +1747,7 @@ class FaStages(fa.FaBuild):
     def _keys_by_chunk_order(self, s4_end):
         """params keys_by_chunk: on every device core, chunk h's key tasks (h >= 1; stage 1 by its tiles' names, stages 2
         and 3 by the runs stage_owner recorded) right after the core's cluster's stage-4 tasks of chunk h - 1, those of
-        the chunks after the last one made right after the end anchor (outside the window, ahead of the exits). Their
+        the chunks after the last one made right after the end stamp (outside the window, ahead of the exits). Their
         own order is kept. The order keys are program_order's; the hang check verifies the result."""
         runs = sorted(self._key_runs, key=lambda r: r[0])      # stable: a run's end before the next run's start
         for (a, h), (b, _) in zip(runs, runs[1:]):
@@ -1783,22 +1783,22 @@ class FaStages(fa.FaBuild):
             for j, t in enumerate(ts):
                 t.order_key = pos - 1 + (j + 1) / (len(ts) + 1)
             n += len(ts)
-        # the keys after the window wait for its end anchor, on every chip (a dependency: their first task on each device
+        # the keys after the window wait for its end stamp, on every chip (a dependency: their first task on each device
         # core; the rest follow it in the core's program). On the root, whose L1 is the fullest, the static L1 planner
         # can then lay their buffers over the window's; everywhere, their transfers stay out of the window's last
         # chains, which run two at a time (last_pair_chains) and must not meet another chip's traffic on a hop
-        anchor = next(t for t in self.dfg.node_list if t.node_name.startswith("A1_end"))
+        end_stamp = next(t for t in self.dfg.node_list if t.node_name.startswith("S1_end"))
         heads = {}
         for t in moved.get(end + 1, []):
             key = (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
             if key not in heads or t.order_key < heads[key].order_key:
                 heads[key] = t
         for t in heads.values():
-            self.dfg.bingo_add_edge(anchor, t)
+            self.dfg.bingo_add_edge(end_stamp, t)
         if heads:
-            print(f"[{self.TAG}] keys_by_chunk: the keys after the window behind the end anchor on {len(heads)} cores")
+            print(f"[{self.TAG}] keys_by_chunk: the keys after the window behind the end stamp on {len(heads)} cores")
         print(f"[{self.TAG}] keys_by_chunk: {n} key tasks of chunks 1..{self.NX * 16 // self.C - 1} moved behind the "
-              f"stage-4 tasks of the chunk before (the chunks from {self.NCH} on behind the end anchor)")
+              f"stage-4 tasks of the chunk before (the chunks from {self.NCH} on behind the end stamp)")
 
     def stage_owner(self, go, last, chained=False, end_wait=True):
         """Stage 2: FaBuild's stage_kv on every chip, its kvr_waits behind the chip's start (the flags are already

@@ -790,7 +790,7 @@ class BingoDFGTransformsMixin:
     def _relay_dep_edges(self, to_relay: dict, budget: int, debug: bool = False) -> int:
         """Move each over-budget cell's leftover edges onto relays; returns the relays made.
 
-        A relay is a normal task running __snax_bingo_kernel_sync_probe (no work, no
+        A relay is a normal task running __snax_bingo_kernel_stamp (no work, no
         print) on another core of the consumers' chip -- another core of their cluster, or a
         core of another cluster, never the host's, whose queue holds the weight prefetcher.
         A group of up to 2**tag_width / 2 of the cell's edges (p -> c, in the consumers' core
@@ -811,7 +811,7 @@ class BingoDFGTransformsMixin:
         everything behind it then waits for c0 anyway, so the relay holds no task back that
         did not already wait for its group. That keeps every core one chain, which the
         passes after this one rely on."""
-        from bingo_kernel_args import SnaxBingoKernelSyncProbeArgs
+        from bingo_kernel_args import SnaxBingoKernelStampArgs
         host = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
         topo = list(nx.topological_sort(self))
         pos = {n: i for i, n in enumerate(topo)}
@@ -855,8 +855,8 @@ class BingoDFGTransformsMixin:
                 r = BingoNode(assigned_chiplet_id=chip, assigned_cluster_id=c2,
                               assigned_core_id=r2,
                               node_name=f"relay{made}_{first.node_name}",
-                              kernel_name="__snax_bingo_kernel_sync_probe",
-                              kernel_args=SnaxBingoKernelSyncProbeArgs())
+                              kernel_name="__snax_bingo_kernel_stamp",
+                              kernel_args=SnaxBingoKernelStampArgs())
                 self.bingo_add_node(r)
                 for p, c in grp:
                     data = dict(self.get_edge_data(p, c) or {})

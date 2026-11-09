@@ -88,7 +88,7 @@ THE GOLDEN, the device's arithmetic: each chip's partial over an output slice is
 shared columns, then each of its routed pieces' down over its columns added in piece order (the D port and the
 dequantisation per piece, FP16 adds); the partials are folded in the chain's order.
 
-TIMING: the start anchor after every chip's setup; the end anchor after both writes of y to HBM.
+TIMING: the start stamp after every chip's setup; the end stamp after both writes of y to HBM.
 
 THE GEMV MODE (params gemv). Every weight multiply, the router's included, on VersaCore's one-token GEMV ((1, 4, 32),
 __snax_bingo_kernel_gemv, 128 weights a pass: 128 INT8 bytes, or 64 bytes of INT4 nibbles through B's converter), its
@@ -700,7 +700,7 @@ class DBuild(mp.MBuild):
 
     def _warm(self, pre):
         """params warm_root: a small GEMM and a scale on every cluster (and the softmax on the root's cluster 0) before
-        the start, so the first tasks find their code cached; the root's hold the start anchor. gemv: a small GEMV and
+        the start, so the first tasks find their code cached; the root's hold the start stamp. gemv: a small GEMV and
         a stream multiply instead."""
         R, dm, simd = self.ROOT, self.roles["dm"], self.roles["simd"]
         zero = BingoMemSymbol(f"{self.TAG}_zero1k")

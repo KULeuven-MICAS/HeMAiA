@@ -110,7 +110,7 @@ class LStages(ABuild):
             ls.strict = True
 
     def _end_per_chip(self, last):
-        """One probe a chip behind its tasks in `last` (the root's last), then the end anchor."""
+        """One probe a chip behind its tasks in `last` (the root's last), then the end stamp."""
         R = self.ROOT
         ends = [self.probe(k, f"fin{k:02x}", last[k]) for k in self.chips if k != R]
         ends.append(self.probe(R, f"fin{R:02x}", last[R]))

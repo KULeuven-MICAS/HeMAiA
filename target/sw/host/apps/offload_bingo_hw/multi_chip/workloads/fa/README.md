@@ -24,7 +24,7 @@ fa/
     fa_prefill_data.py     the prefill's data, layouts and golden (the device arithmetic)
     fa_data.py             fa_mc.py's cache, query, scales and golden (DSv2-Lite)
     fa.mk                  the build every variant's Makefile includes
-    (chiplet_mc.py: platform, weight rings, anchors, barriers, fences; fabric.py: both util/sim/multichip's;
+    (chiplet_mc.py: platform, weight rings, stamps, barriers, fences; fabric.py: both util/sim/multichip's;
      driver.py: util/sim/common's; model_data.py, the golden's modules and the BF16 reader: util/sim/llm's)
   llama3_decode_full/    Llama-3-8B's decode, the whole attention block, one token over 8,192 positions: the paper's
                          ladder base -> bcast -> bcast_reduce -> all (each rung adds one mechanism); its

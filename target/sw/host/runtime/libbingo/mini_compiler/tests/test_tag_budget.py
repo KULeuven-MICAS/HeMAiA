@@ -139,7 +139,7 @@ check("one tag for a two-producer fan-in fits through a relay", len(relays) == 1
 check("...which lowers and tags at 1 tag a cell", hang["peak_tags_per_cell"] <= 1,
       f"peak {hang['peak_tags_per_cell']}")
 check("...the relay runs the no-op probe, not on the consumer's core",
-      relays and relays[0].kernel_name == "__snax_bingo_kernel_sync_probe"
+      relays and relays[0].kernel_name == "__snax_bingo_kernel_stamp"
       and (relays[0].assigned_cluster_id, relays[0].assigned_core_id) != (0, 3))
 
 print("a broadcast dep-set and a later edge into one of its cells")

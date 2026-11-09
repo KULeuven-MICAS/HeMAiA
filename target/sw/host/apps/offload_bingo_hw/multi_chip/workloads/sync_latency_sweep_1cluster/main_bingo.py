@@ -15,11 +15,11 @@
 #
 #   A0 --mids(phase 0)--> A1 --mids(phase 1)--> A2 -- ... --> An
 #   ^^                    ^^
-#   anchor tasks, all on chip 0x00, each stamps mcycle into stamp_buf[i]
+#   stamp tasks, all on chip 0x00, each stamps mcycle into stamp_buf[i]
 #
 # Phase i's latency is stamp[i+1] - stamp[i]: out to that phase's participants and back.
 # mcycle is per-core and NOT synchronized across chiplets, so a one-way remote timing is
-# not a measurable quantity; anchoring both ends on chip 0x00 is what makes it real. The
+# not a measurable quantity; stamping both ends on chip 0x00 is what makes it real. The
 # round trip covers TWO edges.
 #
 # Phases, in order:
@@ -52,8 +52,8 @@ sys.path.append(current_dir)
 import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_kernel_args import (  # noqa E402
-    HostBingoKernelSyncReportArgs,
-    SnaxBingoKernelSyncProbeArgs,
+    HostBingoKernelStampReportArgs,
+    SnaxBingoKernelStampArgs,
 )
 from bingo_mem_handle import BingoMemAlloc  # noqa E402
 from bingo_node import BingoNode  # noqa E402
@@ -138,7 +138,7 @@ def main():
         chiplet_ids=platform["chiplet_ids"],
     )
 
-    # One stamp per anchor, on chip 0x00. mcycle is only comparable within a chiplet, so
+    # One stamp per phase boundary, on chip 0x00. mcycle is only comparable within a chiplet, so
     # every timestamp in the sweep has to come from here.
     num_phases = 1 + 2 * len(rects) + 1              # warm-up + 2/rect + local control
     stamp_buf = BingoMemAlloc("A_sync_stamps", size=4 * (num_phases + 1),
@@ -148,12 +148,12 @@ def main():
     slot = [0]
     nodes = []
 
-    def anchor():
+    def stamp():
         n = BingoNode(
             assigned_chiplet_id=SRC_CHIP, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
-            node_name=f"Anchor_{slot[0]}",
-            kernel_name="__snax_bingo_kernel_sync_probe",
-            kernel_args=SnaxBingoKernelSyncProbeArgs(stamp_buf=stamp_buf, slot=slot[0]),
+            node_name=f"Stamp_{slot[0]}",
+            kernel_name="__snax_bingo_kernel_stamp",
+            kernel_args=SnaxBingoKernelStampArgs(stamp_buf=stamp_buf, slot=slot[0]),
         )
         slot[0] += 1
         dfg.bingo_add_node(n)
@@ -161,12 +161,12 @@ def main():
         return n
 
     def mid(chip, tag):
-        # stamp_buf=0: these are never timed directly, only bracketed by the anchors.
+        # stamp_buf=0: these are never timed directly, only bracketed by the stamps.
         n = BingoNode(
             assigned_chiplet_id=chip, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
             node_name=f"Mid_{tag}_chip{chip:02x}",
-            kernel_name="__snax_bingo_kernel_sync_probe",
-            kernel_args=SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0),
+            kernel_name="__snax_bingo_kernel_stamp",
+            kernel_args=SnaxBingoKernelStampArgs(stamp_buf=0, slot=0),
         )
         dfg.bingo_add_node(n)
         nodes.append(n)
@@ -174,7 +174,7 @@ def main():
 
     def emit_phase(kind, chips, p, hop, tag):
         nonlocal cur
-        nxt = anchor()
+        nxt = stamp()
         for c in chips:
             m = mid(c, tag)
             dfg.bingo_add_edge(cur, m)
@@ -183,7 +183,7 @@ def main():
         phases.append((kind, p, hop, edges))
         cur = nxt
 
-    cur = anchor()
+    cur = stamp()
 
     # phase 0: untimed warm-up over the largest rectangle -- every participating chiplet
     # touched once, so no later phase pays a first-touch cost.
@@ -204,8 +204,8 @@ def main():
     report = BingoNode(
         assigned_chiplet_id=SRC_CHIP, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Sync_Report",
-        kernel_name="__host_bingo_kernel_sync_report",
-        kernel_args=HostBingoKernelSyncReportArgs(
+        kernel_name="__host_bingo_kernel_stamp_report",
+        kernel_args=HostBingoKernelStampReportArgs(
             stamp_buf=stamp_buf, num_phases=len(phases), local_phase=local_phase),
     )
     dfg.bingo_add_node(report)

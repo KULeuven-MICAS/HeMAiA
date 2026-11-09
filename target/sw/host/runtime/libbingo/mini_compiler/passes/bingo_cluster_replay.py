@@ -36,11 +36,11 @@ SKIP_KERNELS = ("exit",)
 
 
 def _window(dfg):
-    """(the tasks before the window, the tasks after it): the start anchor's ancestors, the end anchor's
+    """(the tasks before the window, the tasks after it): the start stamp's ancestors, the end stamp's
     descendants."""
     nodes = list(dfg.node_list)
-    a0 = [n for n in nodes if (n.node_name or "").startswith("A0_start")]
-    a1 = [n for n in nodes if (n.node_name or "").startswith("A1_end")]
+    a0 = [n for n in nodes if (n.node_name or "").startswith("S0_start")]
+    a1 = [n for n in nodes if (n.node_name or "").startswith("S1_end")]
     pre, post = set(), set()
     stack = list(a0)
     while stack:

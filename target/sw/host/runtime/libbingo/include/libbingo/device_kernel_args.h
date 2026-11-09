@@ -75,15 +75,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
   uint32_t dummy_input;    
 } __snax_kernel_dummy_args_t;
 
-// Sync-probe kernel args (cross-chip synchronization latency measurement).
-// The kernel does NO work: it exists only so a dependency edge has something to
-// terminate on. It stamps the DM core's mcycle into `stamp_addr` so the host can read
-// back when the task ran; pass 0 to skip stamping.
+// Stamp kernel args (bingo-sw, __snax_kernel_stamp). The kernel does NO work: it exists only so
+// a dependency edge has something to terminate on. It stamps the DM core's mcycle into
+// `stamp_addr` so the host can read back when the task ran; pass 0 to skip stamping.
 // ⚠️ stamp_addr must live on the SAME chiplet the task is assigned to -- it is written
 // with a plain local store, and mcycle is not comparable across chiplets anyway.
-__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_sync_probe_args {
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_stamp_args {
   uint32_t stamp_addr;
-} __snax_kernel_sync_probe_args_t;
+} __snax_kernel_stamp_args_t;
 
 // CSR kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_csr_args {
@@ -184,17 +183,23 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
 
 // Note: name start with __snax_bingo_kernel_
 
-// Sync-probe kernel args (cross-chip synchronization latency, arm D).
-// Core-level twin of __snax_kernel_sync_probe_args. The kernel does NO work: it exists
-// only so a dependency edge has something to terminate on, and stamps mcycle into
-// stamp_buf[slot] so the latency between two probes can be read back afterwards.
-// ⚠️ stamp_buf must live on the SAME chiplet the task runs on -- it is written with a
-// plain local store, and mcycle is not comparable across chiplets anyway.
-__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_probe_args {
+// Stamp kernel args (bingo-hw, __snax_bingo_kernel_stamp), the core-level twin of
+// __snax_kernel_stamp_args. The kernel does NO work: it exists so a dependency edge has something
+// to terminate on (an ordering point, a compiler relay, an empty task). With stamp_buf set it
+// stamps mcycle into stamp_buf[slot], so the time between two stamps can be read back afterwards;
+// with mark_addr set it then stores BINGO_SRAM_MARK_MAGIC | slot there, a word in the task's own
+// L1, which the testbench's SRAM probe recognises and answers with a snapshot of every bank
+// array's access counters (the magic's low 16 bits carry the slot; the probe accepts marks only
+// with consecutive slots): the edge of a measured window.
+// ⚠️ stamp_buf and mark_addr must live on the SAME chiplet the task runs on -- they are written
+// with plain local stores, and mcycle is not comparable across chiplets anyway.
+#define BINGO_SRAM_MARK_MAGIC 0x5A110000u
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_stamp_args {
   uint32_t stamp_buf;   // base of a uint32_t array, or 0 to skip stamping
-  uint32_t slot;        // index into that array
+  uint32_t slot;        // index into that array; also the mark's sequence number
+  uint32_t mark_addr;   // an L1 word on this chiplet, or 0 to skip the mark
   BINGO_KERNEL_ARGS_TRAILER;
-} __snax_bingo_kernel_sync_probe_args_t;
+} __snax_bingo_kernel_stamp_args_t;
 
 // Tile gate args (__snax_bingo_kernel_cerf_tiles): slot s's tiles 0 .. ceil(counts[s] / rows)
 // - 1 run, the rest of its `tiles` are skipped. Slot s, tile t is CERF group
@@ -217,18 +222,6 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_cerf_static_args {
   uint32_t cerf_state[BINGO_CERF_WORDS];
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_cerf_static_args_t;
-
-// Sync-mark kernel args: a sync probe that also stores BINGO_SYNC_MARK_MAGIC | slot to
-// mark_addr, a word in the task's own L1, which the testbench's SRAM probe recognises and
-// answers with a snapshot of every bank array's access counters. The magic's low 16 bits
-// carry the slot, and the probe accepts marks only with consecutive slots.
-#define BINGO_SYNC_MARK_MAGIC 0x5A110000u
-__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_mark_args {
-  uint32_t stamp_buf;   // base of a uint32_t array on this chiplet, or 0 to skip stamping
-  uint32_t slot;        // index into that array; also the mark's sequence number
-  uint32_t mark_addr;   // an L1 word on this chiplet, or 0 to skip the mark
-  BINGO_KERNEL_ARGS_TRAILER;
-} __snax_bingo_kernel_sync_mark_args_t;
 
 // Chip barrier args: one cross-chip barrier over the rectangle top_left..bottom_right, run
 // by ONE core of every participating chip (no cluster barrier inside).

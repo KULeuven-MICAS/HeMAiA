@@ -11,7 +11,7 @@ It imports the compiler's modules, so a caller puts mini_compiler on sys.path (a
 _bingo_paths) before importing it.
 """
 
-from bingo_kernel_args import SnaxBingoKernelSyncMarkArgs, SnaxBingoKernelSyncProbeArgs
+from bingo_kernel_args import SnaxBingoKernelStampArgs
 from libs import Ctx
 
 L1_CAPACITY = 990000
@@ -68,7 +68,7 @@ def fold_cycle(chips, root):
 
 class FabricBase:
     """The topology and node helpers of a build. The subclass sets chips, NC, ROOT, dfg, roles, hw,
-    n_anchor, stamps, mark and sym (the symmetric buffers, {(chip, cluster): handle})."""
+    n_stamp, stamps, mark and sym (the symmetric buffers, {(chip, cluster): handle})."""
 
     # ---- topology helpers -----------------------------------------------------------------
     def chip(self, g):
@@ -95,18 +95,23 @@ class FabricBase:
     def edge(self, a, b):
         self.dfg.bingo_add_edge(a, b)
 
-    def anchor(self, tag, after=()):
-        nd = self.node(self.ROOT, 0, self.roles["dm"], f"A{self.n_anchor}_{tag}",
-                       "__snax_bingo_kernel_sync_mark",
-                       SnaxBingoKernelSyncMarkArgs(stamp_buf=self.stamps, slot=self.n_anchor,
-                                                   mark_addr=self.mark), after)
-        self.n_anchor += 1
+    def stamp(self, tag, after=()):
+        """A window edge, S<n>_<tag>, on the root's cluster-0 DM core (__snax_bingo_kernel_stamp with a mark), after
+        `after`: it stamps the cycle count into the build's stamp buffer at slot n_stamp and marks the SRAM counters,
+        so two stamps bracket the cycles and the SRAM accesses of everything between them (setup() makes S0_start,
+        end_window() the last one; the root's host report prints the cycles between them). Returns the task."""
+        nd = self.node(self.ROOT, 0, self.roles["dm"], f"S{self.n_stamp}_{tag}",
+                       "__snax_bingo_kernel_stamp",
+                       SnaxBingoKernelStampArgs(stamp_buf=self.stamps, slot=self.n_stamp, mark_addr=self.mark),
+                       after)
+        self.n_stamp += 1
         return nd
 
     def probe(self, k, tag, after=()):
-        """A DM-core task on chip k's cluster 0 that does nothing but order."""
-        return self.node(k, 0, self.roles["dm"], f"P_{tag}", "__snax_bingo_kernel_sync_probe",
-                         SnaxBingoKernelSyncProbeArgs(stamp_buf=0, slot=0), after)
+        """A DM-core task on chip k's cluster 0 that does nothing but order (__snax_bingo_kernel_stamp without a
+        stamp): a join point, after `after`, for what has to follow all of it."""
+        return self.node(k, 0, self.roles["dm"], f"P_{tag}", "__snax_bingo_kernel_stamp",
+                         SnaxBingoKernelStampArgs(stamp_buf=0, slot=0), after)
 
     def sv(self, k, c, off):
         """A view of chip k cluster c's symmetric buffer at `off`."""

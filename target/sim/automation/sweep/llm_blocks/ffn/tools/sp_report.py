@@ -6,9 +6,9 @@
 
 The workload is generated in-process into a scratch directory (never in place) for each GEMM's array
 steps; the run's bingo_progress.log gives every task's release, start and done. Prints:
-- the window (start anchor done to the last store done), the MAC utilisation over all 32 clusters
+- the window (start stamp done to the last store done), the MAC utilisation over all 32 clusters
   (array steps x 2 ns at the (16,4,16) array's peak, over clusters x window) and the busiest cluster's;
-- per cluster: GEMM busy, head (start anchor to first GEMM start), the gate|up span, the gap to the first
+- per cluster: GEMM busy, head (start stamp to first GEMM start), the gate|up span, the gap to the first
   down GEMM, the down span with its idle time, the tail (last down GEMM done to the window end);
 - a fit of GEMM time = fixed + steps x rate, separately for gemm_full and gemm_minimal;
 - single pass: per down slice, the latest down GEMM done over every cluster, the latest fold done, the
@@ -81,7 +81,7 @@ def main():
         elif k.endswith("gemm_minimal"):
             steps[nd.node_name] = last.get(key)
         kern[nd.node_name] = "minimal" if k.endswith("gemm_minimal") else "full"
-    t0 = ev["A0_start_k00_cl0"]["D"]
+    t0 = (ev.get("S0_start_k00_cl0") or ev["A0_start_k00_cl0"])["D"]     # A0_: older runs
     stores = [n for n in ev if n.startswith("y_store_") and "D" in ev[n]]
     t1 = max(ev[n]["D"] for n in stores)
     win = t1 - t0

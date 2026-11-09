@@ -7,7 +7,7 @@
 with params gu_gemv workloads/dsv2/layer0/decode/ffn_gv, workloads/llama3/decode/ffn_gv): one
 LLM's dense SwiGLU FFN for ONE token, on the prefill's mapping (ffn_prefill_mc.PBuild) run as one pass of one row tile,
 with INT4 weights, tensor-parallel over every cluster of the 16 + 4 chiplet platform. The platform, the weight rings, the
-anchors and the setup are chiplet_mc.py's; the data and the golden are ffn_data.py's (one token).
+stamps and the setup are chiplet_mc.py's; the data and the golden are ffn_data.py's (one token).
 
 THE TILE. The (16, 4, 16) GEMM shape takes its rows 16 at a time, so the token is row 0 of one 16-row tile whose other 15
 rows are zero: one pass of 16 rows, one row tile, one post block. Every buffer is the prefill's at 16 rows. The rows of
@@ -86,7 +86,7 @@ the memory chip pushes them into the chip's L3 ring and the DM core loads each i
 
 THE PROGRAM ORDER. Every device core runs its tasks in the order this driver creates them (chain_program_order).
 
-TIMING. The start anchor after every chip's setup (the scales loaded, the X tiles zeroed); the end anchor after the HBM
+TIMING. The start stamp after every chip's setup (the scales loaded, the X tiles zeroed); the end stamp after the HBM
 write of Y. X's multicast and the weight stream are inside the window.
 
 CHECKS, byte for byte against the golden of the device's arithmetic (ffn_data.py, the reduce's fold order): the Y_raw

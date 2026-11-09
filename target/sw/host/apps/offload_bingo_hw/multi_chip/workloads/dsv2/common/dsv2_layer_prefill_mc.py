@@ -53,7 +53,7 @@ glue's h (its scales calibrated on that h), with h in the residual chip's partia
 
 A PROOF OF CONCEPT (params attn.chunks): the attention at the full geometry makes every token's keys but only the first
 chunks' queries, as fa_stages_mc.py does; the MoE / FFN then runs on those chunks' rows (params moe.tokens / ffn.tokens).
-The keys of the later chunks run after the window (behind its end anchor, last in every core's program).
+The keys of the later chunks run after the window (behind its end stamp, last in every core's program).
 
 L1: each block's static plan overlays the blocks' buffers by lifetime (the steps' tiles take the gaps, a tile's buffers
 its own); every device task's args come in phases of at most params args_phase_bytes, two alternating L1 regions
@@ -172,7 +172,7 @@ class LayerStaging(AliasStaging):
 class AttnPart(fas.FaStages):
     """The attention block (fa_stages_mc.py, stage full) in the layer: its window the layer's, its x the input norm's
     (its multicasts wait for their tiles), its end the glue's start; its keys after the window (a proof of concept's
-    later chunks) behind the layer's end anchor; its checks the layer's (h stands for y)."""
+    later chunks) behind the layer's end stamp; its checks the layer's (h stands for y)."""
     stream_name = "zs_fp_stream"
 
     def __init__(self, layer, args, p, plat, hw):
@@ -198,7 +198,7 @@ class AttnPart(fas.FaStages):
 
     def _keys_by_chunk_order(self, s4_end):
         """fa_stages_mc.py's order of the key tasks, with the keys after the window recorded instead of tied to an end
-        anchor: the layer's end anchor comes later (relocate_post_keys)."""
+        stamp: the layer's end stamp comes later (relocate_post_keys)."""
         runs = sorted(self._key_runs, key=lambda r: r[0])
         for (a, h), (b, _) in zip(runs, runs[1:]):
             if h is None:
@@ -237,15 +237,15 @@ class AttnPart(fas.FaStages):
               f"stage-4 tasks of the chunk before; {len(self.post_tasks)} of the chunks from {self.NCH} on after the "
               f"layer's window on {len(self.post_heads)} cores")
 
-    def relocate_post_keys(self, anchor):
+    def relocate_post_keys(self, end):
         """The keys after the window: last in every core's program (after every task the layer made) and behind the
-        layer's end anchor (their first task on each core)."""
+        layer's end stamp (their first task on each core)."""
         end = max(t.node_id for t in self.dfg.node_list)
         n = len(self.post_tasks)
         for j, t in enumerate(self.post_tasks):
             t.order_key = end + (j + 1) / (n + 1)
         for t in self.post_heads.values():
-            self.dfg.bingo_add_edge(anchor, t)
+            self.dfg.bingo_add_edge(end, t)
 
 
 class MoePart(mom.MBuild):
@@ -311,7 +311,7 @@ class MoePart(mom.MBuild):
             self.end, self.check_copies = self.layer.end, self.layer.check_copies
 
     def _checks(self):
-        """An earlier pass's checks wait for the layer's end anchor (the layer makes them after the last pass)."""
+        """An earlier pass's checks wait for the layer's end stamp (the layer makes them after the last pass)."""
         if self.last():
             super()._checks()
         else:
@@ -578,9 +578,9 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the window ------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start anchor (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
+        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
-        start = self.anchor("start", ends)
+        start = self.stamp("start", ends)
         for k in self.chips:
             self.edge(start, self.attn.prefetch[k])
         self.go = {k: start for k in self.chips}
@@ -764,7 +764,7 @@ class LayerBuild(cm.ChipletBuild):
 
     def close_checks(self):
         """The layer's checks, upstream first, then the blocks': sampled windows, byte for byte against the golden (an
-        earlier MoE pass's checks made now, behind the layer's end anchor)."""
+        earlier MoE pass's checks made now, behind the layer's end stamp)."""
         for m in self.deferred:
             m.end, m.check_copies = self.end, self.check_copies
             mom.MBuild._checks(m)
@@ -958,8 +958,8 @@ class LayerBuild(cm.ChipletBuild):
               f"over overlapping L3), every ring chunk loaded; the writers: {kinds}")
 
     def prune_post_edges(self):
-        """The keys after the window (a proof of concept's later chunks) follow the layer's end anchor on every core: a
-        dependency on them from another core's task that the anchor already follows is implied, and it would hold a
+        """The keys after the window (a proof of concept's later chunks) follow the layer's end stamp on every core: a
+        dependency on them from another core's task that the stamp already follows is implied, and it would hold a
         dep tag across the whole MoE / FFN. Such edges go (each core's own program order stays)."""
         post = set(self.attn.post_tasks)
         if not post:
@@ -970,7 +970,7 @@ class LayerBuild(cm.ChipletBuild):
         rm = [(u, v) for v in post for u in list(self.dfg.predecessors(v))
               if u not in post and u in before and core(u) != core(v)]
         self.dfg.remove_edges_from(rm)
-        print(f"[{self.TAG}] keys after the window: {len(rm)} dependencies the end anchor implies removed")
+        print(f"[{self.TAG}] keys after the window: {len(rm)} dependencies the end stamp implies removed")
 
 
 class _LayerBuild(LayerBuild):

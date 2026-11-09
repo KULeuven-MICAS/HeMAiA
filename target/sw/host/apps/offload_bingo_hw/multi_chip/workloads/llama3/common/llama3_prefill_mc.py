@@ -280,9 +280,9 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the windows -------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start anchor (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
+        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
-        start = self.anchor("start", ends)
+        start = self.stamp("start", ends)
         self.go = {k: start for k in self.chips}
         for k in self.chips:
             self.edge(start, self.attn.prefetch[k])

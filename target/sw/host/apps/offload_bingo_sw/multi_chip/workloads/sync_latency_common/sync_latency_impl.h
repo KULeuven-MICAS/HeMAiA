@@ -36,17 +36,17 @@
 //
 //   A0 --mids(phase 0)--> A1 --mids(phase 1)--> A2 -- ... --> A9
 //   ^^                    ^^
-//   anchor tasks, all on chip 0x00, each stamps mcycle once
+//   stamp tasks, all on chip 0x00, each stamps mcycle once
 //
 // Phase i's latency is stamp(A_{i+1}) - stamp(A_i): out to the phase's participants and
 // back. Both stamps come from the same core on the same chip, so the difference is real.
 // It covers TWO edges (out and back), not one; see "Reading the numbers".
 //
-// ✅ The anchors are FUSED: A_{i+1} is simultaneously the sink of phase i and the source
+// ✅ The stamps are FUSED: A_{i+1} is simultaneously the sink of phase i and the source
 // of phase i+1. That is what makes the whole sweep fit in one binary -- 41 tasks instead
 // of 49 with separate sinks (see "Task budget").
 //
-// The tasks are __snax_kernel_sync_probe: no work, no printf. All that sits between two
+// The tasks are __snax_kernel_stamp: no work, no printf. All that sits between two
 // stamps is the manager resolving edges and the fabric carrying notifications.
 //
 // ⚠️ PHASE 0 IS AN UNTIMED WARM-UP, and it is not optional. A chiplet's FIRST touch
@@ -88,7 +88,7 @@
 // ⚠️ bingo_task_create() allocates from the L2 heap in the narrow SPM. That heap is now
 // 3/4 of the region (~24 KiB, see bingo_hemaia_system_mmap_init) rather than 1/2, which
 // was only about 35 tasks. The full sweep needs 41:
-//     11 anchors + 46 mids (15 warm-up + 1 local + 1+1 + 1+3 + 1+7 + 1+15) = 57
+//     11 stamps + 46 mids (15 warm-up + 1 local + 1+1 + 1+3 + 1+7 + 1+15) = 57
 // and the heap now takes the whole narrow SPM above the comm buffer less a 1 KiB guard,
 // which is 61 tasks at the measured 512 B per task. The SYNC_MAX_P = 4 smoke build needs
 // 17. The run prints capacity and peak so the margin is measured, not assumed.
@@ -195,9 +195,9 @@ static inline int sync_rect_fits(uint8_t br) {
 // chip 0x00's heap from every other chiplet.
 static inline uint32_t sync_make_args(uint8_t owner, uint64_t *stamp_out) {
     if (get_current_chip_id() != owner) return 0;
-    __snax_kernel_sync_probe_args_t *args =
-        (__snax_kernel_sync_probe_args_t *)bingo_l3_alloc(
-            owner, sizeof(__snax_kernel_sync_probe_args_t));
+    __snax_kernel_stamp_args_t *args =
+        (__snax_kernel_stamp_args_t *)bingo_l3_alloc(
+            owner, sizeof(__snax_kernel_stamp_args_t));
     uint64_t stamp64 = bingo_l3_alloc(owner, sizeof(uint32_t));  // full, prefixed
     *(volatile uint32_t *)(uintptr_t)stamp64 = 0;                // host: keep the prefix
     args->stamp_addr = (uint32_t)stamp64;                        // device: low 32 bits
@@ -205,12 +205,12 @@ static inline uint32_t sync_make_args(uint8_t owner, uint64_t *stamp_out) {
     return (uint32_t)(uintptr_t)args;
 }
 
-static inline bingo_task_t *sync_probe_task(uint8_t owner, uint64_t *stamp_out) {
+static inline bingo_task_t *stamp_task(uint8_t owner, uint64_t *stamp_out) {
     uint32_t args = sync_make_args(owner, stamp_out);
     bingo_task_t *t = bingo_task_create(
-        get_device_function("__snax_kernel_sync_probe"), args, owner, 0);
+        get_device_function("__snax_kernel_stamp"), args, owner, 0);
     if (t == NULL) {
-        printf("Error: sync probe task creation failed (chip %x) -- L2 task heap full\r\n",
+        printf("Error: stamp task creation failed (chip %x) -- L2 task heap full\r\n",
                owner);
     }
     return t;
@@ -231,8 +231,8 @@ static int          g_build_err;
 
 uint32_t __workload_sync_latency(bingo_task_t **task_list) {
     check_kernel_tab_ready();
-    if (get_device_function("__snax_kernel_sync_probe") == SNAX_SYMTAB_END_FN_ADDR) {
-        printf("Error: __snax_kernel_sync_probe symbol lookup failed!\r\n");
+    if (get_device_function("__snax_kernel_stamp") == SNAX_SYMTAB_END_FN_ADDR) {
+        printf("Error: __snax_kernel_stamp symbol lookup failed!\r\n");
         return 0;
     }
 
@@ -240,9 +240,9 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
     g_num_phases = 0;
     g_build_err = 0;
 
-    // The first anchor. Every later anchor closes one phase and opens the next.
-    bingo_task_t *anchor = sync_probe_task(SYNC_SRC_CHIP, &g_stamp[0]);
-    task_list[n++] = anchor;
+    // The first stamp. Every later stamp closes one phase and opens the next.
+    bingo_task_t *cur = stamp_task(SYNC_SRC_CHIP, &g_stamp[0]);
+    task_list[n++] = cur;
 
     // ---- phase 0: UNTIMED WARM-UP -- touch every participating chiplet once ---------
     // One-to-all over the largest rectangle this build sweeps. Its result is discarded;
@@ -261,26 +261,26 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
         g_phase[ph].hops = 0;
         g_phase[ph].edges = 0;
 
-        bingo_task_t *next = sync_probe_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
+        bingo_task_t *next = stamp_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
         if (warm_br) {
             for (uint32_t x = 0; x <= (uint32_t)(warm_br >> 4); x++) {
                 for (uint32_t y = 0; y <= (uint32_t)(warm_br & 0x0Fu); y++) {
                     uint8_t chip = sync_chip_at(x, y);
                     if (chip == SYNC_SRC_CHIP || !sync_is_compute(chip)) continue;
-                    bingo_task_t *mid = sync_probe_task(chip, NULL);
-                    g_build_err |= sync_depend(mid, anchor);
+                    bingo_task_t *mid = stamp_task(chip, NULL);
+                    g_build_err |= sync_depend(mid, cur);
                     g_build_err |= sync_depend(next, mid);
                     task_list[n++] = mid;
                 }
             }
         } else {
-            bingo_task_t *mid = sync_probe_task(SYNC_SRC_CHIP, NULL);
-            g_build_err |= sync_depend(mid, anchor);
+            bingo_task_t *mid = stamp_task(SYNC_SRC_CHIP, NULL);
+            g_build_err |= sync_depend(mid, cur);
             g_build_err |= sync_depend(next, mid);
             task_list[n++] = mid;
         }
         task_list[n++] = next;
-        anchor = next;
+        cur = next;
     }
 
     // ---- one phase per (rectangle x mode) -------------------------------------------
@@ -300,11 +300,11 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
             g_phase[ph].hops = sync_hops(br);
             g_phase[ph].edges = (mode == SYNC_MODE_ONE_TO_ONE) ? 2u : 2u * (p - 1u);
 
-            bingo_task_t *next = sync_probe_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
+            bingo_task_t *next = stamp_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
 
             if (mode == SYNC_MODE_ONE_TO_ONE) {
-                bingo_task_t *mid = sync_probe_task(br, NULL);
-                g_build_err |= sync_depend(mid, anchor);
+                bingo_task_t *mid = stamp_task(br, NULL);
+                g_build_err |= sync_depend(mid, cur);
                 g_build_err |= sync_depend(next, mid);
                 task_list[n++] = mid;
             } else {
@@ -312,15 +312,15 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
                     for (uint32_t y = 0; y <= (uint32_t)(br & 0x0Fu); y++) {
                         uint8_t chip = sync_chip_at(x, y);
                         if (chip == SYNC_SRC_CHIP || !sync_is_compute(chip)) continue;
-                        bingo_task_t *mid = sync_probe_task(chip, NULL);
-                        g_build_err |= sync_depend(mid, anchor);
+                        bingo_task_t *mid = stamp_task(chip, NULL);
+                        g_build_err |= sync_depend(mid, cur);
                         g_build_err |= sync_depend(next, mid);
                         task_list[n++] = mid;
                     }
                 }
             }
             task_list[n++] = next;
-            anchor = next;
+            cur = next;
         }
     }
 
@@ -339,13 +339,13 @@ uint32_t __workload_sync_latency(bingo_task_t **task_list) {
         g_phase[ph].hops = 0;
         g_phase[ph].edges = 0;
 
-        bingo_task_t *mid = sync_probe_task(SYNC_SRC_CHIP, NULL);
-        bingo_task_t *next = sync_probe_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
-        g_build_err |= sync_depend(mid, anchor);
+        bingo_task_t *mid = stamp_task(SYNC_SRC_CHIP, NULL);
+        bingo_task_t *next = stamp_task(SYNC_SRC_CHIP, &g_stamp[ph + 1]);
+        g_build_err |= sync_depend(mid, cur);
         g_build_err |= sync_depend(next, mid);
         task_list[n++] = mid;
         task_list[n++] = next;
-        anchor = next;
+        cur = next;
     }
 
     asm volatile("fence" ::: "memory");

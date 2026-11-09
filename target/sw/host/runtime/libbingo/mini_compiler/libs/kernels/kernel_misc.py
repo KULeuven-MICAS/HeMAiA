@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Kernels that drive no accelerator, and the iDMA.
 
-Dummy, sync probe/mark, chip barrier, sync report -- placed wherever their consumer is,
+Dummy, stamp, chip barrier, stamp report -- placed wherever their consumer is,
 because they touch no engine -- plus the cluster iDMA transfers and the MoE route and
 router pack on the DM core. They share a file because none of them is big
 enough to be worth its own."""
@@ -31,29 +31,44 @@ class SnaxBingoKernelDummyArgs(BingoKernelArgs):
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         return {"dummy_input": str(self.dummy_input)}
 
-class SnaxBingoKernelSyncProbeArgs(BingoKernelArgs):
-    """Args for __snax_bingo_kernel_sync_probe (cross-chip sync latency, arm D).
+class SnaxBingoKernelStampArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_stamp: a task that does no work. With stamp_buf it stamps the
+    core's mcycle into stamp_buf[slot]; with mark_addr it then stores the SRAM-probe mark there
+    (the testbench snapshots every bank array's counters; marks must carry consecutive slots);
+    with both 0 (the default) it only completes: an ordering point, a compiler relay, an empty task.
+    The device kernel's comment (snax-bingo-offload libsnaxkernel/offload_hw_kernels/basic.h) draws
+    the graph each of these examples makes.
 
-    The probe does no work; it stamps mcycle into stamp_buf[slot]. Pass stamp_buf=0
-    for a task whose timing is not needed (the remote "mid" tasks).
+        join = S.node(k, 0, dm, "join", "__snax_bingo_kernel_stamp", SnaxBingoKernelStampArgs(), [a, b])
+        buf = BingoMemAlloc("stamps", size=2 * 4, mem_level="L2", chip_id=k, cluster_id=0)
+        t0 = S.node(k, 0, dm, "t0", "__snax_bingo_kernel_stamp", SnaxBingoKernelStampArgs(buf, 0), [ready])
+        work = S.node(k, 1, gemm, "work", ..., [t0])            # the measured task starts after t0
+        t1 = S.node(k, 0, dm, "t1", "__snax_bingo_kernel_stamp", SnaxBingoKernelStampArgs(buf, 1), [work])
+        # a measured window's edge (fabric.py stamp()): stamp and mark
+        end = S.node(R, 0, dm, "S1_end", "__snax_bingo_kernel_stamp",
+                     SnaxBingoKernelStampArgs(stamp_buf=stamps, slot=1, mark_addr=mark), last_tasks)
 
-    WARNING: stamp_buf must be allocated on the SAME chiplet the task runs on. The
-    kernel writes it with a plain local store, and mcycle is not comparable across
-    chiplets anyway, so a cross-chiplet stamp would be meaningless even if it landed.
+    WARNING: stamp_buf and mark_addr must be allocated on the SAME chiplet the task runs on
+    (mark_addr in its L1). The kernel writes them with plain local stores, and mcycle is not
+    comparable across chiplets anyway, so a cross-chiplet stamp would be meaningless even if it landed.
     """
 
-    def __init__(self, stamp_buf: Union[BingoMemAlloc, int] = 0, slot: int = 0):
+    def __init__(self, stamp_buf: Union[BingoMemAlloc, int] = 0, slot: int = 0,
+                 mark_addr: Union[BingoMemAlloc, int] = 0):
         self.stamp_buf = stamp_buf
         self.slot = int(slot)
+        self.mark_addr = mark_addr
 
     def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_sync_probe_args_t"
+        return "__snax_bingo_kernel_stamp_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         assignments = {}
         self._process_addr(self.stamp_buf, "stamp_buf", assignments, handle_name_map,
                            split_64bit=False, as_64bit=False)
         assignments["slot"] = str(self.slot)
+        self._process_addr(self.mark_addr, "mark_addr", assignments, handle_name_map,
+                           split_64bit=False, as_64bit=False)
         return assignments
 
 
@@ -135,38 +150,14 @@ class SnaxBingoKernelChipBarrierArgs(BingoKernelArgs):
                 "bottom_right": str(self.bottom_right), "seq": str(self.seq)}
 
 
-class SnaxBingoKernelSyncMarkArgs(BingoKernelArgs):
-    """Args for __snax_bingo_kernel_sync_mark: the sync probe's stamp into stamp_buf[slot], then
-    a mark store to mark_addr that the testbench's SRAM probe answers with a snapshot of every
-    bank array's read and write counters. Marks must carry consecutive slots. stamp_buf and
-    mark_addr must be on the chiplet the task runs on, mark_addr in its L1."""
+class HostBingoKernelStampReportArgs(BingoKernelArgs):
+    """Args for __host_bingo_kernel_stamp_report: reads back the stamps the stamp tasks left in
+    stamp_buf[0 .. num_phases] and prints one line per phase (the cycles from stamp ph to ph + 1).
 
-    def __init__(self, stamp_buf: Union[BingoMemAlloc, int] = 0, slot: int = 0,
-                 mark_addr: Union[BingoMemAlloc, int] = 0):
-        self.stamp_buf = stamp_buf
-        self.slot = int(slot)
-        self.mark_addr = mark_addr
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_sync_mark_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        assignments = {}
-        self._process_addr(self.stamp_buf, "stamp_buf", assignments, handle_name_map,
-                           split_64bit=False, as_64bit=False)
-        assignments["slot"] = str(self.slot)
-        self._process_addr(self.mark_addr, "mark_addr", assignments, handle_name_map,
-                           split_64bit=False, as_64bit=False)
-        return assignments
-
-
-class HostBingoKernelSyncReportArgs(BingoKernelArgs):
-    """Args for __host_bingo_kernel_sync_report (cross-chip sync latency, arm D).
-
-    Runs as a HOST node at the end of the DFG and prints one line per phase, keyed by
-    phase index. What each index means is written by the generator to sync_phases.csv:
-    a DFG memory handle only reserves storage, so a metadata table cannot be preloaded
-    into the device image.
+    Runs as a HOST node after the last stamp (chiplet_mc.py end_window(): phase 0 is the window),
+    one line per phase keyed by phase index. What each of the sync-latency sweep's indices means its
+    generator writes to sync_phases.csv: a DFG memory handle only reserves storage, so a metadata
+    table cannot be preloaded into the device image.
     """
 
     def __init__(self, stamp_buf: Union[BingoMemAlloc, int],
@@ -176,7 +167,7 @@ class HostBingoKernelSyncReportArgs(BingoKernelArgs):
         self.local_phase = int(local_phase)
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_sync_report_args_t"
+        return "__host_bingo_kernel_stamp_report_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         assignments = {}

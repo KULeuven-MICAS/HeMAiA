@@ -180,5 +180,5 @@
 
 // --- Sync-probe kernel (cross-chip synchronization latency measurement) ---
 // The task body itself; the interval between two probes is the quantity of interest.
-#define BINGO_TRACE_SYNC_PROBE_START                0x430
-#define BINGO_TRACE_SYNC_PROBE_END                  0x431
+#define BINGO_TRACE_STAMP_START                0x430
+#define BINGO_TRACE_STAMP_END                  0x431

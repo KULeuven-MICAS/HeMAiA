@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The attention of one Llama-3-8B layer (grouped-query, 32 query heads, 8 key/value heads of 128) over a fresh prompt,
 causal, on the 16 + 4 chiplet platform, every GEMM on the (16, 4, 16) shape with INT4 weights. The platform, the weight
-rings, the anchors and the checks are chiplet_mc.py's; the data and the golden are llama3_data.py's (LlamaAttnData); the
+rings, the stamps and the checks are chiplet_mc.py's; the data and the golden are llama3_data.py's (LlamaAttnData); the
 sweep is libs/blocks/fa_sweep.py's.
 
 THE SPLIT. Cluster g runs query head h(g). A key/value group's four query heads sit on two chips of one compute column,
@@ -1633,7 +1633,7 @@ class ABuild(cm.ChipletBuild):
         return GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
 
     def check_window_local(self):
-        """sync barrier: no dependency edge crosses chips between the start barrier and the end anchor; only the
+        """sync barrier: no dependency edge crosses chips between the start barrier and the end stamp; only the
         barriers synchronise the chips there (data a chip waits for by its flag is an order edge, not a dependency).
         Returns the offending edges."""
         import networkx as nx

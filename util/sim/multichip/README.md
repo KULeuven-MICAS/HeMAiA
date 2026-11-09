@@ -11,7 +11,7 @@ directory and `../common` (its `driver.py`) at the front of `sys.path`, then `mi
 | module | what it holds |
 |---|---|
 | `fabric.py` | `FabricBase`: the mesh, a local buffer's address on another chip, the fold order over the compute chips |
-| `chiplet_mc.py` | `ChipletBuild(FabricBase)`: the platform and its params, the weight rings, the anchors, the barriers, the broadcast of a token, the chips' fold and the reduce, the checks and `finish()` (emission). A block's build subclasses it: `ffn_prefill_mc.PBuild`, the FA, MoE and layer builds |
+| `chiplet_mc.py` | `ChipletBuild(FabricBase)`: the platform and its params, the weight rings, the stamps, the barriers, the broadcast of a token, the chips' fold and the reduce, the checks and `finish()` (emission). A block's build subclasses it: `ffn_prefill_mc.PBuild`, the FA, MoE and layer builds |
 
 What is not multi-chiplet code lives with the rest of `util/sim`. A block's data module puts `../llm` (and `../gemm`
 where it needs `gemv_utils`) on `sys.path`; `model_data` puts `../common` and `../simd` there:

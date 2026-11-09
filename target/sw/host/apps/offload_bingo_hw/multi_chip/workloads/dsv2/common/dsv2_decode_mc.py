@@ -242,7 +242,7 @@ class AttnPart(fdm.FaDecode):
         self.layer.attn_ends = [t for t in after if t is not None]
 
     def decode_checks(self):
-        """The layer makes the attention's checks once its end anchor exists (LayerBuild.attn_checks)."""
+        """The layer makes the attention's checks once its end stamp exists (LayerBuild.attn_checks)."""
 
 
 class AttnKsPart(fdk.FaDecodeKs):
@@ -286,7 +286,7 @@ class AttnKsPart(fdk.FaDecodeKs):
         self.layer.attn_ends = [t for t in after if t is not None]
 
     def _checks(self):
-        """The layer makes the attention's checks once its end anchor exists (LayerBuild.attn_checks_ks)."""
+        """The layer makes the attention's checks once its end stamp exists (LayerBuild.attn_checks_ks)."""
 
 
 class MoePart(mdm.DBuild):
@@ -554,7 +554,7 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the window ------------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The constants into C00's L1 and the attention's preloads, the start anchor after them, the attention's
+        """The constants into C00's L1 and the attention's preloads, the start stamp after them, the attention's
         prefetchers behind it, and the input norm with its multicast of x."""
         T, gc, b = self.TAG, self.GC, self.b
         cld = self._node(gc, "dm", "n_c_ld", "__snax_bingo_kernel_idma_1d_copy",
@@ -567,7 +567,7 @@ class LayerBuild(cm.ChipletBuild):
             ends.append(self._node(gc, "xdma", "n_arz", "__snax_bingo_kernel_xdma_memset",
                                    SnaxBingoKernelXdmaMemsetArgs(b["ar16"], 4 * HIDDEN,
                                                                  SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), []))
-        self.start = start = self.anchor("start", ends)
+        self.start = start = self.stamp("start", ends)
         self.go = {k: start for k in self.chips}
         for k in self.chips:
             self.edge(start, self.attn.prefetch[k])
@@ -600,7 +600,7 @@ class LayerBuild(cm.ChipletBuild):
         FFN's zeroed X tiles, the MoE's warm-up). The chain ends before the glue starts, so the probe adds nothing to
         X's path; it makes the order the X flag gives visible to the dependency tags and the static L1 plan (the
         attention's tasks before the block's). The block's preloads from HBM (the FFN's scale factors) go before the
-        window: first on their cores, ahead of the chip's last attention preload, which the start anchor waits for."""
+        window: first on their cores, ahead of the chip's last attention preload, which the start stamp waits for."""
         go = {}
         for k in self.chips:
             local = []
@@ -739,7 +739,7 @@ class LayerBuild(cm.ChipletBuild):
 
     def close(self, after):
         """The append (after the new piece's multicast and the second block's last chains: no push and no chain is in
-        flight then) and the end anchor after it and the output writes."""
+        flight then) and the end stamp after it and the output writes."""
         A = self.attn
         if self.attn_kind == "ks":
             self.append = A.append_piece(list(self.chains_done))
@@ -806,7 +806,7 @@ class LayerBuild(cm.ChipletBuild):
         return checks
 
     def close_checks(self, block_checks):
-        """Every check of the layer, compared by the root's host after the end anchor: the attention's, the glue's (h, X
+        """Every check of the layer, compared by the root's host after the end stamp: the attention's, the glue's (h, X
         and, stop full, X's landing on the chip in the middle of the fold order), the second block's and the output."""
         R, gc, b = self.ROOT, self.GC, self.b
         x8 = self.x8.astype(np.int8)

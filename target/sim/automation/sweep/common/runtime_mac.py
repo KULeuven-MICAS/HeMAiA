@@ -91,8 +91,8 @@ def check(tag):
         print(f"WAITING {time.strftime('%H:%M')} {tag}: simulation not started yet")
         return True
     names = {int(r["ID"]): r["Name"] for r in csv.DictReader(open(f"{task}/workload_tables/final_dfg.csv"))}
-    a0 = next(i for i, n in names.items() if n.startswith("A0_start"))
-    a1 = next((i for i, n in names.items() if n.startswith("A1_end")), None)
+    a0 = next(i for i, n in names.items() if n.startswith(("S0_start", "A0_start")))     # A<n>_: older runs
+    a1 = next((i for i, n in names.items() if n.startswith(("S1_end", "A1_end"))), None)
     g = gemms(task, wl)
     # the peak of the arrays the run has: two a chip of its graph (params chip_rows leaves rows out)
     chips = {r["Chiplet"] for r in csv.DictReader(open(f"{task}/workload_tables/final_dfg.csv"))}

@@ -18,7 +18,7 @@ core when the core is free, for its measured duration (start to done in the run'
 matched by task name); a dummy task takes no core time. Spin tasks whose measured time is mostly
 waiting are given their shortest measured time (x_wait: the flag is set when its put is done).
 
-Prints the window (start anchor done to the last store done), each iteration's store and X put, and,
+Prints the window (start stamp done to the last store done), each iteration's store and X put, and,
 with --compare, the measured values of the run next to them."""
 import argparse
 import collections
@@ -62,7 +62,7 @@ def generate(wl, out):
 
 
 def measured(run, wl_dfg):
-    """{task name: (start, done)} in us, and the start anchor's done, from a run's scheduler log."""
+    """{task name: (start, done)} in us, and the start stamp's done, from a run's scheduler log."""
     names = {int(r["ID"]): r["Name"] for r in csv.DictReader(open(wl_dfg))}
     log = next(p for p in (os.path.join(run, d, "bin", "bingo_progress.log") for d in os.listdir(run)
                            if d.startswith("task_")) if os.path.exists(p))
@@ -299,8 +299,9 @@ def main():
             print("durations: " + ", ".join(f"{k} {v}" for k, v in how.items()))
         res, missing, chain = replay(S, os.path.join(out, "offload_bingo_hw.h"), dur, a.wq, a.msg_us,
                                      free_relays=a.free_relays)
-    t0 = res["A0_start_k00_cl0"][1]
-    m0 = meas["A0_start_k00_cl0"][1] if "A0_start_k00_cl0" in meas else None
+    s0 = lambda d: next((d[n] for n in ("S0_start_k00_cl0", "A0_start_k00_cl0") if n in d), None)   # A0_: older runs
+    t0 = s0(res)[1]
+    m0 = s0(meas)[1] if s0(meas) is not None else None
     NI = S.NI
     print(f"replay of {a.workload} with the durations of {os.path.basename(a.run)} (waiting queue {a.wq}, "
           f"cross-chip message {a.msg_us} us); {len(missing)} real tasks without a measured duration (0 used)")
@@ -333,14 +334,14 @@ def main():
         idle_gu = (gu[-1][1] - gu[0][0]) - sum(d - s for s, d, _ in gu)
         idle_dn = (dn[-1][1] - dn[0][0]) - sum(d - s for s, d, _ in dn)
         print(f"busiest GEMM core {kmax}: busy {busy[kmax]:.1f} of {WIN:.1f} us ({100 * busy[kmax] / WIN:.1f} %)")
-        print(f"  head (start anchor -> first gate|up) {gu[0][0]:.1f} us; gate|up {gu[0][0]:.1f} -> {gu[-1][1]:.1f} us "
+        print(f"  head (start stamp -> first gate|up) {gu[0][0]:.1f} us; gate|up {gu[0][0]:.1f} -> {gu[-1][1]:.1f} us "
               f"(busy {sum(d - s for s, d, _ in gu):.1f}, idle {idle_gu:.1f}); gap -> first down {dn[0][0] - gu[-1][1]:.1f} us; "
               f"down {dn[0][0]:.1f} -> {dn[-1][1]:.1f} (busy {sum(d - s for s, d, _ in dn):.1f}, idle {idle_dn:.1f}); tail {WIN - dn[-1][1]:.1f} us")
         big = sorted(((b[0] - a[1], a[2], b[2]) for a, b in zip(v, v[1:])), reverse=True)[:6]
         for g, a_, b_ in big:
             print(f"    idle {g:6.1f} us between {a_} and {b_}")
     for last in (a.why_from or [rows[0][1]]) if a.why else []:
-        print(f"critical path into {last}, walked back (us after the start anchor; reason = what set the release or start):")
+        print(f"critical path into {last}, walked back (us after the start stamp; reason = what set the release or start):")
         for n, r, d, why in chain(last, a.why):
             print(f"  {n:34s} released {r - t0:8.1f}  done {d - t0:8.1f}  ({why})")
     for rx in a.dur:

@@ -30,22 +30,25 @@ SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
 }
 
-// Sync probe: the smallest possible task. It does no work and prints nothing -- its
-// whole purpose is to be the endpoint of a dependency edge, so that the time between two
-// probes measures the scheduler and the fabric rather than a kernel.
+// Stamp (bingo-sw): the smallest possible task. It does no work and prints nothing; it is the
+// endpoint of a dependency edge, so the time between two stamps measures the scheduler and the
+// fabric rather than a kernel. It stores mcycle into args->stamp_addr (0: no stamp). Only the DM
+// core stamps, so the value is from one well-defined core.
 //
-// Stamps mcycle into args->stamp_addr (0 = don't stamp). Only the DM core stamps, so the
-// value is from one well-defined core; both cores share a clock, but consistency matters.
-SNAX_LIB_DEFINE void __snax_kernel_sync_probe(void *arg)
+// Example, a host program of the software flow (sync_latency_impl.h stamp_task):
+//   __snax_kernel_stamp_args_t *a = bingo_l3_alloc(chip, sizeof(*a));
+//   a->stamp_addr = (uint32_t)(uintptr_t)&stamps[0];
+//   bingo_task_t *t = bingo_task_create(get_device_function("__snax_kernel_stamp"), a, chip, 0);
+SNAX_LIB_DEFINE void __snax_kernel_stamp(void *arg)
 {
-    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_STAMP_START);
     if (snrt_is_dm_core()) {
         uint32_t stamp_addr = ((uint32_t *)arg)[0];
         if (stamp_addr) {
             *(volatile uint32_t *)(uintptr_t)stamp_addr = snrt_mcycle();
         }
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_STAMP_END);
 }
 
 SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)

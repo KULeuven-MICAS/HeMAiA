@@ -1511,7 +1511,7 @@ bind hemaia_d2d_link_framer snax_d2dw_framer_probe #(.AW($bits(axi_out_req_o.ar.
 //
 // Bound to every snitch_data_mem: each cluster's L1 (TCDM) and each chiplet's L3 bank array.
 // It counts bank reads and bank writes, one per enabled 64-bit bank per cycle. Software marks
-// points in the program with __snax_bingo_kernel_sync_mark: one 32-bit store of
+// points in the program with __snax_bingo_kernel_stamp (its mark_addr): one 32-bit store of
 // 0x5A11_0000 | slot into chiplet 0x00's L1. The L1 probe of chiplet (0,0) recognises that store
 // when its slot is the next expected one, and every instance then prints its counters, so two
 // marks bracket the SRAM accesses of everything in between, on every chiplet.

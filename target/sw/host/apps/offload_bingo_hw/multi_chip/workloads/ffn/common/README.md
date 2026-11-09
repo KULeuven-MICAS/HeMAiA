@@ -26,7 +26,7 @@ golden in `util/sim/llm/model_data.py` (with `util/sim/common/` and `util/sim/si
 ```
 util/sim/multichip/
   fabric.py           FabricBase: the mesh, remote addresses, the chips' fold order
-  chiplet_mc.py       ChipletBuild(FabricBase): the platform, weight rings, anchors, barriers, broadcast,
+  chiplet_mc.py       ChipletBuild(FabricBase): the platform, weight rings, stamps, barriers, broadcast,
                       reduce, checks and finish() that every block builds on (ffn, fa, moe, the llama3 and dsv2 layers)
 ```
 
@@ -41,7 +41,7 @@ fabric.FabricBase                       util/sim/multichip/fabric.py
 ```
 
 A build runs `__init__` (params, data, golden, staging, rings, buffers), then `build()` (the task graph), then
-`finish(app_name)` (anchors, checks, emission). `PBuild` is grouped in that order:
+`finish(app_name)` (stamps, checks, emission). `PBuild` is grouped in that order:
 
 | section of `ffn_prefill_mc.py` | what it makes |
 |---|---|

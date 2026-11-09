@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the ffn prefill workloads (workloads/ffn/<model>_prefill/<variant>/): one LLM's dense SwiGLU
 FFN over a prompt of T tokens, on the (16, 4, 16) GEMM shape with INT4 weights, tensor-parallel over every cluster of
-the 16 + 4 chiplet platform. The platform, the weight rings, the anchors and the setup are chiplet_mc.py's; the data and
+the 16 + 4 chiplet platform. The platform, the weight rings, the stamps and the setup are chiplet_mc.py's; the data and
 the golden are ffn_data.py's. ffn_stages_mc.py runs the block stage by stage; llama3/common/llama3_prefill_mc.py runs it
 inside a whole layer.
 
@@ -40,7 +40,7 @@ restream loads them from the ring again (weights larger than the ring).
 
 THE PROGRAM ORDER. Every device core runs its tasks in the order this driver creates them (chain_program_order).
 
-TIMING. The start anchor after every chip's setup (the scales loaded); the end anchor after the root's last stores. X's
+TIMING. The start stamp after every chip's setup (the scales loaded); the end stamp after the root's last stores. X's
 multicast and the weight stream are inside the window.
 """
 
@@ -1270,7 +1270,7 @@ class PBuild(cm.ChipletBuild):
         return H
 
     def check_window_local(self):
-        """sync barrier: no dependency edge crosses chips between the start barrier and the end anchor; only the
+        """sync barrier: no dependency edge crosses chips between the start barrier and the end stamp; only the
         barriers synchronise the chips there. Returns the offending edges."""
         import networkx as nx
         pre = set().union(*(nx.ancestors(self.dfg, t) for t in self.go.values()))
@@ -1365,7 +1365,7 @@ class PBuild(cm.ChipletBuild):
         return [sl for c in range(self.NC) for sl in self.dn_sl[c]]
 
     def gather_check(self, name, items, n):
-        """items [(chip, cluster, L1 source, golden)]: after the end anchor each cluster's DM core
+        """items [(chip, cluster, L1 source, golden)]: after the end stamp each cluster's DM core
         copies the first n bytes of its source into its own slice of one L3 symbol on the root, and
         the root's host compares the whole symbol in one check. The first bad offset // n names the
         item. Returns the check for run_checks."""

@@ -4,22 +4,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """parse_ffn.py <run dir> [...]: the FFN runs into results/ffn.csv.
 
-Latency. The root's UART carries one SYNC line per window between consecutive anchors
-(__host_bingo_kernel_sync_report after the end anchor): phase 0 is start -> end, or, with
-params anchor_reduce, start -> reduce and reduce -> end. A window is counted in DM-core
-cycles of chip 0x00.
+Latency. The root's UART carries one SYNC line per window between consecutive stamps
+(__host_bingo_kernel_stamp_report after the end stamp): phase 0 is start -> end. A window is
+counted in DM-core cycles of chip 0x00.
 
-SRAM accesses. Every anchor also stores a mark that the testbench's SRAM probe answers with a
+SRAM accesses. Every stamp also stores a mark that the testbench's SRAM probe answers with a
 snapshot of every bank array's counters (bin/snax_probes.log, "[SRAM mark]" lines), so a
-window's accesses are the difference of its two anchors' snapshots: summed over the chips, per
+window's accesses are the difference of its two stamps' snapshots: summed over the chips, per
 level (L1 = the clusters' TCDM, L3 = the chips' memory), and at the busiest chip.
 
 Checks. The root's host compares y16, y_raw and one chip's loc against the golden byte for
 byte; quiet checks print only failures, and each chip one "Checks: N PASS, M FAIL" line.
 
 Phases (trace_ffn.py, from the core traces, so before the run is pruned): each phase's latest
-task end, in ns after the start anchor -- x on every cluster, the first weight chunk, the last
-gate|up and down GEMVs, the last chip's loc, the reduce, y16, the end anchor.
+task end, in ns after the start stamp -- x on every cluster, the first weight chunk, the last
+gate|up and down GEMVs, the last chip's loc, the reduce, y16, the end stamp.
 """
 
 import csv

@@ -66,7 +66,7 @@ o8 multicast two passes back; _check_collectives proves every pair of multicasts
 
 CHECKS, byte for byte against the device's arithmetic end to end, sampled: a few 2 KiB windows of x8 and X in HBM, of y and
 Y_raw in their owners' L3, and whole rows of h and of the output in HBM, spread over the passes and chips. After the end
-anchor each sample is copied into one L3 buffer on the root (from HBM behind its flag), where the root's host compares it.
+stamp each sample is copied into one L3 buffer on the root (from HBM behind its flag), where the root's host compares it.
 
 PARAMETERS (params.hjson): the platform and graph switches both blocks share (and args_phase_bytes: each cluster's task
 args in phases of at most this many bytes), then `attn` (llama3_attn_mc.py's params), `ffn` (ffn_prefill_mc.py's) and
@@ -867,11 +867,11 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the windows -------------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start anchor (after every chip's setup), the attention's prefetchers behind it, and the head: the norms
+        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the head: the norms
         of the first norm_lead passes, before the attention's tasks."""
         A = self.attn
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
-        start = self.anchor("start", ends)
+        start = self.stamp("start", ends)
         self.go = {k: start for k in self.chips}
         for k in self.chips:
             self.edge(start, A.prefetch[k])
@@ -1079,7 +1079,7 @@ class LayerBuild(cm.ChipletBuild):
         self.ring_last = last
 
     def close_window(self, after):
-        """The FFN's end: the finals still pending, then the end anchor (behind the FFN's ends and every output write) and
+        """The FFN's end: the finals still pending, then the end stamp (behind the FFN's ends and every output write) and
         the root's report."""
         self.at(("ffn_end",))
         if self.pending:
@@ -1131,7 +1131,7 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- checks -------------------------------------------------------------------------------------------------------
     def _gather(self, name, items):
-        """items [(chip, source, golden bytes, HBM flag or None)]: after the end anchor each source is copied into its
+        """items [(chip, source, golden bytes, HBM flag or None)]: after the end stamp each source is copied into its
         slice of one L3 buffer on the root (from HBM through a 64 KiB L1 buffer of its chip, behind the data's flag);
         returns the check."""
         R, T = self.ROOT, self.TAG

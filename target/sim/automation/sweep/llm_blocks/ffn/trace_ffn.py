@@ -15,7 +15,7 @@ is the k-th normal task of that core: no task id needs to be in the trace.
 
 Writes <task dir>/tasks.csv (name, chip, cluster, core, start_ns, end_ns) and returns the
 phase summary parse_ffn.py records: each the latest end of its tasks, in ns after the start
-anchor's end.
+stamp's end.
 """
 
 import csv
@@ -123,9 +123,9 @@ def tasks(task_dir: Path, wl_dir: Path, ncl: int = 2):
 
 
 def phases(rows):
-    """The FFN's phases, each the latest end of its tasks, in ns after the start anchor."""
+    """The FFN's phases, each the latest end of its tasks, in ns after the start stamp."""
     by = {r["name"]: r for r in rows}
-    st = next((r for r in rows if r["name"].startswith("A0_start")), None)
+    st = next((r for r in rows if r["name"].startswith(("S0_start", "A0_start"))), None)   # A0_: older runs
     if st is None:
         return {}
     t0 = st["end_ns"]

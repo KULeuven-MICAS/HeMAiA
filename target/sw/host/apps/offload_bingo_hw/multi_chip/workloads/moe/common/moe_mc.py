@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the moe workloads (workloads/moe/<model>/<variant>/): DeepSeek-V2-Lite's
 layer-1 MoE for one token at its real size, on the 16 + 4 chiplet platform, with a SHARDED
-router (the platform, the rings, the anchors, the sync arm, the broadcast and the reduce are
+router (the platform, the rings, the stamps, the sync arm, the broadcast and the reduce are
 util/sim/multichip/chiplet_mc.py's; the data and the golden are moe_data.py's).
 
 THE MAPPING. Each of the 6 routed slots runs on the 4 clusters of 2 chips, the shared expert
