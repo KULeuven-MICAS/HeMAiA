@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# The FFN strong-scaling sweep, base at 8 chips: ../../common/ffn_prefill_mc.py and params.hjson.
+# The FFN strong-scaling sweep, all at 12 chips: ../../common/ffn_prefill_mc.py and params.hjson.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-WORKLOAD  = ffn/sweep_t64/base_n8
+WORKLOAD  = ffn/scaling/all_n12
 include $(MK_DIR)../../common/ffn.mk

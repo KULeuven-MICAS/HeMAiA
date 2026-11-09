@@ -6,5 +6,5 @@
 #
 # The FFN strong-scaling sweep, base at 12 chips: ../../common/ffn_prefill_mc.py and params.hjson.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-WORKLOAD  = ffn/sweep_t64/base_n12
+WORKLOAD  = ffn/scaling/base_n12
 include $(MK_DIR)../../common/ffn.mk
