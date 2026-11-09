@@ -39,6 +39,10 @@ inline bingo_sw_offload_unit_t *get_bingo_sw_offload_unit() {
 #define BINGO_GID_FMT_DENSE32 0u   // one int32 a task of the graph
 #define BINGO_GID_FMT_DENSE16 1u   // one int16 a task of the graph, after BINGO_G2L16_MAGIC
 #define BINGO_GID_FMT_LIST    2u   // the cluster's own tasks' ids, after a BINGO_GID_LIST_MAGIC header
+#define BINGO_GID_FMT_PAGED   3u   // the cluster's paged task lists, after a BINGO_GID_LIST_PAGED_MAGIC header
+
+// The paged task lists' layout, cursor and lookup (the host's init writes them: libbingo/bingo_list_phases.h)
+#include "bingo_paged_lists.h"
 
 inline bingo_hw_offload_unit_t *get_bingo_hw_offload_unit() {
     return (bingo_hw_offload_unit_t *)&(cls()->bingo_hw_offload_unit);
@@ -314,14 +318,16 @@ inline void bingo_hw_offload_init() {
         // to ~25 KiB. Both grow with the whole graph. The gid list
         // (bingo_hw_scheduler_init_gid_lists) holds only this cluster's tasks: BINGO_GID_LIST_MAGIC,
         // the core count, the core bases, then each task's global id, core by core in dispatch
-        // order (bingo_hw_offload_manager). The first word of an original table is a task index or
-        // -1, never a magic.
+        // order (bingo_hw_offload_manager). The paged lists (bingo_hw_scheduler_init_list_phases, the
+        // DFG's list_phases) start with BINGO_GID_LIST_PAGED_MAGIC: bingo_hw_offload_manager_paged
+        // reads them. The first word of an original table is a task index or -1, never a magic.
         {
             const uint32_t g = readw(quad_ctrl_global_id_to_dev_id_addr(snrt_cluster_idx()));
             const uint32_t magic = readw((uintptr_t)g);
-            const uint32_t fmt = magic == BINGO_G2L16_MAGIC    ? BINGO_GID_FMT_DENSE16
-                               : magic == BINGO_GID_LIST_MAGIC ? BINGO_GID_FMT_LIST
-                                                               : BINGO_GID_FMT_DENSE32;
+            const uint32_t fmt = magic == BINGO_G2L16_MAGIC          ? BINGO_GID_FMT_DENSE16
+                               : magic == BINGO_GID_LIST_MAGIC       ? BINGO_GID_FMT_LIST
+                               : magic == BINGO_GID_LIST_PAGED_MAGIC ? BINGO_GID_FMT_PAGED
+                                                                     : BINGO_GID_FMT_DENSE32;
             get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr =
                 fmt == BINGO_GID_FMT_DENSE16 ? g + 4u : g;
             get_bingo_hw_offload_unit()->gid_table_fmt = fmt;
@@ -375,6 +381,62 @@ inline int32_t bingo_hw_offload_next_dev_task_id(const uint32_t *gids, uint32_t 
     return (int32_t)i;
 }
 
+/**
+ * @brief bingo_hw_offload_manager over the paged task lists (BINGO_GID_FMT_PAGED, the DFG's list_phases;
+ * shared/runtime/bingo_paged_lists.h): each task's entry comes from bingo_paged_find, its args address and kernel index
+ * share a word, and the kernel address comes from the header's function table. bingo_hw_offload_manager hands a paged
+ * table to it after bingo_hw_offload_init.
+ */
+inline int32_t bingo_hw_offload_manager_paged(){
+    uint32_t cur_arg_ptr;
+    uint32_t cur_kernel_ptr;
+    uint32_t cur_global_task_id;
+    uint32_t kernel_return_value;
+    uint32_t err = 0;
+    const uint32_t *hdr = (const uint32_t *)(uintptr_t)get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr;
+    const uint32_t *fn = hdr + BINGO_PAGED_FN_OFF(hdr[1], hdr[2]);
+    bingo_paged_cursor_t pc;
+    bingo_paged_cursor_init(&pc, hdr, (const uint32_t *)(uintptr_t)hdr[4], (const uint32_t *)(uintptr_t)hdr[5],
+                            snrt_cluster_core_idx());
+    while (1) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_GET_READY_START);
+        cur_global_task_id = read_bingo_hw_manager_ready_queue();
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_GET_READY_END);
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_START);
+        const uint32_t *e = bingo_paged_find(&pc, cur_global_task_id);
+        if (!e) {
+            BINGO_PRINTF(2, "[Cluster %d Core %d]: Error: Invalid dev task id for global task id %d\r\n",
+                         snrt_cluster_idx(), snrt_cluster_core_idx(), cur_global_task_id);
+            err = 1;
+            break;
+        }
+        cur_arg_ptr = e[1] & ~BINGO_PAGED_KIDX_MASK;
+        cur_kernel_ptr = fn[e[1] & BINGO_PAGED_KIDX_MASK];
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_END);
+
+        BINGO_PRINTF(1, "[Cluster %d Core %d]: Task %d Info: arg ptr=0x%x, kernel ptr=0x%x\r\n", snrt_cluster_idx(),
+                     snrt_cluster_core_idx(), cur_global_task_id, cur_arg_ptr, cur_kernel_ptr);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_RUN_KERNEL_START);
+        kernel_return_value = ((uint32_t(*)(uint32_t))cur_kernel_ptr)(cur_arg_ptr);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_RUN_KERNEL_END);
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_START);
+        write_bingo_hw_manager_done_queue(cur_global_task_id);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
+        if (kernel_return_value == BINGO_RET_SUCC) {
+            continue;
+        }
+        if (kernel_return_value != BINGO_RET_EXIT) {
+            err = kernel_return_value;
+            BINGO_PRINTF(1, "[Cluster %d Core %d]: Task %d Error: return code=%d\r\n", snrt_cluster_idx(),
+                         snrt_cluster_core_idx(), cur_global_task_id, kernel_return_value);
+        }
+        break;
+    }
+    return err;
+}
+
 inline int32_t bingo_hw_offload_manager(){
     // Step 1: Get the arg_list and fn_list ptrs from the quad ctrl CFG
     uint32_t cur_arg_ptr;
@@ -386,6 +448,8 @@ inline int32_t bingo_hw_offload_manager(){
     bingo_hw_offload_init();
     // The gid list format: this core's range of the list and its cursor in it
     const bingo_hw_offload_unit_t *u = get_bingo_hw_offload_unit();
+    // the paged task lists have their own lookup
+    if (u->gid_table_fmt == BINGO_GID_FMT_PAGED) return bingo_hw_offload_manager_paged();
     const uint32_t gid_list = u->gid_table_fmt == BINGO_GID_FMT_LIST;
     const uint32_t *gl_hdr = (const uint32_t *)(uintptr_t)u->gid_to_dev_tid_list_ptr;
     const uint32_t gl_ncores = gid_list ? gl_hdr[1] : 0u;

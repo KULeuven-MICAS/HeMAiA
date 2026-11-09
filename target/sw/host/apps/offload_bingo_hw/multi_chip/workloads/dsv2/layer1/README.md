@@ -23,8 +23,8 @@ step, the golden and the parameters.
   (`passes/bingo_dfg_emit.py`): each phase's args share one L1 region and come in by a DM task when the cluster has
   finished the phase before.
 - **Paged task lists** (`list_phases`). The scheduler's per-task list entries follow the args phases through two L1
-  windows, so they do not grow with the whole graph either; the graph runs on the device app
-  `snax-bingo-offload-paged`.
+  windows, so they do not grow with the whole graph either (the device runtime's
+  `bingo_hw_offload_manager_paged` reads them).
 - **One L3 arena** (`layer.l3_arena`). The attention's weight ring and scratch and the router's landing area share one
   region of each chip's L3 with the activations, which the full layer's host image needs to fit.
 - **One symmetric buffer** for both blocks' partials, one L3 region for both weight rings.

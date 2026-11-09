@@ -115,8 +115,8 @@ def _c_max(exprs):
 # args phases: each cluster's entries of phase p (its global id, then its args address with its kernel's index in
 # the low bits) are copied into one of two L1 windows (p % 2) by a DM task of the graph (PhaseListLoadArgs) right
 # before the phase's args load, which then depends on it alone; the resident tasks' entries stay in L1. Needs
-# gid_lists, args phases with ping-pong regions and the compile-time L1 addresses, and the device app
-# snax-bingo-offload-paged, whose manager reads these lists (the host refuses any other at init).
+# gid_lists, args phases with ping-pong regions and the compile-time L1 addresses; the device runtime's
+# bingo_hw_offload_manager_paged (device/runtime/src/bingo.h) reads these lists.
 def _list_phases_on(dfg) -> bool:
     return bool(getattr(dfg, "list_phases", False))
 
