@@ -377,6 +377,54 @@ class WeightRings:
     def chunks(self) -> int:
         return sum(len(e) for e in self.entries)
 
+    def races(self, pf, parts=((0, 0),)) -> list:
+        """The overwrite races of this schedule under the prefetcher task `pf` (its
+        HostBingoKernelWeightPrefetchArgs) walking the chunk ranges `parts` ([(chunk_lo, chunk_hi)],
+        chunk_hi 0: to the end): [(ring, unread chunk, pushed chunk, first byte, end byte of the
+        unread chunk the push covers)].
+
+        Per ring the runs follow the prefetcher's rules (host_kernel_lib.h weight_prefetch_run_of:
+        a ring's first run is one chunk, a run that starts within `head` chunks takes `batch_head`,
+        a routed run `batch_routed`, else `batch`; one source stream; no wrap; a part's range ends
+        its runs), the chunks of a run back to back from its first slot. A race is a run that the
+        slot rule alone (at most n_slots chunks ahead of the reads) lets the prefetcher push while
+        an earlier chunk, not read yet, has bytes where the run writes: a chunk shorter than a slot
+        starts in a lower slot than its own. The prefetcher's byte guard (weight_ring_guard.h)
+        holds such a run until those bytes are read."""
+        ns, sb = pf.n_slots, pf.slot_bytes
+        batch = pf.batch or 1
+        batch_routed = pf.batch_routed or batch
+        out = []
+        for ring, ent in enumerate(self.entries[:pf.n_rings]):
+            runs, place = [], [None] * len(ent)
+            for lo, hi in parts:
+                k0, n = lo, len(ent) if not hi or hi > len(ent) else hi
+                while k0 < n:
+                    lim = 1 if k0 == 0 else pf.batch_head if (pf.batch_head and k0 < pf.head) else \
+                        (batch_routed if ent[k0][1] & 1 else batch)
+                    s0, m, nbytes, kind0, src0, nxt = k0 % ns, 0, 0, None, None, None
+                    while m < lim and k0 + m < n and s0 + m < ns:
+                        src, kind, off, size = ent[k0 + m]
+                        routed = kind & 1
+                        if m > 0 and (kind != kind0 or ((src + off != nxt) if not routed else
+                                                        (src != src0 or off != nxt))):
+                            break
+                        if m == 0:
+                            kind0, src0 = kind, src
+                        nxt = off + size if routed else src + off + size
+                        place[k0 + m] = (s0 * sb + nbytes, size)
+                        nbytes += size
+                        m += 1
+                    runs.append((k0, m, s0 * sb, s0 * sb + nbytes))
+                    k0 += m
+            for k0, m, lo, hi in runs:
+                # the slot rule lets chunk k0 + m - 1 go once chunk k0 + m - 1 - n_slots is read
+                for j in range(max(0, k0 + m - ns), k0):
+                    if place[j] is not None and place[j][0] < hi and lo < place[j][0] + place[j][1]:
+                        pj, nj = place[j]
+                        out.append((ring, j, k0 + m - 1, max(lo, pj) - pj, min(hi, pj + nj) - pj))
+        return out
+
 
 @dataclass(frozen=True)
 class LinearCfg:

@@ -7,6 +7,7 @@
 #include "libbingo/bingo_utils.h"
 #include "libbingo/host_kernel_args.h"  // BINGO_CHECK_TYPE_*, BINGO_GATING_MODE_*
 #include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update(), BINGO_RET_*
+#include "libbingo/weight_ring_guard.h" // weight_prefetch: the bytes of chunks not read yet
 
 // Host Bingo Kernel Implementations
 // Return codes are the unified BINGO_RET_* defined in bingo_api.h:
@@ -706,7 +707,7 @@ typedef struct {
 } weight_prefetch_run_t;
 
 // A schedule entry's kind: bit 0 its source is a record field (routed), bit 1 its record ends
-// in a trailer beat that says it has landed (libs/crest.py, weight_ring.trailer) -- a run of
+// in a trailer beat that says it has landed (params weight_ring.trailer) -- a run of
 // those needs no flag transfer, so the next run's launch follows its data launch at once.
 #define WEIGHT_PREFETCH_ROUTED  1u
 #define WEIGHT_PREFETCH_TRAILER 2u
@@ -834,7 +835,7 @@ static inline void weight_prefetch_launch(uint8_t chip_id, uint32_t engine, uint
 static inline weight_prefetch_run_t weight_prefetch_run_of(
     const __host_bingo_kernel_weight_prefetch_args_t *a, const volatile uint64_t *sched,
     uint64_t r, uint64_t k0, uint64_t n, uint64_t first, uint64_t cons, uint64_t batch,
-    uint64_t batch_routed, int *rec_ready) {
+    uint64_t batch_routed, int *rec_ready, const weight_ring_guard_t *guard) {
     const uint64_t head = a->head, batch_head = a->batch_head;
     const uint64_t ns = a->n_slots, s0 = k0 % ns;
     weight_prefetch_run_t run = {(int)r, 0, 0, 0, 0};
@@ -888,12 +889,28 @@ static inline weight_prefetch_run_t weight_prefetch_run_of(
         run.bytes += size;
         run.m++;
     }
+    // The whole run waits while a chunk not read yet has bytes in the slots it writes: a chunk of
+    // the previous wrap that reaches down into them from a higher slot (weight_ring_guard.h).
+    if (run.m && !weight_ring_guard_free(guard, s0, run.bytes, a->slot_bytes, cons)) run.m = 0;
     return run;
+}
+
+// Ring r's run of m chunks from chunk k0 has been launched: the guard learns which slots their bytes fill.
+static inline void weight_prefetch_guard_mark(weight_ring_guard_t *g, const volatile uint64_t *sched,
+                                              uint64_t first, uint64_t k0, uint64_t m, uint64_t ns,
+                                              uint64_t sb) {
+    uint64_t off = 0;
+    for (uint64_t k = k0; k < k0 + m; k++) {
+        const uint64_t size = sched[8 + 4 * (first + k) + 3];
+        weight_ring_guard_mark(g, k0 % ns, off, size, sb, k);
+        off += size;
+    }
 }
 
 // The prefetcher over chunks [lo, hi) of each ring (hi 0: to its end). A ring's chunk k sits in
 // slot k % n_slots whoever pushes it, so a part starting at lo has pushed nothing yet and knows the
 // chunks below lo - n_slots read (their slots were refilled); it learns the rest from the release words.
+// Its guard holds every slot an earlier part's chunk may still fill (weight_ring_guard_init).
 static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_prefetch_args_t *a,
                                             uint64_t lo, uint64_t hi) {
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -921,6 +938,17 @@ static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_pre
         cons[r] = pos[r] > ns ? pos[r] - ns : 0;
         left += n[r] - pos[r];
     }
+    // per ring, the newest chunk with bytes in each slot (weight_ring_guard.h); a part starting at lo
+    // holds each slot for the newest earlier chunk whose run may have reached it
+    const uint64_t span0 = batch > batch_routed ? batch : batch_routed;
+    const uint64_t span = a->batch_head > span0 ? a->batch_head : span0;
+    if (ns > WEIGHT_RING_GUARD_MAX_SLOTS) {
+        printf_safe("[Host] weight_prefetch: %d slots a ring, the guard covers %d\r\n", (int)ns,
+                    WEIGHT_RING_GUARD_MAX_SLOTS);
+        return BINGO_RET_FAIL;
+    }
+    weight_ring_guard_t guard[4];
+    for (uint64_t r = 0; r < nr; r++) weight_ring_guard_init(&guard[r], pos[r], ns, span);
     int rec_ready = a->rec_addr == 0;
     uint64_t turn = 0;
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
@@ -961,14 +989,14 @@ static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_pre
 #if WEIGHT_PREFETCH_LEAN
             if (!cand_ok[r]) {
                 cand[r] = weight_prefetch_run_of(a, sched, r, pos[r], n[r], first[r], cons[r],
-                                                 batch, batch_routed, &rec_ready);
+                                                 batch, batch_routed, &rec_ready, &guard[r]);
                 cand_ok[r] = cand[r].m != 0;
             }
             const weight_prefetch_run_t run = cand[r];
 #else
             weight_prefetch_run_t run =
                 weight_prefetch_run_of(a, sched, r, pos[r], n[r], first[r], cons[r], batch,
-                                       batch_routed, &rec_ready);
+                                       batch_routed, &rec_ready, &guard[r]);
 #endif
             if (run.m == 0) continue;
             if (best.ring < 0 ||
@@ -1014,6 +1042,7 @@ static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_pre
             // is already queued, and the flags land after the data.
             sys_dma_engine_queue(mem, eng, a->ring_addr + (r * ns + s0) * sb, best.src,
                                  best.bytes);
+            weight_prefetch_guard_mark(&guard[r], sched, first[r], pos[r], best.m, ns, sb);
             if (!(best.kind & WEIGHT_PREFETCH_TRAILER))
                 sys_dma_engine_queue(mem, eng, a->flag_addr + (r * ns + s0) * 64,
                                      a->seq_addr + (pos[r] + 1) * 64, 64 * best.m);
@@ -1038,6 +1067,7 @@ static inline uint64_t weight_prefetch_part(const __host_bingo_kernel_weight_pre
         wp_occ += pos[r] - cons[r];
 #endif
         WP_LAUNCH(a->ring_addr + (r * ns + s0) * sb, best.src, best.bytes, WP_DATA_WR);
+        weight_prefetch_guard_mark(&guard[r], sched, first[r], pos[r], best.m, ns, sb);
 #if WEIGHT_PREFETCH_LEAN
         cand_ok[r] = 0;
 #endif
