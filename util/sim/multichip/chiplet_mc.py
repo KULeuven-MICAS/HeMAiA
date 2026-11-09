@@ -175,8 +175,8 @@ class ChipletBuild(FabricBase):
         # (bingo_hw_scheduler_init_gid_lists): its L1 cost does not grow with the whole graph
         dfg.gid_lists = bool(p.get("gid_lists", False))
         # each cluster's per-task list entries follow its args phases through two L1 windows (bingo_dfg_emit.py,
-        # PAGED TASK LISTS), so they too stop growing with the whole graph; needs gid_lists and args phases, and runs on
-        # the device app snax-bingo-offload-paged (the stages.sh scripts of sweep/llm_layer pick it from this param)
+        # PAGED TASK LISTS), so they too stop growing with the whole graph; needs gid_lists and args phases (the device
+        # runtime reads them: bingo.h, bingo_hw_offload_manager_paged)
         dfg.list_phases = bool(p.get("list_phases", False))
         # params per_chip_image: one host image per chiplet, holding the shared code and data and that chiplet's
         # own tables only (target/sw/host/apps/per_chip_image.py), so an image's L3 share does not grow with the
