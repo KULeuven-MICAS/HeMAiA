@@ -84,7 +84,7 @@ dependency graph comment block.
 - **ffn**: DeepSeek-V2-Lite's dense FFN (layer 0) on 16 compute + 4 memory chiplets, decode and 128-token prefill, with the broadcast / reduce / sync ablation; see [multi_chip/workloads/ffn/README.md](multi_chip/workloads/ffn/README.md).
 - **fa**: DeepSeek-V2-Lite's layer-1 MLA attention on 16 compute + 4 memory chiplets, decode and prefill, with the same ablation; see [multi_chip/workloads/fa/README.md](multi_chip/workloads/fa/README.md).
 - **moe**: DeepSeek-V2-Lite's layer-1 MoE on 16 compute + 4 memory chiplets; the decode ablation variants are in `moe/dsv2_l1/` and the sweep is described in `target/sim/automation/sweep/llm_blocks/moe/README.md`.
-- **common**: the code ffn, moe and fa share (`multi_chip/workloads/common/`): `fabric.py` (the mesh, the fold order and the topology and node helpers of their multi-chiplet build) and `driver.py` (the command line and the `run()` body of their drivers).
+- The code ffn, moe, fa and the llama3 and dsv2 layers share is not under `workloads/`: it is `util/sim/multichip/` (`fabric.py`, `chiplet_mc.py`; see its README.md), with the drivers' common body in `util/sim/common/driver.py`, the data helpers and the golden in `util/sim/llm/` (`model_data.py`), `util/sim/common/` and `util/sim/simd/`, and the GEMV helpers in `util/sim/gemm/gemv_utils.py`.
 
 ## Build Command
 ```bash

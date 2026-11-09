@@ -11,7 +11,7 @@ initialises cleanly and a kernel that does the wrong thing without failing.
 |---|---|
 | `bingo_kernel_args.py` | **Facade.** Re-exports everything below, so `from bingo_kernel_args import …` keeps working for the ~60 workloads that do it. |
 | `kernel_base.py` | The `BingoKernelArgs` ABC: address resolution across the four handle types, C field emission, and `PLACEMENT_ORDER` for the few kernels that compute one buffer's address as an offset from another. |
-| `kernel_misc.py` | Dummy, sync probe/mark, chip barrier and sync report — kernels that drive no accelerator; the cluster iDMA transfers; the xDMA CREST expand; the MoE route and router pack. |
+| `kernel_misc.py` | Dummy, sync probe/mark, chip barrier and sync report — kernels that drive no accelerator; the cluster iDMA transfers; the MoE route and router pack. |
 | `kernel_gemm.py` | VersaCore GEMM: the general descriptor, the minimal one, and the typed variants. |
 | `kernel_gemm_fa.py` | The FlashAttention QK/PV pair and the array's performance counters. |
 | `kernel_xdma.py` | xDMA transfers, the 6-D AGU, 2-D shape ops, and the in-fabric junction CSR builders. |

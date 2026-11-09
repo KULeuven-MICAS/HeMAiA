@@ -701,8 +701,8 @@ class MlaAttention(Block):
 # shard's row maximum; the clusters exchange them and each takes the lanewise max m*; pass 2
 # runs the shard's softmax SEEDED at m* (seed_state 0), so every shard quantises P on one scale
 # and its PV needs no correction across clusters; the FP16 partials and row sums are then added
-# (AddRow) and normalised on the attention's cluster. The golden is
-# dsv2_datagen.split_attention_golden, the same recurrence with the same seed.
+# (AddRow) and normalised on the attention's cluster. The golden (workloads/fa/common/fa_data.py
+# FaData.golden) runs the same recurrence with the same seed.
 
 @dataclass(frozen=True)
 class MlaShardCfg:
@@ -1020,8 +1020,7 @@ class MlaShardOut(Block):
 # and computes d_v / G rows of O^T over all the keys in ONE matmul, out of a V^T slice that
 # is one 2-D copy of the value cache. O never meets an FP16 add: only the row sums do, as a
 # halving tree on every cluster, so each normalises its own slice; the attention's cluster
-# gathers the slices and transposes. The golden is dsv2_datagen.split_attention_golden (mode
-# dim).
+# gathers the slices and transposes.
 
 class MlaShardP(Block):
     """Pass 2 of a key shard, P only: the softmax seeded at m* (arena mrun = m*, lrun = 0,
