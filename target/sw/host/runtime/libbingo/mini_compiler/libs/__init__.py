@@ -5,7 +5,6 @@
               (ctx), how two are joined (link), and how an operand that does not match
               gets moved or reshaped (transfer, nest).
     blocks/   the blocks (projections, attention, MoE, moves, collectives, SIMD rows).
-    crest.py  CREST weight records for WeightRings.
     kernels/  the kernel ABI the blocks build nodes from: one args class per kernel,
               matching the C structs. Imported FLAT (bingo_kernel_args, kernel_simd, ...),
               not as libs.kernels -- _bingo_paths puts it on sys.path.

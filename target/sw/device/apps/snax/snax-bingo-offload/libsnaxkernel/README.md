@@ -31,7 +31,7 @@ libsnaxkernel/
     ├── basic.h             — dummy / sync_probe / sync_mark / chip_barrier / exit
     ├── idma.h              — iDMA 1d/2d copies, broadcast, flagged put/fetch with
     │                          wait_flags, pairwise swap, slot copy, ring load
-    ├── xdma.h              — xDMA data movement: 1d/6d copies, memset, crest
+    ├── xdma.h              — xDMA data movement: 1d/6d copies, memset
     │                          expand, multicast, chain_gather, pack_fa_partial,
     │                          the layout converter (layout_convert: row-major
     │                          ↔ A/B/D), 2d helpers (transpose, submatrix, expand,

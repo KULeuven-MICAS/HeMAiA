@@ -10,7 +10,7 @@ The classes live one file per engine:
     kernel_base.py      the BingoKernelArgs ABC: address resolution, C field emission,
                         and the placement-order constraint a few kernels declare
     kernel_misc.py      dummy / sync probe / sync mark / chip barrier / sync report, the
-                        cluster iDMA, the xDMA CREST expand, the MoE route and router pack
+                        cluster iDMA, the MoE route and router pack
     kernel_gemm.py      VersaCore GEMM, general and typed
     kernel_gemm_fa.py   the FlashAttention QK/PV pair and the array's counters
     kernel_xdma.py      xDMA transfers, 2-D shape ops, and the in-fabric junction CSRs

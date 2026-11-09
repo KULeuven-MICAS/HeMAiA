@@ -81,7 +81,6 @@ from bingo_kernel_args import (
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdmaCopySlotArgs,
     SnaxBingoKernelIdmaRingLoadArgs,
-    SnaxBingoKernelXdmaCrestExpandArgs,
 )
 from bingo_mem_handle import BingoMemFixedAddr
 
@@ -128,15 +127,14 @@ class LoadStream:
     rings = None
 
     def __init__(self, ctx: Ctx, cluster: int, nbytes: int = DEFAULT_W_CHUNK_BYTES,
-                 nbuf: int = 2, name: str = "stream", slack: int = 0):
-        if nbuf < 1 or nbytes <= 0 or nbytes % 64 or slack < 0 or slack % 64:
-            raise ValueError(f"LoadStream: {nbuf} slabs of {nbytes} B (+{slack}); at least one "
+                 nbuf: int = 2, name: str = "stream"):
+        if nbuf < 1 or nbytes <= 0 or nbytes % 64:
+            raise ValueError(f"LoadStream: {nbuf} slabs of {nbytes} B; at least one "
                              f"slab, a whole number of 64-B beats.")
         g = ctx.at(cluster)
-        # nbytes is the most a load may bring; a slab is `slack` larger (weight_crest: a CREST
-        # record lands at the slab's end and expands in place, libs/crest.py)
+        # nbytes is the most a load may bring, and a slab's size
         self.cluster, self.nbytes = cluster, int(nbytes)
-        self.slab_bytes = self.nbytes + int(slack)
+        self.slab_bytes = self.nbytes
         self.slabs = [g.l1(f"{name}_c{cluster}_s{i}", self.slab_bytes) for i in range(nbuf)]
         self._next = 0
         self._reader = [None] * nbuf
@@ -228,8 +226,9 @@ class WeightRings:
 
     FIELDS = {"gu": 0, "gu_s": 1, "dn": 2, "dn_s": 3}
     MAX_RINGS = 4
-    # Without CREST, a dense chunk (kind 0) ends in a trailer its caller appended; the workload
-    # sets it on the instance.
+    MAX_SLOTS = 32          # host runtime libbingo/weight_ring_guard.h WEIGHT_RING_GUARD_MAX_SLOTS
+    # A dense chunk (kind 0) ends in a trailer its caller appended (params weight_ring.trailer);
+    # the workload sets it on the instance.
     plain_trailer = False
 
     def __init__(self, *, slots, flags, releases, n_rings: int, n_slots: int,
@@ -238,6 +237,9 @@ class WeightRings:
         if not 1 <= n_rings <= self.MAX_RINGS or n_slots < 2 or slot_bytes % 64:
             raise ValueError(f"WeightRings: {n_rings} rings of {n_slots} slots of "
                              f"{slot_bytes} B; 1..4 rings, 2+ slots, whole 64-B beats.")
+        # the prefetcher's byte guard tracks this many slots a ring (weight_ring_guard.h)
+        if n_slots > self.MAX_SLOTS:
+            raise ValueError(f"WeightRings: {n_slots} slots; the prefetcher guards at most {self.MAX_SLOTS}.")
         if not 1 <= batch <= n_slots:
             raise ValueError(f"WeightRings: batch {batch}; 1..n_slots ({n_slots}).")
         self.slots, self.flags, self.releases = slots, flags, releases
@@ -270,7 +272,6 @@ class WeightRings:
         # per entry, for an Execution-IR export (bingo_exec_export): the bytes the GEMV reads after
         # expansion, and whether the pushed record is compressed; `last_take` is the (ring, index)
         # of the newest chunk, which the streamed Linear tags its ring load with
-        self.entry_meta = [[] for _ in range(n_rings)]
         self.last_take = None
         # The newest ring load per cluster: every load of a ring waits for the one before
         # (same DM core, no tag), so the loads run in the ring's order whatever block
@@ -279,10 +280,6 @@ class WeightRings:
         self.last = {}
         # The run each ring's newest chunk belongs to: [first slot, chunks, bytes]
         self._run = [None] * n_rings
-        # params weight_crest: the chip's CrestRings (libs/crest.py) -- every weight chunk is
-        # pushed compressed, copied into the slab by the DM core and expanded in place by the
-        # xDMA's CrestDecompressor
-        self.crest = None
 
     def _continues(self, ring: int, k: int, src: int, kind: int, offset: int) -> bool:
         """Whether chunk k of `ring` joins its predecessor's run. The prefetcher applies the
@@ -308,29 +305,17 @@ class WeightRings:
         """The next chunk of `ring`: (its place in the ring, flag, release handles, sequence
         number). Chunks of one run sit back to back from the run's first slot, so a run of
         short chunks (a K = 1408 weight: 88 KiB per 64 columns) is still one push; the run
-        never outgrows the slots it reserves, one per chunk."""
+        never outgrows the slots it reserves, one per chunk. A chunk can so start in a lower
+        slot than its own, where the next wrap's run reserves nothing for it: the prefetcher's
+        byte guard holds such a slot until the chunk is read (weight_ring_guard.h)."""
         return self.take_ex(ring, src, nbytes, kind=kind, offset=offset)[:4]
 
     def take_ex(self, ring: int, src: int, nbytes: int, *, kind: int = 0, offset: int = 0):
-        """take(), then (bit 0 CREST record, bit 1 trailer) and the bytes pushed: with
-        self.crest a dense weight chunk (kind 0) or a routed weight field (kind 1, gu / dn) is
-        replaced by its CREST record -- source, offset and pushed size -- before it is placed;
-        the routed scale vectors stay plain."""
-        compressed = False
-        raw_nbytes = int(nbytes)
-        if self.crest is not None:
-            fld = {v: k for k, v in self.FIELDS.items()}.get(int(src) & 0xFF) if kind else None
-            if kind == 0:
-                src, nbytes = self.crest.dense(ring, int(src) + int(offset), int(nbytes))
-                offset, compressed = 0, True
-            elif fld in self.crest.FIELDS:
-                offset, nbytes = self.crest.routed(ring, fld, int(offset), int(nbytes))
-                compressed = True
+        """take(), then (bit 1: the chunk ends in a trailer) and the bytes pushed."""
         # trailer mode: the chunk's own last beat says it has landed; its schedule entry is
-        # marked (kind bit 1) so the prefetcher pushes no flag for it. A CREST record carries the
-        # trailer; a plain dense chunk (plain_trailer) ends in one its caller appended.
-        trailer = (compressed and self.crest.trailer) or \
-            (self.crest is None and self.plain_trailer and not kind & 1)
+        # marked (kind bit 1) so the prefetcher pushes no flag for it. A dense chunk
+        # (plain_trailer) ends in one its caller appended.
+        trailer = self.plain_trailer and not kind & 1
         if trailer:
             kind |= 2
         if nbytes > self.slot_bytes:
@@ -348,16 +333,14 @@ class WeightRings:
         run[2] += nbytes
         idx = ring * self.n_slots + k % self.n_slots
         self.entries[ring].append((src, kind, offset, nbytes))
-        self.entry_meta[ring].append({"raw": raw_nbytes, "compressed": compressed})
         self.last_take = (ring, k)
         flag = at_offset(self.slots, place + nbytes - 64) if trailer else \
             at_offset(self.flags, idx * 64)
         return (at_offset(self.slots, place), flag, at_offset(self.releases, idx * 64), k + 1,
-                int(compressed) | (2 if trailer else 0), nbytes)
+                2 if trailer else 0, nbytes)
 
     def load_chunk(self, node, cluster: int, name: str, *, src: int, nbytes: int, slab, war,
-                   deps=(), kind: int = 0, offset: int = 0, dm: int, xdma: int = None,
-                   slab_bytes: int = None, expand_name: str = None, trailer: bool = False):
+                   deps=(), kind: int = 0, offset: int = 0, dm: int, trailer: bool = False):
         """The ring load of one chunk into an L1 slab: take_ex(), then an idma_ring_load that
         waits for the prefetcher's push and copies the chunk from L3 into `slab` on core `dm`.
         It follows `war` (the slab's last readers, LoadStream.take), then the ring's newest
@@ -365,32 +348,18 @@ class WeightRings:
         the ring's newest and is tagged for the Execution-IR export. `node(name, core, kernel,
         args, deps)` creates a node.
 
-        A CREST record (weight_crest) lands in the END of the slab (`slab_bytes` long) and an
-        xDMA task on core `xdma`, `expand_name`, expands it in place into the slab's first
-        beats; a CREST load always honours the record's trailer, a plain one only with
-        `trailer`. Returns (the load, the expand task or None, the chunk's place in the ring: the
-        address the load reads)."""
-        sl, fl, rl, seq, how, pushed = self.take_ex(cluster, src=src, nbytes=nbytes, kind=kind,
-                                                    offset=offset)
+        The load honours the chunk's trailer only with `trailer`. Returns (the load, the chunk's
+        place in the ring: the address the load reads)."""
+        sl, fl, rl, seq, how, _ = self.take_ex(cluster, src=src, nbytes=nbytes, kind=kind,
+                                               offset=offset)
         prev = [self.last[cluster]] if self.last.get(cluster) is not None else []
         after = list(dict.fromkeys(list(war) + prev + list(deps)))
-        expand = None
-        if how & 1:
-            if xdma is None or slab_bytes is None:
-                raise ValueError("WeightRings.load_chunk: a CREST record needs xdma and slab_bytes.")
-            ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
-                      SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl,
-                                                      at_offset(slab, slab_bytes - pushed), pushed,
-                                                      rl, trailer=bool(how & 2)), after)
-            expand = node(expand_name, xdma, "__snax_bingo_kernel_xdma_crest_expand",
-                          SnaxBingoKernelXdmaCrestExpandArgs(slab, slab_bytes), [ld])
-        else:
-            ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
-                      SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl,
-                                                      trailer=trailer and bool(how & 2)), after)
+        ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
+                  SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl,
+                                                  trailer=trailer and bool(how & 2)), after)
         self.last[cluster] = ld
         ld.exec_chunk = self.last_take
-        return ld, expand, sl
+        return ld, sl
 
     def schedule(self) -> list:
         """uint64 words: chunks per ring (4), first entry per ring (4), then 4 per entry."""
@@ -892,7 +861,7 @@ class Linear(Block):
         if rings is not None and c.w_slot is None and not isinstance(src_port.handle,
                                                                       BingoMemFixedAddr):
             rings = None        # not a fixed HBM / memchip address: a plain iDMA copy
-        loads, tasks, expands = [], [], []
+        loads, tasks = [], []
         for i, (c0, n) in enumerate(chunks):
             off, nbytes = c._wb(c0 * c.d_in), c._wb(n * c.d_in)
             si, slab, war = c.stream.take(nbytes)
@@ -907,13 +876,9 @@ class Linear(Block):
                     slot, fld = c.w_slot
                     ring_src = dict(src=(slot << 8) | WeightRings.FIELDS[fld], kind=1,
                                     offset=c.w_slot_off + off)
-                ld, ex, _ = rings.load_chunk(
+                ld, _ = rings.load_chunk(
                     g.node, c.cluster, nm, nbytes=nbytes, slab=slab, war=war, dm=ctx.dm,
-                    xdma=ctx.xdma, slab_bytes=c.stream.slab_bytes,
-                    expand_name=f"Ex_{self.name}_w{i}" if len(chunks) > 1 else f"Ex_{self.name}_w",
                     **ring_src)
-                if ex is not None:
-                    expands.append(ex)
             elif c.w_slot is None:
                 args = SnaxBingoKernelIdma1dCopyArgs(at_offset(src_port.handle, off), slab,
                                                      nbytes)
@@ -926,12 +891,11 @@ class Linear(Block):
                             war + (rec_after if not loads else [loads[-1]]))
             loads.append(ld)
             name = f"Gemm_{self.name}_c{i}" if len(chunks) > 1 else f"Gemm_{self.name}"
-            ready = expands[-1] if len(expands) == len(loads) else ld
-            dep = [ready] + (x_after if i == 0 else [tasks[-1]])
+            dep = [ld] + (x_after if i == 0 else [tasks[-1]])
             ts_i = self._task(g, ctx, name, l1_x, slab, l1_y, c0, n, dep)
             tasks += ts_i
             c.stream.release(si, ts_i[-1])
-        nodes = ([ld_x] if ld_x is not None else []) + loads + expands + tasks
+        nodes = ([ld_x] if ld_x is not None else []) + loads + tasks
         x_end = (ld_x,) if ld_x is not None else (tasks[0],)
         ins = {"x": Port(self.inputs["x"], bound["x"].handle, x_end, name="x")}
         if c.w_slot is None:

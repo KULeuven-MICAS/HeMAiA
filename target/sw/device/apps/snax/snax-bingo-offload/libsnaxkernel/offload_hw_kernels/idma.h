@@ -392,7 +392,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
-// weight_ring.trailer's 64-bit magic (libs/crest.py TRAILER_MAGIC)
+// weight_ring.trailer's 64-bit magic (util/sim/multichip/chiplet_mc.py TRAILER_MAGIC)
 #ifndef BINGO_RING_TRAILER_MAGIC
 #define BINGO_RING_TRAILER_MAGIC 0x5EED7A11C0DEF1A6ULL
 #endif

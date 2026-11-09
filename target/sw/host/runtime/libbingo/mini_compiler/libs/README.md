@@ -12,7 +12,6 @@ It is a function call whose body happens to be a graph.
 | [`blocks/`](blocks/) | The blocks: projections, attention (FA, MLA), MoE, moves, collectives and the SIMD row operators — see [`blocks/README.md`](blocks/README.md). |
 | [`kernels/`](kernels/) | The kernel ABI the blocks build nodes from: one args class per kernel, matching the C structs. Imported flat (`from bingo_kernel_args import …`), not as `libs.kernels`. |
 | [`verify/`](verify/) | Host-side comparisons, named by precision. |
-| [`crest.py`](crest.py) | CREST-compressed weight records for `WeightRings` (params `weight_crest`). |
 
 ## Every port carries four things
 

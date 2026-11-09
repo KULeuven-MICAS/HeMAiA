@@ -6,8 +6,8 @@
 """Kernels that drive no accelerator, and the iDMA.
 
 Dummy, sync probe/mark, chip barrier, sync report -- placed wherever their consumer is,
-because they touch no engine -- plus the cluster iDMA transfers, the xDMA CREST expand, and
-the MoE route and router pack on the DM core. They share a file because none of them is big
+because they touch no engine -- plus the cluster iDMA transfers and the MoE route and
+router pack on the DM core. They share a file because none of them is big
 enough to be worth its own."""
 
 from typing import Union, Dict
@@ -218,6 +218,21 @@ class PhaseArgsLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
                          f"(__bingo_args_l1_chip{chip:02x}_cl{cluster}_p{phase})", f"sizeof({img}_t)")
         self.chip, self.cluster, self.phase = int(chip), int(cluster), int(phase)
 
+class PhaseListLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
+    """The DM task that brings the per-task list entries of args phase `phase` of chip `chip`'s cluster
+    `cluster` into the cluster's L1 window `phase % 2`: a 1D copy of that phase's part of the generated list
+    table (passes/bingo_dfg_emit.py, PAGED TASK LISTS; the DFG's list_phases). Its node must be marked
+    `args_resident`, and the phase's args load must depend on it alone."""
+
+    def __init__(self, chip: int, cluster: int, phase: int):
+        if phase < 1:
+            raise ValueError(f"list phase {phase}: phase 0 lands at host init, a load brings phases 1 and up")
+        c = f"chip{chip:02x}_cl{cluster}"
+        super().__init__(f"(chiplet_addr_transform_full(0x{chip:02x}, (uint64_t)(uintptr_t)"
+                         f"&__bingo_lp_lists_chip_{chip:02x}[__bingo_lp_off_{c}_p{phase}]))",
+                         f"(__bingo_lp_win_{c}_w{phase % 2}_at)", f"__bingo_lp_bytes_{c}_p{phase}")
+        self.list_chip, self.list_cluster, self.list_phase = int(chip), int(cluster), int(phase)
+
 # BINGO IDMA strided copy: `outer` repetitions of `reps` runs of `size` bytes
 class SnaxBingoKernelIdma2dCopyArgs(BingoKernelArgs):
     """Up to three dimensions of runs in one node (offload_hw_kernels/idma.h): a gather of
@@ -314,28 +329,6 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         self._process_addr(self.release_addr, "release_addr", a, handle_name_map,
                            split_64bit=False)
         a["trailer"] = str(self.trailer)
-        return a
-
-
-class SnaxBingoKernelXdmaCrestExpandArgs(BingoKernelArgs):
-    """CREST in place on the xDMA core (offload_hw_kernels/xdma.h): the slab's last 64-B beat
-    is a record's tail (stream words W, 0 = plain; output beats N), the stream ends right
-    before it, and it expands into the slab's first N beats, L1 to L1, through the writer's
-    CrestDecompressor. params weight_crest (libs/crest.py)."""
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_crest_expand"
-
-    def __init__(self, slab_addr, slab_bytes: int):
-        if slab_bytes <= 64 or slab_bytes % 64:
-            raise ValueError(f"slab_bytes={slab_bytes}: whole 64-B beats, more than one")
-        self.slab_addr, self.slab_bytes = slab_addr, int(slab_bytes)
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_xdma_crest_expand_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.slab_addr, "slab_addr", a, handle_name_map)
-        a["slab_bytes"] = str(self.slab_bytes)
         return a
 
 
