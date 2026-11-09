@@ -21,7 +21,9 @@ only (SIGINT so the traces flush, SIGKILL when it does not leave). It stops it o
   HANG-SCHED  a chiplet has work outstanding and no chiplet fetched, released, started or finished a task
               for max(stall_floor_us, stall_factor x the longest task seen) of simulated time
   HANG-AXI    an AXI link has offered a valid nobody takes (a [AXI-STALL] line) AND the scheduler is quiet
-              for axi_confirm_us (axi_stall=stop stops on the line alone, warn only reports it)
+              for axi_confirm_us, the line stamped after the scheduler's last progress: a stall that a run
+              got over earlier (a slow read as a layer starts) confirms nothing (axi_stall=stop stops on any
+              line alone, warn only reports it)
   WEDGE       the simulation clock and every log stood still for wedge_min of wall time
   ASSERT      an assertion failed in the transcript (sim_live.log)
   HOST-ERR    a host printed an error that ends its program (host_err, in the uart_chip_*.log files)
@@ -74,6 +76,8 @@ PARAMS = [
     ("rate_grace_min", 20.0, "wall minutes of run before the rate is judged"),
     ("post_complete_min", 30.0, "wall minutes the simulator may stay up after every chiplet drained its list"),
     ("stop_grace_s", 60, "seconds between SIGINT and SIGKILL"),
+    ("restart_grace_s", 300, "seconds to wait, after the simulator left without a verdict, for the runner to start it "
+                             "again (it retries every 60 s while no FGP core is free); one that appears is re-armed on"),
     ("on_stop_cmd", "", "shell command run after the simulator is gone; {task_dir} {tag} {sweep} are substituted"),
     ("dfg", "", "final_dfg.csv of the workload: names the task ids in the evidence"),
     ("host_err", r"malloc failed|\[Host\].*\b(?:abort|overflow|FATAL)", "regex over the UART logs: a host error that "
@@ -347,6 +351,7 @@ class Judge:
         self.names = names or Names("")
         self.axi = []
         self.axi_seen = 0
+        self.axi_last = (-1, None)      # the newest real [AXI-STALL] line: (its stamp in ps, the line)
         self.assert_line = None
         self.xdma_stall = None
         self.host_err = None
@@ -362,6 +367,9 @@ class Judge:
                 self.axi_seen += 1
                 if len(self.axi) < 40:
                     self.axi.append(ln.strip())
+                m = re.search(r" @(\d+) ", ln)
+                if m and int(m.group(1)) >= self.axi_last[0]:
+                    self.axi_last = (int(m.group(1)), ln.strip())
 
     def feed_transcript(self, lines):
         for ln in lines:
@@ -437,8 +445,9 @@ class Judge:
             q, thr = self.quiet_us(), self.threshold_us()
             if self.axi and p["axi_stall"] == "stop":
                 return "HANG-AXI", self.axi[0][:200]
-            if self.axi and p["axi_stall"] == "confirm" and q >= p["axi_confirm_us"]:
-                return "HANG-AXI", "scheduler quiet %.1f us and %s" % (q, self.axi[0][:160])
+            if (self.axi and p["axi_stall"] == "confirm" and q >= p["axi_confirm_us"]
+                    and self.axi_last[0] >= b.last_progress_ps):
+                return "HANG-AXI", "scheduler quiet %.1f us and %s" % (q, self.axi_last[1][:160])
             if q >= thr:
                 return "HANG-SCHED", ("no task fetched, released, started or done on any chiplet for %.1f us "
                                       "(limit %.1f us); %d chiplets have work outstanding" % (q, thr, len(busy)))
@@ -582,6 +591,16 @@ class Watch:
             time.sleep(15)
         return None
 
+    def find_restart(self, old):
+        """A simulator of this run other than `old`, started within restart_grace_s, else None."""
+        deadline = time.time() + self.p["restart_grace_s"]
+        while time.time() < deadline:
+            pids = [x for x in my_sims(self.p["sim_comm"], self.bin) if x != old]
+            if pids:
+                return pids[0]
+            time.sleep(15)
+        return None
+
     def stop(self, kind, detail):
         self.verdict = kind
         self.ev("STOP %s: %s" % (kind, detail))
@@ -710,6 +729,34 @@ class Watch:
             self.ev("no simulator found for %s" % self.tag)
             self.write_status("no-simulator")
             return 1
+        while True:
+            self.watch_one()
+            if self.verdict:
+                break
+            # gone without a verdict: the runner may start the simulation again under a new PID
+            nxt = self.find_restart(self.pid)
+            if not nxt:
+                break
+            self.ev("simulator %d left before a verdict; the runner started %d: re-armed" % (self.pid, nxt))
+            self.pid = nxt
+            self.judge = Judge(p, Names(p["dfg"]))
+            self.warned, self.marker, self.complete_at, self.rate_t, self.slow_reported = set(), None, None, None, 0.0
+            self.last_hb = time.time()
+        try:
+            self.read_logs()
+        except Exception as e:
+            self.once_error("final read", e)
+        self.ev("simulator %d gone%s: %s" % (self.pid, " (stopped: %s)" % self.verdict if self.verdict else "", self.judge.summary()))
+        if p["on_stop_cmd"]:
+            cmd = p["on_stop_cmd"].format(task_dir=self.task_dir, tag=self.tag, sweep=SWEEP)
+            with open(self.run_dir + ".after.log", "a") as out:
+                rc = subprocess.run(cmd, shell=True, stdout=out, stderr=subprocess.STDOUT).returncode
+            self.ev("after-stop command finished rc=%d" % rc)
+        self.write_status("exited")
+
+    def watch_one(self):
+        """Watch self.pid until it leaves or a rule stops it."""
+        p = self.p
         self.t0 = self.marker_t = time.time()
         self.t_bingo = Tail(os.path.join(self.bin, "bingo_progress.log"))
         self.t_probes = Tail(os.path.join(self.bin, "snax_probes.log"))
@@ -740,17 +787,6 @@ class Watch:
                 self.slow_reported = time.time()
                 self.ev("SLOW %.2f simulated us per wall minute, expected at least %s" % (r, p["min_rate_us_per_min"]))
             time.sleep(p["interval_s"])
-        try:
-            self.read_logs()
-        except Exception as e:
-            self.once_error("final read", e)
-        self.ev("simulator %d gone%s: %s" % (self.pid, " (stopped: %s)" % self.verdict if self.verdict else "", self.judge.summary()))
-        if p["on_stop_cmd"]:
-            cmd = p["on_stop_cmd"].format(task_dir=self.task_dir, tag=self.tag, sweep=SWEEP)
-            with open(self.run_dir + ".after.log", "a") as out:
-                rc = subprocess.run(cmd, shell=True, stdout=out, stderr=subprocess.STDOUT).returncode
-            self.ev("after-stop command finished rc=%d" % rc)
-        self.write_status("exited")
         return 0
 
 

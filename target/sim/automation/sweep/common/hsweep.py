@@ -2,7 +2,7 @@
 # Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-"""hsweep: the shared driver behind every sweep's one-button run.sh.
+"""hsweep: the shared driver behind every sweep's run.sh and stages.sh.
 
     hsweep.py build  --cfg <rtl cfg> [--tree <repo>]
     hsweep.py run    --exp <name> --tag <run> --points <points.yaml> [--tree <repo>] [--jobs N]
@@ -22,7 +22,7 @@ runner's build and simulation steps and adds what a sweep needs around them:
   run      refuses to start unless the standing simv's stamp matches the points' cfg; builds
            the apps under the tree lock (the runner clears and refills target/sim/bin, which
            two builds at once would corrupt); starts its simulations only while this
-           session's running simulations plus its own stay within SIM_SLOTS (default 3).
+           session's running simulations plus its own stay within SIM_SLOTS (default 8).
   verdict  PASS needs the end-of-computation marker, no failed check on any UART, no live
            watchdog and no timeout; the runner's own verdict is not trusted alone.
   prune    deletes the traces once a run has been parsed.
@@ -32,8 +32,8 @@ A points file is YAML:
     cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
     fgp_threads: 8          # optional: VCS FGP worker threads a simulation (N + 1 cores)
     points:
-      - {name: reduce, host_app_type: offload_legacy, chip_type: multi_chip,
-         workload: None, dev_app: snax-coll-reduce}
+      - {name: fa_llama3dec_all, host_app_type: offload_bingo_hw, chip_type: multi_chip,
+         workload: fa/llama3_decode_full/all, dev_app: snax-bingo-offload}
 """
 
 import argparse
@@ -53,7 +53,7 @@ from pathlib import Path
 import yaml
 
 STAMP = "target/sim/bin/.hsweep_stamp.json"
-SIM_SLOTS = int(os.environ.get("SIM_SLOTS", "3"))
+SIM_SLOTS = int(os.environ.get("SIM_SLOTS", "8"))
 SLOT_LOCK = Path(__file__).resolve().parent / ".sim_slots.lock"
 # simulators of this session: their binaries sit in task dirs under these roots
 MINE = ("/target/sim/automation/sweep/",

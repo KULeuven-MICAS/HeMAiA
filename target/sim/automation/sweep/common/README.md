@@ -1,6 +1,6 @@
 # sweep/common: one button per experiment
 
-The `sop_ubench` and `llm_blocks` experiments run through `hsweep.py`.
+The full-package experiments (`sop_ubench/sync`, `llm_blocks`, `llm_layer`, `misc`) run through `hsweep.py`.
 It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
 
 | command | does |
@@ -21,7 +21,7 @@ It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
   only read the snax tree. RTL builds take it exclusively, and so must anything else that runs sbt
   there (`flock` does by default), so a generation never overlaps an app build in any tree that
   builds against the same checkout.
-- At most `SIM_SLOTS` (default 3) of this session's simulations run at once, across trees. A run waits for a free slot.
+- At most `SIM_SLOTS` (default 8) of this session's simulations run at once, across trees. A run waits for a free slot.
   Taking a slot happens under `common/.sim_slots.lock` until the new simulation process exists, so
   runners that wait together do not overshoot.
 - Every launch arms `watch.sh`. Events go to `<run dir>.events` and to `common/all.events`:
@@ -33,10 +33,10 @@ It wraps `HeMAiASimRunner` and adds what a sweep needs around it.
 ```yaml
 cfg: target/rtl/cfg/hemaia_16c4m_8MBL3_2cluster.hjson
 memchip: true          # with_macro / with_d2d for cfgs with a memory chiplet
-timeout_h: 3
+timeout_h: 24
 points:
-  - {name: reduce, host_app_type: offload_legacy, chip_type: multi_chip,
-     workload: None, dev_app: snax-coll-reduce}
+  - {name: fa_llama3dec_all, host_app_type: offload_bingo_hw, chip_type: multi_chip,
+     workload: fa/llama3_decode_full/all, dev_app: snax-bingo-offload}
 ```
 
 ## The hang guard
@@ -63,8 +63,9 @@ status). `test_sim_watchdog.py` tests it with scripted logs and a stand-in proce
 
 **Hardware build:** `hemaia_16c4m_8MBL3_2cluster`, the paper's platform: a 5 x 4 package, 16 compute
 chiplets (2 split clusters each, 1 MiB TCDM per cluster, 8 MiB L3 per chip) and 4 memory chiplets in
-the middle column. The collectives (`sop_ubench/collective`) and the LLM blocks (`llm_blocks/ffn`, `llm_blocks/moe`,
-`llm_blocks/fa`) run on it; `sop_ubench/sync` re-plots measured data and needs no build.
+the middle column. The LLM blocks (`llm_blocks/ffn`, `llm_blocks/moe`, `llm_blocks/fa`), the LLM layers (`llm_layer/`)
+and the synchronisation arms (`sop_ubench/sync`) run on it; `sop_ubench/reduce` models its reduction path in a
+testbench of its own.
 
 **Weights:** `weights/` holds DeepSeek-V2-Lite's layer 1 (`weights/fetch_weights.py`, the cache in
 `weights/cache/` with its manifest), which the MoE and FA workloads read; the FFN fetches its own
@@ -76,3 +77,19 @@ layer into `llm_blocks/ffn/cache/` with the same HTTP helpers.
 - `make clean` wipes every build product, and two builds in one tree race.
 - `/tmp` is RAM, so prune after parsing.
 - Never `pkill -f`: kill by PID.
+
+## Run tools
+
+The tools every experiment's runs share. A tool given a run tag finds its `runs/` in whichever `sweep/*/*/runs` holds it
+(`_runs.sh`); `EXP=<experiment, e.g. llm_blocks/ffn>` (or `RUNS_DIR`) picks one, and the tools that take no tag need it.
+
+| tool | what it does |
+|---|---|
+| `trim_live.py`, `trim_traces.py` | keep a running simulation inside the disk quota: every `stages.sh` starts `trim_live.py`, the watchdog profiles' `on_stop_cmd` runs `trim_traces.py` (both read the core traces with `../llm_blocks/ffn/trace_ffn.py`) |
+| `stage_tick.sh <tag> [s]`, `multi_tick.sh <s> <tag> ...` | one waiter over one or several runs: returns on the first event or STALE, else after `<s>` |
+| `monitor.sh <min> [tag ...]`, `wait_sample.sh [min]` | every `<min>`, `runtime_mac.py` on the runs still running into `runs/$MON_NAME.log` (default `monitor.log`); without tags every running `stg_*` run of `EXP`. `wait_sample.sh` waits for its next sample |
+| `runtime_mac.py <tag> ...` | a running run's liveness and MAC rate, from its scheduler monitor |
+| `queue.sh <stage> ...` | `EXP`'s stages launched one after another as simulator slots free (`QUEUE_NAME`: `runs/<name>.pending`) |
+| `stop_all.sh` | stop every sweep run of mine: helpers, runners, then the simulators |
+| `gen_check.sh <workload> <out dir> <log>` | the generator alone (`<workload>` under `workloads/`, e.g. `ffn/dsv2_l0_prefill/stage0`), in the build container, every output in `<out dir>` |
+| `timeline.py <run dir> [chip ...]` | a MoE prefill run's task spans |
