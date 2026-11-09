@@ -73,13 +73,16 @@
 !/sweep/unit_test/versacore/testing_workload_gen.py
 !/sweep/unit_test/versacore/versacore_params.py
 
-# llm_layer/: whole-layer runs (the sim runner's task flow).
+# llm_layer/: the whole-layer prefills (workloads/dsv2/layer{0,1}/prefill, workloads/llama3/full_layer_prefill): the
+# stage scripts are kept, their runs/ and results/ stay ignored.
 !/sweep/llm_layer/
 /sweep/llm_layer/*
-!/sweep/llm_layer/dsv2/
-/sweep/llm_layer/dsv2/*
-!/sweep/llm_layer/dsv2/run_dsv2_sweep.py
-!/sweep/llm_layer/dsv2/task_dsv2.yaml
+!/sweep/llm_layer/dsv2_prefill/
+/sweep/llm_layer/dsv2_prefill/*
+!/sweep/llm_layer/dsv2_prefill/stages.sh
+!/sweep/llm_layer/llama3_prefill/
+/sweep/llm_layer/llama3_prefill/*
+!/sweep/llm_layer/llama3_prefill/stages.sh
 # misc/: one-off benchmarks, nothing tracked.
 
 !/test/
@@ -90,10 +93,11 @@
 !/test/2_start_tapeout_sim.py
 
 # The ISCA isolated-experiment sweeps: hsweep (sweep/common) and one directory per experiment,
-# grouped as sop_ubench/ (system-of-packages microbenchmarks) and llm_blocks/. Scripts, point
+# grouped as sop_ubench/ (system-of-packages microbenchmarks), llm_blocks/ and llm_layer/. Scripts, point
 # files and READMEs are kept; runs, builds, events, caches, results and figures stay ignored.
 !/sweep/common/
 /sweep/common/*
+!/sweep/common/README.md
 !/sweep/common/hsweep.py
 !/sweep/common/launch.sh
 !/sweep/common/watch.sh
@@ -101,7 +105,19 @@
 !/sweep/common/sim_watchdog.py
 !/sweep/common/sim_watchdog.profiles.json
 !/sweep/common/test_sim_watchdog.py
-!/sweep/common/README.md
+# the run tools every experiment shares (README.md)
+!/sweep/common/_runs.sh
+!/sweep/common/gen_check.sh
+!/sweep/common/monitor.sh
+!/sweep/common/multi_tick.sh
+!/sweep/common/queue.sh
+!/sweep/common/runtime_mac.py
+!/sweep/common/stage_tick.sh
+!/sweep/common/stop_all.sh
+!/sweep/common/timeline.py
+!/sweep/common/trim_live.py
+!/sweep/common/trim_traces.py
+!/sweep/common/wait_sample.sh
 !/sweep/common/weights/
 /sweep/common/weights/cache/
 !/sweep/sop_ubench/
@@ -111,8 +127,3 @@
 /sweep/*/*/results/
 /sweep/*/*/figs/
 /sweep/**/__pycache__/
-/sweep/sop_ubench/collective/old/
-# the FFN sweep's run logs, and the podman / python shims of one machine
-/sweep/llm_blocks/ffn/PROGRESS.md
-/sweep/llm_blocks/ffn/HANDOFF.md
-/sweep/llm_blocks/ffn/tools/bin/
