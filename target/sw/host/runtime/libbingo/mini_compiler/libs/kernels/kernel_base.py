@@ -16,11 +16,67 @@ LAYOUT_CODE = {
 }
 
 
+# ---- ACCESSES: what a kernel does to the memory its address fields name ------------------------------------------------
+READ, WRITE, READWRITE, SYNC, HOLD = "read", "write", "readwrite", "sync", "hold"
+
+
+class Access:
+    """One address field of a kernel's args and what the kernel does there:
+
+        READ / WRITE / READWRITE   `nbytes` from the address (None: to the end of the buffer)
+        SYNC                       memory a runtime protocol orders, not the graph: a flag polled or set, a stamp, a
+                                   weight ring the prefetcher fills behind its flags
+        HOLD                       a buffer the task keeps live without touching it
+
+    A field that holds a list (or tuple) applies to every address in it."""
+    __slots__ = ("field", "mode", "nbytes")
+
+    def __init__(self, field: str, mode: str, nbytes: Optional[int] = None):
+        if mode not in (READ, WRITE, READWRITE, SYNC, HOLD):
+            raise ValueError(f"access mode {mode!r}")
+        if nbytes is not None and int(nbytes) < 0:
+            raise ValueError(f"{field}: {nbytes} bytes")
+        self.field, self.mode = field, mode
+        self.nbytes = None if nbytes is None else int(nbytes)
+
+    def __repr__(self):
+        return f"{self.mode}({self.field}, {self.nbytes})"
+
+
+def Read(field: str, nbytes: Optional[int] = None) -> Access:
+    return Access(field, READ, nbytes)
+
+
+def Write(field: str, nbytes: Optional[int] = None) -> Access:
+    return Access(field, WRITE, nbytes)
+
+
+def ReadWrite(field: str, nbytes: Optional[int] = None) -> Access:
+    return Access(field, READWRITE, nbytes)
+
+
+def Sync(field: str) -> Access:
+    return Access(field, SYNC)
+
+
+def Hold(field: str) -> Access:
+    return Access(field, HOLD)
+
+
 class BingoKernelArgs(ABC):
     """
     Abstract base class for Kernel Arguments.
     Subclasses define the specific arguments for each kernel type and how they map to C structs.
+
+    Every kernel declares accesses(): each address field and what the kernel does there. The compiler checks with it
+    that the graph orders every pair of tasks of which one writes bytes the other touches (passes/bingo_dfg_hazards.py).
     """
+
+    def accesses(self) -> List[Access]:
+        """Every address field of these args and what the kernel does there (Read, Write, ReadWrite with the bytes from
+        the address; Sync; Hold). Each kernel declares it; there is no default."""
+        raise NotImplementedError(f"{type(self).__name__} declares no accesses(): every kernel states what it reads "
+                                  f"and writes at each address field (kernel_base.py Access)")
 
     # (earlier, later) attribute-name pairs constraining where this kernel's own buffers may
     # be placed relative to each other. Empty unless the kernel computes an address in one

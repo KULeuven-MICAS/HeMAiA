@@ -188,6 +188,10 @@ class ChipletBuild(FabricBase):
         # by one loop, the symbol lookup by signature, the g2l table runs by DMA)
         dfg.fast_host_init = bool(p.get("fast_host_init", False))
         dfg.remote_broadcast = bool(p.get("remote_broadcast", True))
+        # the compiler orders every device core's program (a driver that orders them itself keeps its order); params
+        # async_exec: each VersaCore dispatch runs as configure / start / wait parts where the schedule gains from it
+        dfg.schedule_cores = True
+        dfg.async_exec = bool(p.get("async_exec", False))
         self.roles = core_roles(plat)
         self.ctx = Ctx(dfg=dfg, mesh=MESH, roles=self.roles, hw=hw, chiplet=self.ROOT)
         self.pipe = Pipeline(self.ctx, verbose=False, gate_sources=True)

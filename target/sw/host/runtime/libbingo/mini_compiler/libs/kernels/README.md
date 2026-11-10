@@ -31,6 +31,15 @@ The class name is not free: `BingoNode` infers `kernel_name` from `KERNEL_NAME` 
 and that string is the contract with the device-side `SNAX_EXPORT_FUNC` registry. A name
 that does not exist there links fine and dispatches to nothing.
 
+Every class declares `accesses()`: for each field that holds an address, what the kernel does
+there and how many bytes from it (`kernel_base.py`: `Read`, `Write`, `ReadWrite` with the byte
+count, `None` for to the end of the buffer; `Sync` for memory a runtime protocol orders, such as a
+flag; `Hold` for a buffer kept live but not touched). The byte counts come from the args
+(`size`, M x K x N with the array shape, rows x cols, beats). There is no default: the compiler
+uses the declarations to check that the graph orders every two tasks of which one writes bytes
+the other touches (`passes/bingo_dfg_hazards.py`), and refuses a task whose class declares
+none or leaves an address field out.
+
 ## Three things these classes exist to catch
 
 - **The typed GEMM classes are spelled out, not generated.** A generated name

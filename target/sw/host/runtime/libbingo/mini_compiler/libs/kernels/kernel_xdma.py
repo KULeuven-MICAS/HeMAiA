@@ -16,7 +16,16 @@ import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 from bingo_helpers import _check_xdma_size_aligned
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
+
+
+def _span6(spatial_stride, strides, bounds):
+    """Bytes from the first byte an xDMA nest touches to its last: one 64-B beat a step, `spatial_stride` apart within a
+    step (one beat when 0), every temporal dimension its stride times one less than its bound beyond that."""
+    span = 64
+    for s, b in zip(strides, bounds):
+        span += abs(int(s)) * max(int(b) - 1, 0)
+    return span
 
 
 class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
@@ -25,6 +34,9 @@ class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.size = size
+
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_1d_copy_args_t"
@@ -58,6 +70,9 @@ class SnaxBingoKernelXdmaMulticastArgs(BingoKernelArgs):
         self.src_addr = src_addr
         self.dst_list = list(dst_list)
         self.size = size
+
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_list", self.size)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_multicast_args_t"
@@ -103,6 +118,9 @@ class SnaxBingoKernelXdmaMemsetArgs(BingoKernelArgs):
         self.size = size
         self.pattern = int(pattern)
 
+    def accesses(self):
+        return [Write("dst_addr", self.size)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_memset_args_t"
 
@@ -140,6 +158,12 @@ class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
         self.temporal_strides_dst = list(temporal_strides_dst) + [0] * (5 - n)
         self.temporal_bounds_dst  = list(temporal_bounds_dst)  + [1] * (5 - n)
 
+    def accesses(self):
+        return [Read("src_addr", _span6(self.spatial_stride_src, self.temporal_strides_src,
+                                         self.temporal_bounds_src)),
+                Write("dst_addr", _span6(self.spatial_stride_dst, self.temporal_strides_dst,
+                                          self.temporal_bounds_dst))]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_6d_args_t"
 
@@ -171,6 +195,10 @@ class SnaxBingoKernelXdmaTranspose2dArgs(BingoKernelArgs):
         self.N = N
         self.elem_bytes = elem_bytes
 
+    def accesses(self):
+        n = self.M * self.N * self.elem_bytes
+        return [Read("src_addr", n), Write("dst_addr", n)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_transpose_2d_args_t"
 
@@ -199,6 +227,11 @@ class SnaxBingoKernelXdmaSubmatrix2dArgs(BingoKernelArgs):
         self.col_end = col_end
         self.elem_bytes = elem_bytes
 
+    def accesses(self):
+        return [Read("src_addr", self.src_rows * self.src_cols * self.elem_bytes),
+                Write("dst_addr", (self.row_end - self.row_start) * (self.col_end - self.col_start)
+                      * self.elem_bytes)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_submatrix_2d_args_t"
 
@@ -225,6 +258,10 @@ class SnaxBingoKernelXdmaExpand2dArgs(BingoKernelArgs):
         self.N = N
         self.elem_bytes = elem_bytes
 
+    def accesses(self):
+        # expanded along the rows: the destination is the larger one, its size from the kernel's layout
+        return [Read("src_addr"), Write("dst_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_expand_2d_args_t"
 
@@ -250,6 +287,10 @@ class SnaxBingoKernelXdmaConcat2dArgs(BingoKernelArgs):
         self.axis = axis
         self.offset = offset
         self.elem_bytes = elem_bytes
+
+    def accesses(self):
+        return [Read("src_addr", self.src_rows * self.src_cols * self.elem_bytes),
+                Write("dst_addr", self.dst_rows * self.dst_cols * self.elem_bytes)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_concat_2d_args_t"
@@ -283,6 +324,12 @@ class SnaxBingoKernelXdmaPad2dArgs(BingoKernelArgs):
         self.pad_right = pad_right
         self.elem_bytes = elem_bytes
 
+    def accesses(self):
+        rows = self.src_rows + self.pad_top + self.pad_bottom
+        cols = self.src_cols + self.pad_left + self.pad_right
+        return [Read("src_addr", self.src_rows * self.src_cols * self.elem_bytes),
+                Write("dst_addr", rows * cols * self.elem_bytes)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_pad_2d_args_t"
 
@@ -313,6 +360,10 @@ class SnaxBingoKernelXdmaGather2dArgs(BingoKernelArgs):
         self.index_stride = index_stride
         self.elem_bytes = elem_bytes
 
+    def accesses(self):
+        return [Read("src_addr", self.src_rows * self.src_cols * self.elem_bytes),
+                Write("dst_addr", self.num_indices * self.src_cols * self.elem_bytes)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_gather_2d_args_t"
 
@@ -341,6 +392,10 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
         self.num_int32_elem_per_operand = num_int32_elem_per_operand
         self.num_operands = num_operands
         self.operand_stride = operand_stride
+
+    def accesses(self):
+        n = 4 * self.num_int32_elem_per_operand
+        return [Read("src_addr", (self.num_operands - 1) * self.operand_stride + n), ReadWrite("dst_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_elementwise_add_args_t"
@@ -429,6 +484,9 @@ class SnaxBingoKernelPackFaPartialArgs(BingoKernelArgs):
         self.dst = dst
         self.n_rows = n_rows
 
+    def accesses(self):
+        return [Read("src_m"), Read("src_l"), Write("dst")]
+
     @staticmethod
     def packed_bytes(n_rows: int) -> int:
         """Size of the packed partial -- what the gather transfers per cluster."""
@@ -478,6 +536,10 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         self.hops = [tuple(h) for h in hops] if hops is not None else None
         if holds:
             self.holds = list(holds)
+
+    def accesses(self):
+        # the chain's addresses on the other chips are C expressions, not handles
+        return [Read("local_src", self.size), ReadWrite("chain", self.size), Hold("holds")]
 
     @classmethod
     def fold_into(cls, remote, root, cluster, others, src, dst, size, junction, jct_csr0,
@@ -529,6 +591,10 @@ class SnaxBingoKernelXdmaChainStartArgs(BingoKernelArgs):
         if hasattr(gather, "holds"):
             self.holds = gather.holds
 
+    def accesses(self):
+        return [Read("local_src", self.size), ReadWrite("chain", self.size), Write("dst", self.size),
+                Hold("holds")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_chain_start_args_t"
 
@@ -550,6 +616,9 @@ class SnaxBingoKernelXdmaChainWaitArgs(BingoKernelArgs):
         self.junction = gather.junction
         self.teardown = bool(teardown)
 
+    def accesses(self):
+        return [Hold("dst")]                # the start's task holds the transfer's operands until here
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_chain_wait_args_t"
 
@@ -569,6 +638,10 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
         self.src_b_addr = src_b_addr
         self.dst_addr = dst_addr
         self.num_int32_elements = num_int32_elements
+
+    def accesses(self):
+        n = 4 * self.num_int32_elements
+        return [Read("src_a_addr", n), Read("src_b_addr", n), Write("dst_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_elementwise_add_ab_args_t"

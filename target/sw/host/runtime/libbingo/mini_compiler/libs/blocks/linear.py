@@ -160,7 +160,8 @@ class LoadStream:
                              f"reader of its last load was recorded: the new load would not wait "
                              f"for that read.")
         self._unread[i] = True
-        war = [self._reader[i]] if self._reader[i] is not None else []
+        r = self._reader[i]
+        war = [] if r is None else list(r) if isinstance(r, (list, tuple)) else [r]
         war += [n for n in self._extra[i] if n not in war]
         self._extra[i] = []
         return i, self.slabs[i], war
@@ -174,8 +175,9 @@ class LoadStream:
         return self._take(i)
 
     def release(self, i: int, reader) -> None:
-        """`reader` is the LAST node that reads slab i's current contents: the next load
-        into slab i waits for it (so it must imply every other reader)."""
+        """`reader`: the nodes that read slab i's current contents, a list, or one node that every other reader
+        precedes by the graph's edges: the next load into slab i waits for them. A core's program order does not
+        count, since the compiler chooses it."""
         self._reader[i] = reader
         self._unread[i] = False
 

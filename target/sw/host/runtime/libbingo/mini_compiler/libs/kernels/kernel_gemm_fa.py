@@ -12,7 +12,7 @@ which."""
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 
 
 class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
@@ -129,6 +129,10 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
         # unset costs nothing; see the struct comment in device_kernel_args.h.
         self.perf_addr = perf_addr
 
+    def accesses(self):
+        return [Read("input_A_addr"), Read("input_B_addr"), Read("input_C_addr"), Write("output_D_addr"),
+                Read("corr_addr"), Write("perf_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_fa_args_t"
 
@@ -166,6 +170,9 @@ class SnaxBingoKernelGemmPerfReportArgs(BingoKernelArgs):
     def __init__(self, perf_addr: Union[BingoMemAlloc, int], ideal_cc: int = 0):
         self.perf_addr = perf_addr
         self.ideal_cc = ideal_cc
+
+    def accesses(self):
+        return [Read("perf_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_perf_report_args_t"

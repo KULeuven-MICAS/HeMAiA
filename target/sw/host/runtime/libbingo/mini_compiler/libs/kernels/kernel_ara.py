@@ -12,7 +12,7 @@ precision exists for every operation -- the classes that are here are the ones t
 from typing import Union, Dict
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 
 
 # Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>
@@ -48,6 +48,9 @@ class _HostBingoKernelAraBinaryArgs(BingoKernelArgs):
         self.output_addr = output_addr
         self.num_elements = num_elements
         self.precision = self.PRECISION
+
+    def accesses(self):
+        return [Read("input_a_addr"), Read("input_b_addr"), Write("output_addr")]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_ara_binary_args_t"
@@ -302,6 +305,9 @@ class HostBingoKernelAraDequantizeI32F32Args(BingoKernelArgs):
         self.scale_addr = scale_addr
         self.num_elements = num_elements
 
+    def accesses(self):
+        return [Read("input_addr"), Read("scale_addr"), Write("output_addr")]
+
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_ara_convert_args_t"
 
@@ -367,6 +373,10 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
             if mask < 0 or mask >> (32 * self.cerf_words):
                 raise ValueError(f"{name}=0x{mask:x} has a group past the "
                                  f"{32 * self.cerf_words} the CERF holds.")
+
+    def accesses(self):
+        return [ReadWrite("pred_scratchpad_addr"), Read("cerf_group_ids_addr"), Read("cond_activation_addr"),
+                Read("cond_weight_addr")]
 
     def _mask_words(self, field: str, mask: int, assignments: dict) -> None:
         for w in range(self.cerf_words):

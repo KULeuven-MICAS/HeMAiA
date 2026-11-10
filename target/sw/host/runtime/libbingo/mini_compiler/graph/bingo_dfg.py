@@ -17,6 +17,8 @@
 #   bingo_dfg_emit         the generated C the host compiles against
 #   bingo_dfg_report       the graph picture and the CSV dump
 #   bingo_dfg_staticl1     static L1 placement
+#   bingo_dfg_schedule     each device core's program, the asynchronous VersaCore dispatch, CSR reuse
+#   bingo_dfg_hazards      every write ordered against every overlapping access, from the kernels' accesses()
 
 import math
 import os
@@ -45,6 +47,8 @@ from bingo_dfg_validate import BingoDFGValidateMixin
 from bingo_dfg_emit import BingoDFGEmitMixin
 from bingo_dfg_report import BingoDFGReportMixin
 from bingo_dfg_staticl1 import BingoDFGStaticL1Mixin
+from bingo_dfg_schedule import BingoDFGScheduleMixin
+from bingo_dfg_hazards import BingoDFGHazardsMixin
 
 
 class BingoDFG(
@@ -55,6 +59,8 @@ class BingoDFG(
     BingoDFGEmitMixin,
     BingoDFGReportMixin,
     BingoDFGStaticL1Mixin,
+    BingoDFGScheduleMixin,
+    BingoDFGHazardsMixin,
     DiGraphWrapper[BingoNode],
 ):
     """Data Flow Graph (DFG) for Bingo."""
@@ -155,6 +161,12 @@ class BingoDFG(
         self._gating_to_targets: dict = {}     # gating node → its conditional targets
         # Ordering-only edges (producer, consumer), see bingo_add_order_edge.
         self.order_edges: list = []
+        # schedule_cores: the compiler orders every device core's program (bingo_dfg_schedule.py); a graph
+        # whose generator orders them itself sets program_ordered instead. async_exec: each VersaCore
+        # dispatch runs as configure / start / wait parts the schedule places (the same module).
+        self.schedule_cores = False
+        self.program_ordered = False
+        self.async_exec = False
 
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
@@ -265,7 +277,18 @@ class BingoDFG(
         # 0. The per-block pictures, of the graph exactly as the application built it:
         #    every pass below adds entry, exit or dummy nodes a block never stated.
         self.bingo_visualize_blocks(output_dir, app_name)
-        # 1. Transformations
+        # 1. Memory hazards, on the graph the application built: every two tasks of which one writes bytes the other
+        #    touches are ordered by its edges (bingo_dfg_hazards.py; enforced where the compiler orders the cores).
+        #    Then each device core's program, chosen from the cost model; with async_exec the VersaCore dispatches
+        #    split where that gains, numbered; the CSR reuse along each GEMM core's program. Before any pass
+        #    that adds tasks: the schedule is of the tasks the application made.
+        self.bingo_check_hazards()
+        if self.schedule_cores and not self.program_ordered:
+            self.bingo_schedule_programs()
+        elif self.async_exec:
+            raise ValueError("async_exec: the compiler orders the cores (schedule_cores), and this graph's "
+                             "generator ordered them itself (program_ordered)")
+        # 2. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()
         # Add Exit Nodes
@@ -376,14 +399,14 @@ class BingoDFG(
                           f"{_sim['seeds']} seeds x {len(_sc)} routing "
                           f"scenario(s) {_sc} (model: {_sim['model']})")
 
-        # 1b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
+        # 2b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
         #
         # Runs AFTER every transform, because the dummy set/check nodes those passes
         # insert are real nodes with real ordering, and liveness computed before them
         # would see a sparser graph than the hardware actually executes.
         self.bingo_plan_static_l1(static_l1, output_dir=output_dir)
 
-        # 2. Emit C Code
+        # 3. Emit C Code
         self.bingo_emit_offload_c_code(
             app_name=app_name,
             output_path=os.path.join(output_dir, output_file_name),

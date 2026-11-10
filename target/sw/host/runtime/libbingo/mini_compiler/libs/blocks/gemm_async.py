@@ -222,7 +222,7 @@ class GemmQueue:
             ts.sort(key=lambda t: (getattr(t, "order_key", t.node_id), t.node_id))
         self._renumber(groups)
         cfgs = {key: [t for t in ts if t in self.cfg_task] for key, ts in groups.items()}
-        # cfg_hoist moves only a configure with no dependency of its own (a generator may give one, e.g. an end anchor)
+        # cfg_hoist moves only a configure with no dependency of its own (a generator may give one, e.g. an end stamp)
         dep_free = {c for c in self.cfg_task if dfg.in_degree(c) == 0} - {b for _, b in dfg.order_edges}
         groups = {key: [t for t in ts if t not in self.cfg_task] for key, ts in groups.items()}
         movable = set()
@@ -303,6 +303,7 @@ class GemmQueue:
             raise ValueError(f"the program order closes a cycle: "
                              f"{[(a.node_name, b.node_name) for a, b in cyc[:6]]}")
         n_checked = self.check_numbering(dfg, device_cores)
+        dfg.program_ordered = True
         if verbose and self.cfg_task:
             print(f"[{tag}] program order: {len(self.cfg_task)} dispatches configured ahead"
                   + (", gemm_start configures ahead of the waits before their start" if self.cfg_hoist else ""))

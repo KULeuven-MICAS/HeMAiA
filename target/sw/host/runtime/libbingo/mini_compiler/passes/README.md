@@ -7,6 +7,8 @@ because each depends on the last. The analyses the passes use live here too.
 
 | file | what it does | what it catches |
 |---|---|---|
+| `bingo_dfg_hazards.py` | Every two tasks of which one writes bytes the other touches are ordered by the graph's dependency and ordering-only edges, from what each kernel declares in `accesses()`; a dispatch that reads until its wait (`operands_held_by`) counts to the wait. Enforced where the compiler orders the cores, reported on otherwise. | A pair left unordered (named with the edge to add), a kernel without `accesses()`, an address field left out of it. |
+| `bingo_dfg_schedule.py` | Each device core's program, chosen by list scheduling over the cost model (`dfg.schedule_cores`; a graph whose generator ordered its cores, `program_ordered`, keeps that order). With `dfg.async_exec`, every `gemm_full` may run as configure / start / wait parts the schedule places under the array's rules (one pending configuration, two dispatches in flight); parts left side by side are fused again, and the split programs are kept only where the model says they finish sooner. Then the dispatches' numbers and the CSR reuse along each GEMM core's program (`gemm_minimal`, a start's `reuse`). | A task that never becomes ready under the array's rules; a `gemm_wait` the compiler did not make. |
 | `bingo_dfg_transforms.py` | Entry node, per-core exit chain, core-sequencing edges, fan-out pruning (on by default), the tag budget, dummy set/check nodes, then dep set/check info and the tag allocation (a minimum chain cover). Runs in two halves, with the conditional pass between them. | A cell that needs more tags than `2**dep_tag_width` is fitted by added ordering edges, or by relay tasks where ordering cannot fit it; only a cell neither can fit raises. Tag exhaustion in the allocator raises too. |
 | `bingo_dfg_conditional.py` | Wires the CERF conditional-execution registers: which node gates which, and what a skipped task still signals. | A skipped task IS pushed to the checkout queue retagged, so it still fires `dep_set` — a consumer that assumed otherwise waits forever. |
 | `bingo_dfg_descriptor.py` | The descriptor field table (LSB to MSB, mirrors `bingo_hw_manager_task_desc_t`), packing, unpacking and the task-list word split. | Descriptor-width overflow, and a field value that does not fit its width. |
@@ -19,6 +21,7 @@ because each depends on the last. The analyses the passes use live here too.
 
 | file | |
 |---|---|
+| `bingo_cost_model.py` | How long a task holds its core, a dispatch's array time and an edge's latency, in cluster cycles: formulas over the task's arguments and a few round constants of the machine, nothing fitted to a run. What `bingo_dfg_schedule.py` orders the cores by. |
 | `bingo_liveness.py` | Who uses which buffer, reachability between nodes, and `can_share` — the rule static-L1 rests on: every user of A must be a graph ancestor of every user of B. One incomparable pair vetoes the whole buffer pair. |
 | `bingo_reach.py` | Every node's descendants in the happens-before graph at once, one bitset per node over a topological order: the reachability the tag allocator and the hang check test thousands of times. |
 | `bingo_l1_packer.py` | The placement search itself, the proof that the placement is safe, and the layout CSV and plot writers. |

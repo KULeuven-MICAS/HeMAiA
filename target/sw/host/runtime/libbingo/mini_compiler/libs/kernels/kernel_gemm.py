@@ -13,7 +13,7 @@ that does not exist there links fine and dispatches to nothing."""
 from typing import Union, Dict
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 
 # int4_b_enable of the general descriptor also names B's layout (offload_hw_kernels/gemm.h,
 # "INT4 B layouts"): the B-layout, nibble-packed, or the paired layout (util/layout.py
@@ -25,6 +25,51 @@ INT4_B_LAYOUT_PAIRED = 2
 # pair's run), so a pass's words sit in banks of one parity, the other parity from A's rows
 # when B starts an odd number of 8-byte words after A. Needs an even K, B not transposed.
 INT4_B_LAYOUT_PARITY = 3
+
+
+# ---- THE ARRAY SHAPES, from the cluster cfg (bingo_platform.load_cluster_cfg sets them) -----------------------------
+_gemm_shapes = None                         # [(meshRow, tileSize, meshCol)] by array_shape_idx
+_gemm_elem_bits = None                      # the element widths of A, B, C and D, in bits
+
+
+def cluster_gemm_shapes(hw):
+    """The VersaCore array shapes of a parsed cluster cfg and the element widths of A, B, C and D."""
+    acc = hw["snax_versacore_core_template"]["snax_acc_cfg"][0]
+    shapes = [tuple(int(v) for v in s) for s in acc["snax_versacore_spatial_unrolling"][0]]
+    bits = tuple(int(acc[f"snax_versacore_{x}_element_width"][0])
+                 for x in ("input_a", "input_b", "input_c", "output_d"))
+    return shapes, bits
+
+
+def set_gemm_shapes(shapes, elem_bits) -> None:
+    global _gemm_shapes, _gemm_elem_bits
+    _gemm_shapes, _gemm_elem_bits = [tuple(s) for s in shapes], tuple(elem_bits)
+
+
+def gemm_shape(idx: int):
+    """(meshRow, tileSize, meshCol) of array shape `idx`."""
+    if _gemm_shapes is None:
+        raise RuntimeError("the array shapes are the cluster cfg's: load it with "
+                           "bingo_platform.load_cluster_cfg (or call set_gemm_shapes) before asking a GEMM task "
+                           "what it accesses")
+    return _gemm_shapes[int(idx)]
+
+
+def gemm_accesses(a):
+    """What a VersaCore dispatch with gemm_full's fields reads and writes: A [M x meshRow, K x tileSize] (row-major at
+    a_pitch when set), B [K x tileSize, N x meshCol], C and D [M x meshRow, N x meshCol]; INT4 halves A or B, D is
+    INT8 quantised, FP16 converted or the array's own width."""
+    mr, ts, mc = gemm_shape(a.array_shape_idx)
+    ab, bb, cb, db = _gemm_elem_bits
+    M, K, N = int(a.M), int(a.K), int(a.N)
+    if a.a_pitch:
+        A = (M * mr - 1) * a.a_pitch + K * ts * ab // 8
+    else:
+        A = M * K * mr * ts * ab // 8 // (2 if a.int4_a_enable else 1)
+    B = K * N * ts * mc * bb // 8 // (2 if a.int4_b_enable else 1)
+    C = M * N * mr * mc * cb // 8
+    D = M * N * mr * mc * (1 if a.quantization_enable else 2 if a.int32tofp16_enable else db // 8)
+    return [Read("input_A_addr", A), Read("input_B_addr", B), Read("input_C_addr", C), Write("output_D_addr", D)]
 
 
 class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
@@ -93,6 +138,9 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         self.int4_a_enable = int4_a_enable
         self.int4_b_enable = int4_b_enable
 
+    def accesses(self):
+        return gemm_accesses(self)
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_full_args_t"
 
@@ -149,6 +197,12 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
             raise ValueError(f"stage={stage}: 0 configure and start, 1 configure only, 2 start only")
         self.stage = int(stage)
 
+    def accesses(self):
+        if self.stage == self.CONFIGURE_ONLY:
+            return [Hold(f) for f in ("input_A_addr", "input_B_addr", "input_C_addr", "output_D_addr")] + \
+                [Read("shape_addr", SnaxBingoKernelGemmShapeInitArgs.BYTES)]
+        return gemm_accesses(self) + [Read("shape_addr", SnaxBingoKernelGemmShapeInitArgs.BYTES)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_start_args_t"
 
@@ -171,6 +225,9 @@ class SnaxBingoKernelGemmShapeInitArgs(BingoKernelArgs):
     def __init__(self, dst_addr, shape_idx: int):
         self.dst_addr, self.shape_idx = dst_addr, int(shape_idx)
 
+    def accesses(self):
+        return [Write("dst_addr", self.BYTES)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_shape_init_args_t"
 
@@ -190,6 +247,9 @@ class SnaxBingoKernelGemmWaitArgs(BingoKernelArgs):
         if int(seq) < 1:
             raise ValueError(f"seq={seq}: dispatches are numbered from 1")
         self.seq = int(seq)
+
+    def accesses(self):
+        return []
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_wait_args_t"
@@ -256,6 +316,9 @@ class SnaxBingoKernelGemvArgs(BingoKernelArgs):
             raise ValueError(f"gemv d_step={self.d_step}: the groups' outputs of {2 * self.N} "
                              f"bytes would overlap")
 
+    def accesses(self):
+        return [Read("input_A_addr"), Read("input_B_addr"), Write("output_D_addr")]
+
     @staticmethod
     def shift_for_depth(K: int) -> int:
         """The smallest k with 127^2 * K <= 65,504 * 2^k: the widest INT8 dot product of
@@ -299,6 +362,10 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
         self.input_B_addr = input_B_addr
         self.input_C_addr = input_C_addr
         self.output_D_addr = output_D_addr
+
+    def accesses(self):
+        # the shape is the previous dispatch's, held in the CSRs: to the end of each buffer
+        return [Read("input_A_addr"), Read("input_B_addr"), Read("input_C_addr"), Write("output_D_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_minimal_args_t"

@@ -31,13 +31,12 @@ sys.path.insert(0, os.path.join(REPO, "target", "sw", "host", "runtime", "libbin
 sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "llama3", "common"))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "common"))
 import _bingo_paths  # noqa: F401,E402
-from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
     INT4_B_LAYOUT_PAIRED, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdmaChainGatherArgs)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
 from driver import run_driver  # noqa: E402
-from libs.blocks import GemmQueue, chain_gather  # noqa: E402
+from libs.blocks import chain_gather  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 import ffn_data  # noqa: E402
@@ -96,9 +95,30 @@ def split_columns(S, p):
 
 
 class Stage45(cm.ChipletBuild):
-    TAG = "pf"
+    """Stages 4-5 of the FFN prefill block (../full) for one pass, alone. The block runs, for each pass of `rows`
+    tokens:
+
+        stage 0     X from HBM into every cluster                                     ../stage0
+        stages 1-3  gate|up GEMMs, dequantise and SwiGLU, quantise, the A8 exchange   ../stage123
+        stages 4-5  down GEMMs, the ChainGathers into the root, the stores of Y       this app
+
+    Stage 3's result, each chip's A8 in both its clusters' L1, is loaded before the window instead, so the window
+    (S0_start .. S1_end) is these stages' time. run_driver makes the program in three steps: __init__ (the mapping,
+    the data, the golden and the memory), build() (the task graph: every task and edge) and finish() (the buffer-hazard
+    check, then the compile into the C header and the data image, in which the compiler orders every core's tasks and
+    reuses a repeated GEMM configuration)."""
+
+    TAG = "pf"      # prefill FFN, as in the whole block: the prefix of the symbols, task names and printed lines
 
     def __init__(self, args, p, plat, hw):
+        """The mapping, the data, the golden and the memory. ChipletBuild.__init__ first: the chips, each one's memory
+        chip and its push engine there, the fold order, the empty DFG, the data staging (self.st) and the stamp buffer.
+        Then: each chip's intermediate columns (split_columns) and each cluster's output columns as down slices
+        (_dn_out_split); the golden Y, added in the fold order the ChainGathers add in; _stage(): each chip's A8 and
+        every cluster's down chunks into HBM, Y_raw's place in the root's L3; make_streams(): each cluster's L1 weight
+        slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
+        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's symmetric buffer, the root's fold
+        slots, every cluster's A8. The prefetchers are the only tasks made here."""
         super().__init__(args, p, plat, hw)
         d = self.d = ffn_data.FFNData(CACHE, p["model"], wbits=self.wbits, tokens=self.T)
         R = self.ROWS = int(p["rows"])
@@ -242,6 +262,29 @@ class Stage45(cm.ChipletBuild):
         return ld, si, slab
 
     def build(self):
+        """The task graph (task names without their _k<chip> suffix; g a cluster, c its index on its chip, j a down
+        slice, s a fold slot); every cluster runs the same chain on its own output columns:
+
+          before the window     a8_pre_g<g>                        DM: the chip's A8, HBM -> L1
+                                     |
+                                 S0_start  ---------->  weight_prefetch_k<chip>   host: its memory chip pushes the
+                                     :                                            chunks into the L3 ring
+          every slice j         Ld_c<j>_i0_g<g>                    DM: the chunk, ring slot -> L1 slab, once landed
+                                     |
+                                dn_c<j>_i0[b<b>]_g<g>              GEMM: A8 x the chunk, the chip's FP16 partial of
+                                     |                             the slice, into output slot j % out_slots
+          every chain_group slices, per c, on the root chip:
+                                y_chain_j<j>                       cluster c's xDMA: one ChainGather through every
+                                     |                             chip, each hop adding its partial, into fold slot s
+                                y_store_j<j>                       DM: fold slot s -> Y_raw in the root's L3
+                                     |
+                   the last stores  ->  S1_end  ->  pf_report  ->  Check_pf_y_i0_a  ->  Check_pf_y_i0_b
+
+        The first slice's GEMM is one a post block of A8 rows (POST_BLOCKS), the others one GEMM each. A down GEMM
+        waits for the gather that last read its output slot; a gather waits for its group's down GEMMs on every chip,
+        the previous gather and the stores that last read its fold slot. A group's stores are made after the next
+        group's gathers, so the root's DM core stores one gather behind. After the checks every cluster's sym_hold keeps
+        its symmetric buffer live to the end; check_hazards() (in finish) proves the reused slots safe."""
         R, dm, xdma, gemm = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["gemm"]
         # dep-tag relays of the gathers go to the SIMD cores first, idle in the down phase, each serving that one
         # gather, so a gather waits for its own slices' GEMMs only
@@ -293,25 +336,26 @@ class Stage45(cm.ChipletBuild):
                 war = sym_reader.get((k, c, so), [])
                 if jl == 0:                     # one GEMM per post block of A8 rows, so the first slice starts sooner
                     mb = self.MT // POST_BLOCKS
-                    for b in range(POST_BLOCKS):
-                        dn[g] = self.node(k, c, gemm, f"dn_c{c * h}_i0b{b}_g{g}", "__snax_bingo_kernel_gemm_full",
-                                          SnaxBingoKernelGemmFullArgs(
-                                              input_A_addr=self.a8[g].view(b * mb * 16 * kn),
-                                              output_D_addr=self.sym[(k, c)].view(so * SL + b * mb * nt * TILE), M=mb,
-                                              **kargs),
-                                          [ld, self.a8_pre[g]] + war)
+                    dn[g] = [self.node(k, c, gemm, f"dn_c{c * h}_i0b{b}_g{g}", "__snax_bingo_kernel_gemm_full",
+                                       SnaxBingoKernelGemmFullArgs(
+                                           input_A_addr=self.a8[g].view(b * mb * 16 * kn),
+                                           output_D_addr=self.sym[(k, c)].view(so * SL + b * mb * nt * TILE), M=mb,
+                                           **kargs),
+                                       [ld, self.a8_pre[g]] + war)
+                             for b in range(POST_BLOCKS)]
                 else:
-                    dn[g] = self.node(k, c, gemm, f"dn_c{c * h + jl}_i0_g{g}", "__snax_bingo_kernel_gemm_full",
-                                      SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[g],
-                                                                  output_D_addr=self.sym[(k, c)].view(so * SL),
-                                                                  M=self.MT, **kargs),
-                                      [ld, self.a8_pre[g]] + war)
-                self.dn[(g, jl)] = dn[g]
-                self.ls[g].release(si, dn[g])
+                    dn[g] = [self.node(k, c, gemm, f"dn_c{c * h + jl}_i0_g{g}", "__snax_bingo_kernel_gemm_full",
+                                       SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[g],
+                                                                   output_D_addr=self.sym[(k, c)].view(so * SL),
+                                                                   M=self.MT, **kargs),
+                                       [ld, self.a8_pre[g]] + war)]
+                self.dn[(g, jl)] = dn[g][-1]
+                self.ls[g].release(si, dn[g])   # every GEMM that reads the slab
                 if jl % GS:
-                    # a gather waits for its group's last down GEMM on each chip only; the GEMM core runs its queue in
-                    # order, so the group's GEMMs go into it in slice order
-                    self.dfg.bingo_add_order_edge(prev_dn[g], dn[g])
+                    # a gather waits for its group's last down GEMM on each chip only: each slice's GEMMs follow the
+                    # previous slice's (order edges, no dependency tag), so the last implies the group
+                    for p in prev_dn[g]:
+                        self.dfg.bingo_add_order_edge(p, dn[g][0])
                 prev_dn[g] = dn[g]
             if jl + 1 < h:
                 lds = {g: self._load(g, jl + 1) for g in range(self.G)}
@@ -328,7 +372,7 @@ class Stage45(cm.ChipletBuild):
                     cm.remote, R, c, ordr, src=self.sx(c, so0 * SL), dst=f"({p1x[c]} + {s * GS * SL})",
                     size=(GS - 1) * SL + self.ROWS * self.dn_sl[c][jl][1] * 2,
                     junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD, holds=[self.p1c[c]])
-                ins = [dn[g] for g in range(self.G) if self.c(g) == c]
+                ins = [t for g in range(self.G) if self.c(g) == c for t in dn[g]]
                 after = ins + p1_reader.get((c, s), []) + ([last_red] if last_red is not None else [])
                 red = chain_gather(lambda n, kernel, a, deps, c=c: self.node(R, c, xdma, n, kernel, a, deps),
                                    f"y_chain_j{j}", ga, after)
@@ -366,13 +410,8 @@ class Stage45(cm.ChipletBuild):
         print(f"[{self.TAG}] buffer hazards: none (output and fold slots)")
 
     def finish(self, app_name, x_prefixes=("a8_pre_",)):
-        # every device core runs its tasks in the order they are made; a GEMM whose configuration repeats its core's
-        # previous one runs as gemm_minimal; one host function a chip
-        GemmQueue.of(self.dfg, False).program_order(self.dfg, [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")],
-                                                    tag=self.TAG)
-        print(f"[{self.TAG}] gemm_reuse: {reuse_gemm_config(self.dfg)} GEMMs run as gemm_minimal")
         self.check_hazards()
-        self.dfg.split_chip_functions = True
+        self.dfg.split_chip_functions = True     # one host function a chip
         super().finish(app_name, x_prefixes)
 
 

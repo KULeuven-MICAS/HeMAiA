@@ -10,7 +10,7 @@ tiles of array shape 3 (blocks of 8 rows x 16 FP16, 256 B)."""
 from typing import Dict, Sequence
 
 from bingo_mem_handle import BingoMemAlloc
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 
 D_BLOCK = 256                 # one D-layout block of array shape 3: 8 rows x 16 FP16
 ROUTE_ENTRY_BYTES = 32        # one token's entry of the route table
@@ -38,6 +38,9 @@ class SnaxBingoKernelMoeTopkRowsArgs(BingoKernelArgs):
         self.p_addr, self.p_pitch, self.n, self.k = p_addr, int(p_pitch), int(n), int(k)
         self.t0, self.t1, self.out_addr = int(t0), int(t1), out_addr
         self.ctr_addr, self.chunk = ctr_addr, int(chunk)
+
+    def accesses(self):
+        return [Read("p_addr"), Write("out_addr"), ReadWrite("ctr_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_moe_topk_rows_args_t"
@@ -81,6 +84,9 @@ class SnaxBingoKernelMoeDispatchArgs(BingoKernelArgs):
         self.table_addr, self.tokens, self.k = table_addr, int(tokens), int(k)
         self.ids, self.caps, self.cnts = ids, caps, cnts
         self.list_addr, self.pad_row, self.err_addr = list_addr, int(pad_row), err_addr
+
+    def accesses(self):
+        return [Read("table_addr"), Write("list_addr"), Write("err_addr"), ReadWrite("state_addr")]
 
     @staticmethod
     def list_bytes(caps: Sequence[int]) -> int:
@@ -133,6 +139,11 @@ class SnaxBingoKernelIdmaGatherRowsArgs(BingoKernelArgs):
         self.src_addr, self.row_bytes, self.ids_addr, self.n = src_addr, int(row_bytes), ids_addr, int(n)
         self.dst_addr, self.dst_pitch = dst_addr, int(dst_pitch)
 
+    def accesses(self):
+        # the rows the ids name are chosen at run time: the whole source
+        return [Read("src_addr"), Read("ids_addr", 4 * self.n),
+                Write("dst_addr", (self.n - 1) * self.dst_pitch + self.row_bytes if self.n else 0)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_gather_rows_args_t"
 
@@ -165,6 +176,9 @@ class SnaxBingoKernelSimdMulTilesArgs(BingoKernelArgs):
         self.dst_tile_stride = int(dst_tile_stride) or nt * D_BLOCK
         self.dst_pitch = int(dst_pitch)
 
+    def accesses(self):
+        return [Read("x_addr"), Read("s_addr"), Write("dst_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_mul_tiles_args_t"
 
@@ -194,6 +208,9 @@ class SnaxBingoKernelSimdDeqSwigluArgs(BingoKernelArgs):
             raise ValueError(f"tiles={tiles}, nb={nb}, out_tile_stride={out_tile_stride} >= nb blocks")
         self.g_addr, self.s_addr, self.sg_addr, self.out_addr = g_addr, s_addr, sg_addr, out_addr
         self.tiles, self.nb, self.out_tile_stride = int(tiles), int(nb), int(out_tile_stride)
+
+    def accesses(self):
+        return [Read("g_addr"), Read("s_addr"), Read("sg_addr"), Write("out_addr")]
 
     @staticmethod
     def scratch_bytes(tiles: int, nb: int) -> int:
@@ -227,6 +244,9 @@ class SnaxBingoKernelSimdQuantRowsArgs(BingoKernelArgs):
         self.src_addr, self.rows, self.nb, self.src_tile_stride = src_addr, int(rows), int(nb), int(src_tile_stride)
         self.inv_scale_f32bits, self.dst_addr, self.dst_pitch = int(inv_scale_f32bits), dst_addr, int(dst_pitch)
         self.w_addr = w_addr
+
+    def accesses(self):
+        return [Read("src_addr"), Write("dst_addr"), Read("w_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_quant_rows_args_t"
@@ -263,6 +283,10 @@ class SnaxBingoKernelSimdScatterAddRowsArgs(BingoKernelArgs):
         self.s_addr = s_addr
         self.y_tile_stride = int(y_tile_stride) or nt * D_BLOCK
         self.d_tile_stride = int(d_tile_stride) or nt * D_BLOCK
+
+    def accesses(self):
+        # the rows the ids name are chosen at run time: the whole destination
+        return [ReadWrite("y_addr"), Read("d_addr"), Read("ids_addr", 4 * self.n), Read("s_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_scatter_add_rows_args_t"

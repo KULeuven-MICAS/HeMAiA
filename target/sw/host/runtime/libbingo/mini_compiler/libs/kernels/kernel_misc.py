@@ -13,7 +13,7 @@ enough to be worth its own."""
 from typing import Union, Dict
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 
 
 # -------------------------------------------------------------
@@ -21,9 +21,18 @@ from kernel_base import BingoKernelArgs
 # -------------------------------------------------------------
 
 # Dummy kernel args
+def _span(size, reps, outer, stride, outer_stride):
+    """Bytes from the first byte of a 2D/3D run pattern to its last: `outer` blocks `outer_stride` apart of `reps` runs
+    `stride` apart, each `size` bytes."""
+    return max(0, outer - 1) * outer_stride + max(0, reps - 1) * stride + size
+
+
 class SnaxBingoKernelDummyArgs(BingoKernelArgs):
     def __init__(self, dummy_input: int):
         self.dummy_input = dummy_input
+
+    def accesses(self):
+        return []
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_dummy_args_t"
@@ -59,6 +68,9 @@ class SnaxBingoKernelStampArgs(BingoKernelArgs):
         self.slot = int(slot)
         self.mark_addr = mark_addr
 
+    def accesses(self):
+        return [Sync("stamp_buf"), Sync("mark_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_stamp_args_t"
 
@@ -89,6 +101,9 @@ class SnaxBingoKernelCerfTilesArgs(BingoKernelArgs):
         self.group_base = int(group_base)
         self.group_block = int(group_block)
 
+    def accesses(self):
+        return [Read("counts", 4 * self.num_slots)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_cerf_tiles_args_t"
 
@@ -112,6 +127,9 @@ class SnaxBingoKernelCerfStaticArgs(BingoKernelArgs):
         self.ctrl = int(ctrl)
         self.state = int(state)
         self.cerf_words = int(cerf_words)
+
+    def accesses(self):
+        return []
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_cerf_static_args_t"
@@ -142,6 +160,9 @@ class SnaxBingoKernelChipBarrierArgs(BingoKernelArgs):
         self.bottom_right = int(bottom_right)
         self.seq = int(seq)
 
+    def accesses(self):
+        return []
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_chip_barrier_args_t"
 
@@ -166,6 +187,9 @@ class HostBingoKernelStampReportArgs(BingoKernelArgs):
         self.num_phases = int(num_phases)
         self.local_phase = int(local_phase)
 
+    def accesses(self):
+        return [Sync("stamp_buf")]
+
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_stamp_report_args_t"
 
@@ -183,6 +207,9 @@ class SnaxBingoKernelIdma1dCopyArgs(BingoKernelArgs):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.size = size
+
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_1d_copy_args_t"
@@ -209,6 +236,9 @@ class PhaseArgsLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
                          f"(__bingo_args_l1_chip{chip:02x}_cl{cluster}_p{phase})", f"sizeof({img}_t)")
         self.chip, self.cluster, self.phase = int(chip), int(cluster), int(phase)
 
+    def accesses(self):
+        return []                           # the compiler's own args region, ordered by the args phases
+
 class PhaseListLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
     """The DM task that brings the per-task list entries of args phase `phase` of chip `chip`'s cluster
     `cluster` into the cluster's L1 window `phase % 2`: a 1D copy of that phase's part of the generated list
@@ -224,6 +254,9 @@ class PhaseListLoadArgs(SnaxBingoKernelIdma1dCopyArgs):
                          f"(__bingo_lp_win_{c}_w{phase % 2}_at)", f"__bingo_lp_bytes_{c}_p{phase}")
         self.list_chip, self.list_cluster, self.list_phase = int(chip), int(cluster), int(phase)
 
+    def accesses(self):
+        return []                           # the compiler's own list region, ordered by the args phases
+
 # BINGO IDMA strided copy: `outer` repetitions of `reps` runs of `size` bytes
 class SnaxBingoKernelIdma2dCopyArgs(BingoKernelArgs):
     """Up to three dimensions of runs in one node (offload_hw_kernels/idma.h): a gather of
@@ -238,6 +271,10 @@ class SnaxBingoKernelIdma2dCopyArgs(BingoKernelArgs):
         self.size, self.src_stride, self.dst_stride = int(size), int(src_stride), int(dst_stride)
         self.reps, self.outer = int(reps), int(outer)
         self.src_outer, self.dst_outer = int(src_outer), int(dst_outer)
+
+    def accesses(self):
+        return [Read("src_addr", _span(self.size, self.reps, self.outer, self.src_stride, self.src_outer)),
+                Write("dst_addr", _span(self.size, self.reps, self.outer, self.dst_stride, self.dst_outer))]
 
     @property
     def nbytes(self) -> int:
@@ -273,6 +310,10 @@ class SnaxBingoKernelIdmaCopySlotArgs(BingoKernelArgs):
         self.record_addr, self.slot, self.field = record_addr, int(slot), f
         self.offset, self.dst_addr, self.size = int(offset), dst_addr, int(size)
 
+    def accesses(self):
+        # the source is [base + offset] with base read from the record at run time: not a handle
+        return [Read("record_addr"), Write("dst_addr", self.size)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_copy_slot_args_t"
 
@@ -306,6 +347,10 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         # weight_ring.trailer: flag_addr is the record's last beat (a 64-bit magic, cleared
         # after the copy) instead of the ring's flag word
         self.trailer = int(bool(trailer))
+
+    def accesses(self):
+        # the ring slot and its flags: the prefetcher's protocol orders them
+        return [Sync("flag_addr"), Sync("src_addr"), Write("dst_addr", self.size), Sync("release_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_ring_load_args_t"
@@ -349,6 +394,10 @@ class SnaxBingoKernelMoeRouteArgs(BingoKernelArgs):
         self.union_n = int(union_n) if tokens > 1 else 0
         # 0: candidate i is expert i; else n uint32 expert ids in L1 (moe_router_pack mode 2)
         self.ids_addr = ids_addr
+
+    def accesses(self):
+        return [Read("p_addr"), Read("table_addr"),
+                Write("record_addr", self.SLOT_BYTES * self.k * self.tokens), Write("ids_addr")]
 
     @classmethod
     def record_bytes(cls, k: int) -> int:
@@ -400,6 +449,12 @@ class SnaxBingoKernelMoeRouterPackArgs(BingoKernelArgs):
         for f in self.FIELDS:
             setattr(self, f, addrs.get(f, 0))
 
+    def accesses(self):
+        # by mode: ROW reads logits, writes row; PACK reads row, m, s, writes topk and stats; UNPACK the reverse
+        w = {0: ("row_addr",), 1: ("topk_addr", "stats_addr"),
+             2: ("row_addr", "m_addr", "s_addr", "ids_addr")}[self.mode]
+        return [Write(f) if f in w else Read(f) for f in self.FIELDS]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_moe_router_pack_args_t"
 
@@ -421,6 +476,9 @@ class SnaxBingoKernelIdmaBroadcastArgs(BingoKernelArgs):
         self.dst_addr = dst_addr
         self.size = size
 
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_broadcast_args_t"
 
@@ -440,6 +498,9 @@ class SnaxBingoKernelIdmaBcastPutArgs(BingoKernelArgs):
     def __init__(self, src_addr, dst_addr, size: int, flag_addr, value: int = 1):
         self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
         self.flag_addr, self.value = flag_addr, int(value)
+
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size), Sync("flag_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_bcast_put_args_t"
@@ -466,6 +527,9 @@ class SnaxBingoKernelIdmaPutFlaggedArgs(BingoKernelArgs):
         self.flag_addr, self.value = flag_addr, int(value)
         self.bcast = (1 if bcast else 0) | (2 if (bcast and also_here) else 0)
 
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size), Sync("flag_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_put_flagged_args_t"
 
@@ -485,6 +549,9 @@ class SnaxBingoKernelIdmaPutFlaggedArgs(BingoKernelArgs):
 class SnaxBingoKernelWaitFlagsArgs(BingoKernelArgs):
     def __init__(self, flags_addr, n_flags: int, value: int = 1):
         self.flags_addr, self.n_flags, self.value = flags_addr, int(n_flags), int(value)
+
+    def accesses(self):
+        return [Sync("flags_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_wait_flags_args_t"
@@ -507,6 +574,9 @@ class SnaxBingoKernelIdmaFetchFlaggedArgs(BingoKernelArgs):
         self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
         self.flags_addr, self.n_flags, self.value = flags_addr, int(n_flags), int(value)
 
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size), Sync("flags_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_fetch_flagged_args_t"
 
@@ -528,6 +598,10 @@ class SnaxBingoKernelIdmaPairwiseSwapArgs(BingoKernelArgs):
         self.dst_addr = dst_addr
         self.num_elems = num_elems
         self.elem_bytes = elem_bytes
+
+    def accesses(self):
+        n = self.num_elems * self.elem_bytes
+        return [Read("src_addr", n), Write("dst_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_pairwise_swap_args_t"

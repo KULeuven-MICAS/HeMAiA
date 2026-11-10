@@ -426,7 +426,8 @@ def _engine_of_kernel(kernel_name):
 
 def load_cluster_cfg(hwcfg_path):
     """The cluster hjson, parsed. The single place blocks read platform facts from. Also sets
-    the SIMD core's beat (kernel_simd.simd_beat_bytes), which every SIMD task is sized in."""
+    the SIMD core's beat (kernel_simd.simd_beat_bytes), which every SIMD task is sized in, and the
+    VersaCore array shapes (kernel_gemm.set_gemm_shapes)."""
     import hjson
     with open(hwcfg_path) as f:
         hw = hjson.loads(f.read())
@@ -435,6 +436,12 @@ def load_cluster_cfg(hwcfg_path):
         set_simd_beat_bytes(cluster_simd_beat_bytes(hw))
     except (KeyError, ValueError):
         pass  # a cluster without a SIMD core: no SIMD task can be built for it
+    # the VersaCore array shapes, which size what a GEMM task reads and writes (kernel_gemm.gemm_accesses)
+    from kernel_gemm import cluster_gemm_shapes, set_gemm_shapes
+    try:
+        set_gemm_shapes(*cluster_gemm_shapes(hw))
+    except (KeyError, IndexError, TypeError):
+        pass  # a cluster without VersaCore: no GEMM task can be built for it
     return hw
 
 

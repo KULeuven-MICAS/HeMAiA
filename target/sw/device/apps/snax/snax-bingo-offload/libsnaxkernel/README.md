@@ -108,8 +108,9 @@ one place `meshRow`/`tileSize`/`meshCol` are defined.
    `host/runtime/libbingo/mini_compiler/libs/kernels/`
    (`kernel_<engine>.py`; `bingo_kernel_args.py` re-exports it) — its
    `get_struct_name()` returns the `…_args_t` typedef and its emitted
-   fields must match the struct order — so host DFGs / the mini-compiler
-   can build the args for this kernel.
+   fields must match the struct order, and its `accesses()` declares what
+   the kernel reads and writes at each address field — so host DFGs / the
+   mini-compiler can build the args for this kernel and check its hazards.
 6. Register the kernel in the `__snax_symtab[]` block of
    `snax_kernel_lib.h` so `get_device_function("…")` can resolve it.
 

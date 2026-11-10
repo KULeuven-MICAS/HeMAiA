@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""DeepSeek-V2-Lite's dense FFN (layer 0), stage 0 of the 256-token prefill on sixteen chiplets alone: every pass's X
-from HBM into every cluster.
+"""DeepSeek-V2-Lite's dense FFN (layer 0), stage 0 of the 256-token prefill on sixteen chiplets alone: every pass's
+X from HBM into every cluster.
 
 The root's host queues its memory chip's push engine, which multicasts every pass's X (INT8, A layout) a tile at a time
 into every chip's L3, each tile behind a flag; every cluster then copies the first pass's X into L1, row block by row
@@ -31,7 +31,6 @@ from bingo_kernel_args import (  # noqa: E402
     HostBingoKernelHbmBcastArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
 from driver import run_driver  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 import ffn_data  # noqa: E402
@@ -61,9 +60,24 @@ def gather_check(S, name, items):
 
 
 class Stage0(cm.ChipletBuild):
-    TAG = "pf"
+    """Stage 0 of the FFN prefill block (../full), alone. The block runs, for each pass of `rows` tokens:
+
+        stage 0     X from HBM into every cluster                                     this app
+        stages 1-3  gate|up GEMMs, dequantise and SwiGLU, quantise, the A8 exchange   ../stage123
+        stages 4-5  down GEMMs, the ChainGathers into the root, the stores of Y       ../stage45
+
+    Nothing follows it here, so the window (S0_start .. S1_end) is stage 0's time. run_driver makes the program in
+    three steps: __init__ (the data and the memory, no task), build() (the task graph: every task and edge) and
+    finish() (the compile into the C header and the data image, in which the compiler orders every core's tasks)."""
+
+    TAG = "pf"      # prefill FFN, as in the whole block: the prefix of the symbols, task names and printed lines
 
     def __init__(self, args, p, plat, hw):
+        """The data and the memory; no task yet. ChipletBuild.__init__ first: the chips, each one's memory chip and its
+        push engine there, the empty DFG, the data staging (self.st) and the stamp buffer. Then: every pass's X
+        (FFNData, quantised INT8, A layout) staged in the root's memory chip's HBM (pf_xhbm); in every chip's L3 the
+        landing area for it (pf_xland) and a flag a tile (pf_xtflag); the flags' value in HBM (pf_one); every
+        cluster's L1 buffer for the first pass's X (pf_x0)."""
         super().__init__(args, p, plat, hw)
         d = self.d = ffn_data.FFNData(CACHE, p["model"], wbits=self.wbits, tokens=self.T)
         R = self.ROWS = int(p["rows"])
@@ -85,6 +99,28 @@ class Stage0(cm.ChipletBuild):
         self.xbuf = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_x0", self.XB) for g in range(self.G)}
 
     def build(self):
+        """The task graph (task names without their _k<chip> suffix; i a pass, b a row block of X, g a cluster):
+
+                                 S0_start                         the start stamp: root chip, cluster 0, DM core
+                     _______________|________________
+                    |                                |
+             x_hbm_bcast_i0  - - - - - - - - > x_wait_i0b0_g<g>   left: the root's host; right: every cluster g's
+                    |         (order edge)           |            DM core, one chain a cluster
+             x_hbm_bcast_i1                    x_wait_i0b1_g<g>
+                    |                                |
+                   ...                              ...
+                    |                                |
+             P_x_bcast_done                    x_wait_i0b3_g<g>
+                    |________________________________|
+                                    |
+                                  S1_end  ->  pf_report, chk_x_<n>  ->  Check_pf_x  ->  Check_pf_x_land_last
+
+        x_hbm_bcast_i<i>: the root's host queues its memory chip's push engine to multicast pass i's X, a tile (a row
+        block) at a time, into every chip's L3, each tile followed by its flag. x_wait_i0b<b>_g<g>: cluster g's DM core
+        spins on tile b's flag, then copies the tile into its L1. The order edges (from the first multicast to every
+        wait) only dispatch the multicast ahead of the waits; the flag is the real dependency. P_x_bcast_done: a join
+        point after the last multicast. After S1_end the root's host prints the window (pf_report), the checked
+        clusters copy their X into the root's L3 (chk_x_<n>), and the root's host compares (Check_pf_*)."""
         T, R, dm = self.TAG, self.ROOT, self.roles["dm"]
         start = self.stamp("start")
         m = self.mem[R]
@@ -131,10 +167,7 @@ class Stage0(cm.ChipletBuild):
         """No weight is streamed: no ring, no prefetcher."""
 
     def finish(self, app_name, x_prefixes=("x_wait_",)):
-        # every device core runs its tasks in the order they are made; one host function a chip
-        GemmQueue.of(self.dfg, False).program_order(self.dfg, [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")],
-                                                    tag=self.TAG)
-        self.dfg.split_chip_functions = True
+        self.dfg.split_chip_functions = True     # one host function a chip
         super().finish(app_name, x_prefixes)
 
 

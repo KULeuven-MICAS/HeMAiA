@@ -14,7 +14,7 @@ from typing import Union, Dict, Optional
 import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import LAYOUT_CODE, BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, LAYOUT_CODE, BingoKernelArgs
 from blocked_nest import blocked_nest
 
 
@@ -108,6 +108,11 @@ class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
         # requant_scale wrote) from L1 at run time.
         self.inv_scale_addr = 0 if inv_scale_addr is None else inv_scale_addr
 
+    def accesses(self):
+        b = simd_beat_bytes()
+        return [Read("src_addr", self.rows * self.beats * b), Write("dst_addr", self.rows * self.beats * b // 2),
+                Read("inv_scale_addr", 4)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fp16_to_int8_args_t"
 
@@ -167,6 +172,10 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
         self.cols = cols
         self.beats = beats
 
+    def accesses(self):
+        n = 2 * self.rows * self.cols
+        return [Read("src_addr", n), Write("dst_addr", n), Read("scale_addr", 4)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_stream_map_args_t"
 
@@ -225,6 +234,9 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
         self.cols = cols
         self.rows = rows
 
+    def accesses(self):
+        return [Read("ops_addr"), Write("out_addr", 2 * self.rows * self.cols)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_rope_args_t"
 
@@ -266,6 +278,10 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
         self.rows = rows
         self.cols = cols
         self.beats = beats
+
+    def accesses(self):
+        n = 2 * self.rows * self.cols
+        return [Read("a_addr", n), Read("b_addr", n), Write("out_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_stream_elementwise_args_t"
@@ -329,6 +345,10 @@ class SnaxBingoKernelSimdMulI8Args(SnaxBingoKernelSimdMulF16Args):
         super().__init__(a_addr, b_addr, out_addr, rows, cols)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
 
+    def accesses(self):
+        n = self.rows * self.cols
+        return [Read("a_addr", 2 * n), Read("b_addr", 2 * n), Write("out_addr", n)]
+
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         a = super().get_c_field_assignments(handle_name_map)
         a["out_dtype"] = str(self._OUT_I8)
@@ -352,6 +372,10 @@ class _SimdRowOpArgs(BingoKernelArgs):
         self.output_addr = output_addr
         self.rows = rows
         self.cols = cols
+
+    def accesses(self):
+        n = 2 * self.rows * self.cols
+        return [Read("input_addr", n), Write("output_addr", n)]
 
     def get_struct_name(self) -> str:
         return self.STRUCT_NAME
@@ -414,6 +438,10 @@ class SnaxBingoKernelSimdSoftmaxTF16F16Args(BingoKernelArgs):
         self.output_addr = output_addr
         self.rows = rows
         self.cols = cols
+
+    def accesses(self):
+        n = 2 * self.rows * self.cols
+        return [Read("seed_addr"), Read("input_addr", n), Write("output_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_softmax_t_args_t"
@@ -541,6 +569,10 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
                 raise ValueError(f"simd_rmsnorm: {self.input_layout} -> "
                                  f"{self.output_layout} on mesh {self.mesh}: {e}") from None
 
+    def accesses(self):
+        # the input and output layouts (row-major, A, D, a pitch) set the extents: to the end of each buffer
+        return [Read("seed_addr"), ReadWrite("scratch_addr"), Read("input_addr"), Write("output_addr")]
+
     def scratch_bytes(self) -> int:
         """The L1 scratch this call's route uses, which the host may allocate and pass as
         scratch_addr instead of letting the kernel allocate it. MIRRORS the sizes in
@@ -615,6 +647,10 @@ class _SnaxBingoKernelSimdSwigluArgs(BingoKernelArgs):
         self.rows = rows
         self.cols = cols
 
+    def accesses(self):
+        n = 2 * self.rows * self.cols
+        return [Read("gate_addr", n), Read("up_addr", n), Write("output_addr", n)]
+
     def get_struct_name(self) -> str:
         return self.STRUCT_NAME
 
@@ -660,6 +696,10 @@ class SnaxBingoKernelSimdMoeCombineF16Args(BingoKernelArgs):
         self.cols = cols
         self.activation_addr = activation_addr
         self.weight_addr = weight_addr
+
+    def accesses(self):
+        return [Write("output_addr", 2 * self.rows * self.cols), Read("src_base_addr"), Read("activation_addr"),
+                Read("weight_addr")]
 
     def bind_combine(self, activation, weights, num_inputs):
         """Called by fork.combine() lowering. Anything set explicitly wins, so a
@@ -877,6 +917,9 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         self.score_scale = float(score_scale)
         self.p_mode = int(p_mode)
 
+    def accesses(self):
+        return [Read("s16_src"), Write("p8_dst"), ReadWrite("arena")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_softmax_args_t"
 
@@ -924,6 +967,9 @@ class SnaxBingoKernelSimdFaSoftmaxNArgs(BingoKernelArgs):
         self.bc, self.dhead, self.tile_idx, self.seed_state = bc, dhead, tile_idx, int(seed_state)
         self.score_scale, self.p_mode, self.p8_pitch = float(score_scale), int(p_mode), int(p8_pitch)
 
+    def accesses(self):
+        return [Read("s16s"), Write("p8s"), ReadWrite("arenas")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_softmax_n_args_t"
 
@@ -957,6 +1003,9 @@ class SnaxBingoKernelSimdFaWaitArgs(BingoKernelArgs):
     def __init__(self, arena: Union[BingoMemAlloc, int]):
         self.arena = arena
 
+    def accesses(self):
+        return [Hold("arena")]              # the softmax's task holds its buffers until here
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_wait_args_t"
 
@@ -977,6 +1026,9 @@ class SnaxBingoKernelFaBuildShapesArgs(BingoKernelArgs):
         if bc <= 0 or dhead <= 0 or bc % 2:
             raise ValueError(f"fa_build_shapes: bc (even) and dhead must be positive, got {bc}, {dhead}")
         self.arena, self.bc, self.dhead = arena, int(bc), int(dhead)
+
+    def accesses(self):
+        return [Write("arena")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_fa_build_shapes_args_t"
@@ -1026,6 +1078,10 @@ class SnaxBingoKernelSimdRmsnormRowArgs(BingoKernelArgs):
         self.ssq_addr, self.output_addr = ssq_addr, output_addr
         self.cols = int(cols)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
+
+    def accesses(self):
+        return [Read("seed_addr"), Read("input_addr", 2 * self.cols), ReadWrite("ssq_addr"),
+                Write("output_addr", 2 * self.cols)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_rmsnorm_row_args_t"
@@ -1080,6 +1136,9 @@ class SnaxBingoKernelSimdQuantARowArgs(BingoKernelArgs):
         self.cols, self.row = int(cols), int(row)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
 
+    def accesses(self):
+        return [Read("input_addr"), Write("output_addr")]
+
     @classmethod
     def a_bytes(cls, cols: int) -> int:
         """Bytes of the GEMV A operand of a `cols`-long row: 16 rows, padded."""
@@ -1126,6 +1185,9 @@ class SnaxBingoKernelSimdQuantARowsArgs(BingoKernelArgs):
         self.pitch, self.kt = int(pitch), int(kt)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
 
+    def accesses(self):
+        return [Read("input_addr"), Write("output_addr")]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_quant_a_rows_args_t"
 
@@ -1155,6 +1217,10 @@ class SnaxBingoKernelSimdMlaNormaliseArgs(BingoKernelArgs):
         self.l_addr, self.latch_addr = l_addr, latch_addr
         self.input_addr, self.output_addr = input_addr, output_addr
         self.beats, self.a_n_f32bits = int(beats), int(a_n_f32bits)
+
+    def accesses(self):
+        return [Read("l_addr"), ReadWrite("latch_addr"), Read("input_addr", self.beats * simd_beat_bytes()),
+                Write("output_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_mla_normalise_args_t"
@@ -1204,6 +1270,10 @@ class SnaxBingoKernelSimdSoftmaxRowArgs(BingoKernelArgs):
         self.x_addr, self.tmp_addr, self.e_addr, self.p_addr = x_addr, tmp_addr, e_addr, p_addr
         self.beats = int(beats)
 
+    def accesses(self):
+        n = self.beats * simd_beat_bytes()
+        return [Read("x_addr", n), ReadWrite("tmp_addr", n), ReadWrite("e_addr", n), Write("p_addr", n)]
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_softmax_row_args_t"
 
@@ -1227,6 +1297,10 @@ class SnaxBingoKernelSimdSoftmaxRowExtArgs(BingoKernelArgs):
             raise ValueError(f"beats={beats}: at least one.")
         self.x_addr, self.s_addr, self.e_addr, self.p_addr = x_addr, s_addr, e_addr, p_addr
         self.beats = int(beats)
+
+    def accesses(self):
+        n = self.beats * simd_beat_bytes()
+        return [Read("x_addr", n), ReadWrite("s_addr"), ReadWrite("e_addr", n), Write("p_addr", n)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_softmax_row_ext_args_t"
@@ -1264,6 +1338,9 @@ class SnaxBingoKernelSimdSwigluARowArgs(BingoKernelArgs):
         self.g_addr, self.sg_addr, self.output_addr = g_addr, sg_addr, output_addr
         self.inter = int(inter)
         self.inv_scale_f32bits, self.inv_addr = int(inv_scale_f32bits), inv_addr
+
+    def accesses(self):
+        return [Read("g_addr"), Read("sg_addr"), Write("output_addr"), Read("inv_addr", 4)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_swiglu_a_row_args_t"

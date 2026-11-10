@@ -14,13 +14,16 @@ from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_helpers import _check_xdma_size_aligned
 
-from kernel_base import BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 from kernel_xdma import xdma_softmax_stats_csrs
 
 
 class HostBingoKernelDummyArgs(BingoKernelArgs):
     def __init__(self, dummy_input: int):
         self.dummy_input = dummy_input
+
+    def accesses(self):
+        return []
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_dummy_args_t"
@@ -47,6 +50,9 @@ class HostBingoKernelChipBarrierArgs(BingoKernelArgs):
         self.seq = int(seq)
         if self.op == self.OP_BCAST and self.seq > 255:
             raise ValueError(f"broadcast barrier {self.seq}: the checkpoint is 8-bit, 255 per run")
+
+    def accesses(self):
+        return []
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_chip_barrier_args_t"
@@ -81,6 +87,9 @@ class HostBingoKernelFoldArgs(BingoKernelArgs):
         self.n_valid, self.scale_f32bits = 0, 0
         if self.op == self.SOFTMAX_STATS:
             self.n_valid, self.scale_f32bits = xdma_softmax_stats_csrs(n_valid, scale)
+
+    def accesses(self):
+        return [Read("src_addr", self.n_parts * self.part_bytes), Write("dst_addr", self.part_bytes)]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_fold_args_t"
@@ -190,6 +199,9 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
         self.name = name
         self.check_type = check_type
         self.tolerance = float(tolerance)
+
+    def accesses(self):
+        return [Read("golden_data_addr", self.data_size), Read("output_data_addr", self.data_size)]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_check_result_args_t"
@@ -329,6 +341,9 @@ class HostBingoKernelXdma1dCopyArgs(BingoKernelArgs):
         self.dst_addr = dst_addr
         self.size = size
 
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size)]
+
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_xdma_1d_copy_args_t"
 
@@ -362,6 +377,9 @@ class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
                              f"1..{self.MAX_N}")
         self.pairs = pairs
         self.size = size
+
+    def accesses(self):
+        return [ReadWrite("pairs", self.size)]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_idma_multi_args_t"
@@ -414,6 +432,11 @@ class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
         if int(batch_head) and not (int(head) > 1 and 1 <= int(batch_head) <= n_slots):
             raise ValueError(f"head={head} batch_head={batch_head}: head > 1, 1..n_slots")
         self.head, self.batch_head = int(head), int(batch_head)
+
+    def accesses(self):
+        # it fills the rings behind their flags: the loads' protocol, not the graph, orders them
+        return [Read("sched_addr"), Sync("ring_addr"), Sync("flag_addr"), Sync("release_addr"),
+                Read("seq_addr"), Sync("rec_addr")]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_weight_prefetch_args_t"
@@ -469,6 +492,10 @@ class HostBingoKernelHbmBcastArgs(BingoKernelArgs):
         self.tile_bytes, self.n_tiles = int(tile_bytes), int(n_tiles)
         self.memchip_id, self.engine = int(memchip_id), int(engine)
 
+    def accesses(self):
+        n = self.tile_bytes * self.n_tiles
+        return [Read("src_addr", n), Write("dst_addr", n), Sync("flag_addr"), Read("value_addr", 8)]
+
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_hbm_bcast_args_t"
 
@@ -505,6 +532,11 @@ class HostBingoKernelHbmUcastArgs(BingoKernelArgs):
         self.memchip_id, self.engine = int(memchip_id), int(engine)
         self.chips = chips
 
+    def accesses(self):
+        n = self.tile_bytes * self.n_tiles
+        return [Read("src_addr", n), Write("dst_addr", n), Sync("flag_addr"), Read("prog_addr"),
+                Read("value_addr", 8)]
+
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_hbm_ucast_args_t"
 
@@ -530,6 +562,9 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.size = size
+
+    def accesses(self):
+        return [Read("src_addr", self.size), Write("dst_addr", self.size)]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_idma_args_t"
@@ -558,6 +593,9 @@ class HostBingoKernelRequantScaleArgs(BingoKernelArgs):
         self.nmax_addr = nmax_addr
         self.scale_out_addr = scale_out_addr
         self.inv_scale_out_addr = inv_scale_out_addr
+
+    def accesses(self):
+        return [Read("xmax_addr"), Read("nmax_addr"), Write("scale_out_addr"), Write("inv_scale_out_addr")]
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_requant_scale_args_t"
