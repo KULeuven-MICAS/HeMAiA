@@ -14,6 +14,11 @@
 
 #define ALIGN_UP(x, p) (((x) + (p) - 1) & ~((p) - 1))
 #define ALIGN_DOWN(x, p) ((x) & ~((p) - 1))
+// The larger of two sizes, as an integer constant expression (the generated offload header uses it in static
+// tables): the size of a union of two char arrays. Each argument appears once, so the header's nested folds over
+// many args phases grow linearly, where a conditional expression repeats both arguments at every level. The
+// generated header defines its own only when this one is absent.
+#define BINGO_ARGS_MAX(a, b) (sizeof(union { char _bingo_max_a[(a)]; char _bingo_max_b[(b)]; }))
 
 // High32 and Low32 extraction macros
 #define HIGH32(x) ((uint32_t)(((uint64_t)(x) >> 32) & 0xFFFFFFFF))

@@ -82,7 +82,12 @@ def _is_c_static(expr: str, names) -> bool:
 # PING-PONG (the DFG's `args_pingpong`): two regions, the even phases' and the odd phases', so a phase's
 # load waits only for the phase two before it (every task of phase p - 2 before the phase-p load) and
 # a phase runs while the next one's args land.
-_ARGS_MAX = "#ifndef BINGO_ARGS_MAX\n#define BINGO_ARGS_MAX(a, b) ((a) > (b) ? (a) : (b))\n#endif\n"
+# The larger of two sizes for _c_max's fold, as an integer constant expression (static tables use it): the size of a
+# union of two char arrays, so each argument appears once and the nested fold grows linearly, where a conditional
+# expression repeats both arguments at every level. The host runtime's bingo_utils.h defines the same one.
+_ARGS_MAX = ("#ifndef BINGO_ARGS_MAX\n"
+             "#define BINGO_ARGS_MAX(a, b) (sizeof(union { char _bingo_max_a[(a)]; char _bingo_max_b[(b)]; }))\n"
+             "#endif\n")
 
 
 def _args_group(node, phased=False):
