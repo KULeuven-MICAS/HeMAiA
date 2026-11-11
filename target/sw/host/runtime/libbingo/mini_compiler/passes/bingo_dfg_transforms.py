@@ -37,6 +37,57 @@ def _dsatur(G) -> dict:
     return colour
 
 
+def _hopcroft_karp(n, adj):
+    """networkx.bipartite.hopcroft_karp_matching of the bipartite graph whose top nodes are 0 .. n - 1 and whose
+    bottom nodes are n .. 2n - 1, adj[a] the bottom nodes of top node a in the order its edges were added: the same
+    steps over the same orders (the top nodes as the set networkx makes of them, each one's edges in order), so the same
+    matching, without building the graph. Returns {node: its match} both ways."""
+    import collections
+    INFINITY = float("inf")
+    left = set(range(n))
+    leftmatches = {v: None for v in left}
+    rightmatches = {v: None for v in set(range(n, 2 * n))}
+    distances = {}
+    queue = collections.deque()
+
+    def breadth_first_search():
+        for v in left:
+            if leftmatches[v] is None:
+                distances[v] = 0
+                queue.append(v)
+            else:
+                distances[v] = INFINITY
+        distances[None] = INFINITY
+        while queue:
+            v = queue.popleft()
+            if distances[v] < distances[None]:
+                for u in adj[v]:
+                    if distances[rightmatches[u]] is INFINITY:
+                        distances[rightmatches[u]] = distances[v] + 1
+                        queue.append(rightmatches[u])
+        return distances[None] is not INFINITY
+
+    def depth_first_search(v):
+        if v is not None:
+            for u in adj[v]:
+                if distances[rightmatches[u]] == distances[v] + 1:
+                    if depth_first_search(rightmatches[u]):
+                        rightmatches[u] = v
+                        leftmatches[v] = u
+                        return True
+            distances[v] = INFINITY
+            return False
+        return True
+
+    while breadth_first_search():
+        for v in left:
+            if leftmatches[v] is None:
+                depth_first_search(v)
+    out = {k: v for k, v in leftmatches.items() if v is not None}
+    out.update((k, v) for k, v in rightmatches.items() if v is not None)
+    return out
+
+
 class BingoDFGTransformsMixin:
     """Graph transforms and dependency assignment.
 
@@ -410,6 +461,7 @@ class BingoDFGTransformsMixin:
             print(f"[bingo] WARNING: {len(unknown)} ChainGather(s) without hops cannot be checked "
                   f"for crossing at a shared middle hop: {unknown[:4]}")
         added, sharing = [], 0
+        view = None                 # the dispatch order's graph, made once and kept up with the edges added here
         for i, (a, ca, ma) in enumerate(gathers):
             for b, cb, mb in gathers[i + 1:]:
                 if ca == cb or not (ma & mb):
@@ -417,8 +469,13 @@ class BingoDFGTransformsMixin:
                 sharing += 1
                 if nx.has_path(self, a, b) or nx.has_path(self, b, a):
                     continue
-                first, then = (b, a) if nx.has_path(self.bingo_order_view(), b, a) else (a, b)
-                self.bingo_add_edge(getattr(first, "operands_held_by", first), then)
+                if view is None:
+                    view = self.bingo_order_view()
+                first, then = (b, a) if nx.has_path(view, b, a) else (a, b)
+                src = getattr(first, "operands_held_by", first)
+                self.bingo_add_edge(src, then)
+                if view is not self:
+                    view.add_edge(src, then)
                 added.append((first.node_name, then.node_name))
         if len(gathers) > 1:
             print(f"[bingo] ChainGather crossing check: {len(gathers)} gathers, {sharing} pair(s) "
@@ -713,14 +770,8 @@ class BingoDFGTransformsMixin:
             def chain_cover(es):
                 """The fewest chains (= tags) the cell needs as it stands."""
                 n = len(es)
-                g = nx.Graph()
-                g.add_nodes_from(range(2 * n))
-                for a in range(n):
-                    for b in range(n):
-                        if a != b and before(es[a][1], es[b][0]):
-                            g.add_edge(a, n + b)
-                m = nx.algorithms.bipartite.hopcroft_karp_matching(g, top_nodes=list(range(n)))
-                g.clear()    # freed now, not by the cycle collector (see the fast path of the tag allocation)
+                adj = [[n + b for b in range(n) if a != b and before(es[a][1], es[b][0])] for a in range(n)]
+                m = _hopcroft_karp(n, adj)
                 return n - sum(1 for k in m if k < n)
 
             added = 0
@@ -1226,17 +1277,8 @@ class BingoDFGTransformsMixin:
                 np.fill_diagonal(M, False)
                 # Integer node labels and a sorted walk of the matching, for
                 # the same reproducibility reason as above.
-                B = nx.Graph()
-                for a in range(n):
-                    B.add_node(a); B.add_node(n + a)
-                B.add_edges_from((a, n + b) for a in range(n) for b in np.flatnonzero(M[a]).tolist())
-                match = (nx.algorithms.bipartite.hopcroft_karp_matching(
-                             B, top_nodes=list(range(n)))
-                         if B.number_of_edges() else {})
-                # A matched networkx graph sits in a reference cycle (its cached views), so dropping it leaves its
-                # edges to the cycle collector, which rarely runs a full pass over a graph this size: every cell's
-                # bipartite graph would stay allocated. Clearing it frees the edges now.
-                B.clear()
+                adj = [[n + b for b in np.flatnonzero(M[a]).tolist()] for a in range(n)]
+                match = _hopcroft_karp(n, adj) if any(adj) else {}
                 succ, has_pred = {}, set()
                 for node in sorted(match):
                     if node < n:

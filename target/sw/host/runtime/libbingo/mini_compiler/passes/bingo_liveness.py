@@ -177,6 +177,48 @@ def _reach_leaf(users, upos, b, desc, memo):
     return all(k or (a is not b and a in above) for a, k in zip(users, ok))
 
 
+def _bitset_interference(idxs, items, desc, interference):
+    """build_interference for the buffers `idxs` of one address space where desc is in the bitset form
+    (bingo_reach.Reach): every user of i precedes every user of j exactly when each of j's users lies in what every
+    one of i's users reaches (a user of both does not: no node reaches itself). Over the users of these buffers, as
+    one matrix product: entry (j, i) counts j's users that not all of i's reach. Returns the buffers it could not
+    decide (a user without a bitset reach set), for can_share."""
+    import numpy as np
+    ok, rest = [], []
+    for i in idxs:
+        us = items[i][1]
+        if us and all(hasattr(desc.get(u), "bits") and u in desc[u].pos for u in us):
+            ok.append(i)
+        else:
+            rest.append(i)
+    if len(ok) < 2:
+        return rest + ok
+    pos = desc[next(iter(items[ok[0]][1]))].pos
+    cols = sorted({pos[u] for i in ok for u in items[i][1]})
+    col = np.array(cols, dtype=np.int64)
+    at = {p: k for k, p in enumerate(cols)}
+    nbytes = (len(pos) + 7) // 8
+    reached = np.zeros((len(ok), len(cols)), dtype=np.float32)      # what every user of the buffer reaches
+    users = np.zeros((len(ok), len(cols)), dtype=np.float32)        # the buffer's users
+    for r, i in enumerate(ok):
+        bits = -1
+        for u in items[i][1]:
+            bits &= desc[u].bits
+            users[r, at[pos[u]]] = 1
+        row = np.unpackbits(np.frombuffer(bits.to_bytes(nbytes, "little"), dtype=np.uint8),
+                            bitorder="little")
+        reached[r] = row[col]
+    missed = users @ (1 - reached).T                                  # (j, i): j's users not all of i's users reach
+    before = missed.T == 0                                            # (i, j): every user of i precedes every user of j
+    share = before | before.T
+    for r, i in enumerate(ok):
+        for c in np.flatnonzero(~share[r]):
+            j = ok[c]
+            if j != i:
+                interference[i].add(j)
+    return rest
+
+
 def build_interference(handle_users, desc, level: str = "L1"):
     """(buffers, interference) for one memory level.
 
@@ -225,6 +267,7 @@ def build_interference(handle_users, desc, level: str = "L1"):
                         interference[i].add(j)
                         interference[j].add(i)
         slow = [i for i in idxs if summ[i] is None]
+        slow = _bitset_interference(slow, items, desc, interference)
         for i in slow:
             for j in idxs:
                 if j != i and j not in interference[i] and not can_share(items[i][1], items[j][1], desc):

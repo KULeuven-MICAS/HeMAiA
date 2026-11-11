@@ -315,6 +315,32 @@ def _sharing_pairs(spans):
     return out
 
 
+def _users_bits(users, desc):
+    """(what every one of `users` reaches, the users themselves) as two bitsets of desc's bitset form, or None where a
+    user has no bitset reach set (the chain form, a node outside the graph)."""
+    reached, mask = -1, 0
+    for u in users:
+        r = desc.get(u)
+        if not hasattr(r, "bits") or u not in r.pos:
+            return None
+        reached &= r.bits
+        mask |= 1 << r.pos[u]
+    return reached, mask
+
+
+def _can_share_bits(a, ua, b, ub, desc, memo):
+    """can_share(ua, ub, desc), by two bitsets a buffer (memo[index]) where desc is in the bitset form: every user of
+    one precedes every user of the other exactly when the other's users all lie in what each of the one's reaches (a
+    node shared by both does not: no node reaches itself)."""
+    for k, us in ((a, ua), (b, ub)):
+        if k not in memo:
+            memo[k] = _users_bits(us, desc) if us else None
+    if memo[a] is None or memo[b] is None:
+        return can_share(ua, ub, desc)
+    (ra, ma), (rb, mb) = memo[a], memo[b]
+    return (mb & ~ra) == 0 or (ma & ~rb) == 0
+
+
 def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1",
            opts: Optional["StaticL1Options"] = None) -> List[str]:
     """Re-derive safety from the placement. Returns a list of problems; empty means sound.
@@ -353,9 +379,10 @@ def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1
                     f"of chip {key[0]:#04x} cluster {key[1]}")
 
         # 3. THE ONE THAT MATTERS: anything sharing bytes must be provably disjoint in time
+        bits = {}
         for a, b in sorted(_sharing_pairs(spans)):
             (ha, ua), (hb, ub) = group[a], group[b]
-            if not can_share(ua, ub, desc):
+            if not _can_share_bits(a, ua, b, ub, desc, bits):
                 (oa, ea), (ob, eb) = spans[a], spans[b]
                 problems.append(
                     f"UNSAFE OVERLAP on chip {key[0]:#04x} cluster {key[1]}: "
@@ -452,7 +479,23 @@ def pack_scratchpad_slots(nodes, desc):
     for _key, group in sorted(by_arena.items()):
         order = sorted(group, key=lambda n: n.node_id)
         conflict = {n: set() for n in order}
-        if _singletons(order, users, desc):
+        if _singletons(order, users, desc) and not getattr(desc, "chain_form", False):
+            # every scratchpad touched by its own node only: two conflict exactly when neither node reaches the
+            # other, read off the bitset form's reach sets as one matrix of this arena's nodes
+            import numpy as np
+            topo_pos = desc[order[0]].pos
+            at = np.array([topo_pos[n] for n in order], dtype=np.int64)
+            nbytes = (len(topo_pos) + 7) // 8
+            reach = np.zeros((len(order), len(order)), dtype=bool)
+            for i, a in enumerate(order):
+                bits = np.unpackbits(np.frombuffer(desc[a].bits.to_bytes(nbytes, "little"), dtype=np.uint8),
+                                     bitorder="little")
+                reach[i] = bits[at]
+            unordered = ~(reach | reach.T)
+            np.fill_diagonal(unordered, False)
+            for i, a in enumerate(order):
+                conflict[a].update(order[j] for j in np.nonzero(unordered[i])[0])
+        elif _singletons(order, users, desc):
             # every scratchpad touched by its own node only: two conflict exactly when their nodes are unordered,
             # which the chain form lists without testing every pair (bingo_reach.ReachMap.concurrent) for the nodes on
             # its columns; a node off them (a chain of its own) is asked against each of the others
@@ -482,10 +525,13 @@ def pack_scratchpad_slots(nodes, desc):
 
 
 def _singletons(nodes, users, desc):
-    """Every node's scratchpad touched by the node alone, and desc in the chain form with every node in its graph (on a
-    column of its chain cover or not)."""
-    return (getattr(desc, "chain_form", False) and all(users[n] == {n} for n in nodes)
-            and all(n in desc.where for n in nodes))
+    """Every node's scratchpad touched by the node alone, and every node in desc's graph: in the chain form (on a column
+    of its chain cover or not), or in the bitset form."""
+    if not all(users[n] == {n} for n in nodes):
+        return False
+    if getattr(desc, "chain_form", False):
+        return all(n in desc.where for n in nodes)
+    return all(hasattr(desc.get(n), "bits") for n in nodes)
 
 
 def verify_scratchpad_slots(slots, users, desc):
@@ -498,7 +544,8 @@ def verify_scratchpad_slots(slots, users, desc):
     for s, group in sorted(by_slot.items()):
         if _singletons(group, users, desc):
             # the group is pairwise ordered exactly when, in topological order, each node reaches the next
-            seq = sorted(group, key=lambda n: desc.pos[n])
+            topo_pos = desc.pos if getattr(desc, "chain_form", False) else desc[group[0]].pos
+            seq = sorted(group, key=lambda n: topo_pos[n])
             if all(seq[i + 1] in desc[seq[i]] for i in range(len(seq) - 1)):
                 continue
         for i, a in enumerate(group):
