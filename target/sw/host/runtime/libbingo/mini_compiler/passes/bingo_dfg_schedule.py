@@ -28,7 +28,9 @@ that starts every load as early as it can leaves few such pairs. Where the plan 
 again with a budget (_L1Gate): a task about to open a buffer where its cluster's buffers that cannot share with it
 would pass the budget gets an edge from the last users of buffers that are done with (on its own cluster, the ones
 that ended first), so the packer may give it their space; where those are not enough it waits. The budget starts at
-the capacity and drops by what the packed plan still overflows (no less than 1/L1_STEPS of it, the packer's gaps);
+the capacity and drops by what the packed plan still overflows (no less than 1/L1_STEPS of it, the packer's gaps).
+A schedule that overflows by more than the capacity itself is not held back (its loads would have to wait for most of
+what runs beside them), and the tries stop where one leaves more than half of what the try before overflowed by;
 where no schedule fits, each core keeps the order its tasks were made in, as an in-order core runs it: a
 task that waits is not passed by the core's later ones (only where that order closes a cycle), under the same budget.
 
@@ -127,6 +129,10 @@ class _Model:
         edges = list(dfg.edges()) + list(dfg.order_edges)
         for u, v in edges:
             self._edge(self._out(u), self.parts[v][1] if v in self.parts else v)
+        # the ordering-only edges as vertex pairs: the static L1 plan orders their producer before the consumer's
+        # successors only (bingo_liveness.with_spin_order)
+        vx = lambda u, v: (self._out(u), self.parts[v][1] if v in self.parts else v)
+        self.spin = {vx(u, v) for u, v in dfg.order_edges} - {vx(u, v) for u, v in dfg.edges()}
         self.phase_load = _phase_loads(dfg)
         for x, (c, s, w) in self.parts.items():
             if c is not None:
@@ -201,6 +207,7 @@ class _Model:
         head = {p: 0 for p in queue}
         left = {v: len(self.preds[v]) for v in self.vertices}
         done, free, ready = set(), [], set()        # ready: chained tasks whose edges are met
+        hot = list(queue)                           # cores whose next task may have become ready
         for v in self.vertices:
             if not left[v]:
                 (ready.add(v) if chained(v) else free.append(v))
@@ -211,10 +218,15 @@ class _Model:
             if chained(v):
                 ready.discard(v)
                 out[self.place[v]].append(v)
+                hot.append(self.place[v])
             for w, _ in self.succs[v]:
                 left[w] -= 1
                 if not left[w]:
-                    (ready.add(w) if chained(w) else free.append(w))
+                    if chained(w):
+                        ready.add(w)
+                        hot.append(self.place[w])
+                    else:
+                        free.append(w)
 
         def head_of(p):
             q, i = queue[p], head[p]
@@ -222,13 +234,15 @@ class _Model:
                 i += 1
             head[p] = i
             return q[i] if i < len(q) else None
+        # what runs before every core's next task waits is the same in any order: free tasks and ready heads as they
+        # come, each core looked at again when one of its tasks becomes ready or it runs one
         while len(done) < len(self.vertices):
             if free:
                 emit(free.pop())
                 continue
-            heads = [h for h in (head_of(p) for p in queue) if h is not None and h in ready]
-            if heads:
-                for h in heads:
+            if hot:
+                h = head_of(hot.pop())
+                if h is not None and h in ready:
                     emit(h)
                 continue
             if not ready:
@@ -775,29 +789,74 @@ def _l1_buffers(dfg, model, opts):
     return out
 
 
+def _l1_cap(dfg, model):
+    """The static L1 plan's capacity a cluster: the DFG's l1_capacity_bytes, or with l1_capacity_auto what the L1 heap
+    leaves beside everything else a cluster keeps there with this model's tasks (bingo_args_phases.static_capacity)."""
+    if not getattr(dfg, "l1_capacity_auto", False):
+        return getattr(dfg, "l1_capacity_bytes", None)
+    if getattr(model, "l1_cap", None) is None:
+        from bingo_args_phases import static_capacity
+        from bingo_platform import core_roles
+        roles = getattr(dfg, "core_roles", None) or core_roles()
+        counts = {}
+        for v in model.vertices:
+            if model.on_core(v):
+                key = model.place[v][:2]
+                counts[key] = counts.get(key, 0) + 1
+        model.l1_cap = static_capacity(dfg, counts, {roles[r] for r in ("gemm", "simd", "xdma", "dm")})
+    return model.l1_cap
+
+
 def _l1_over(dfg, model, seqs, opts):
     """By how many bytes the static L1 plan (bingo_l1_packer.pack, with the DFG's capacity) overflows its fullest
     cluster with these programs (<= 0: it fits): a buffer's users as the scheduler's vertices (a split task's start
     and wait), ordered by the model's edges and the programs. 0 without a static plan or a capacity."""
-    cap = getattr(dfg, "l1_capacity_bytes", None)
+    cap = _l1_cap(dfg, model)
     if not opts or not cap:
         return 0
     from bingo_l1_packer import StaticL1Options, collect_placement_order, pack
     from bingo_liveness import collect_handle_users
+    from bingo_liveness import with_spin_order
     from bingo_reach import reach_sets
     opts = opts if isinstance(opts, StaticL1Options) else StaticL1Options(enable=True)
     nodes = sorted(dfg.node_list, key=lambda t: t.node_id)
     users = {hid: (h, {v for n in us for v in _verts(model, n)}) for hid, (h, us) in collect_handle_users(nodes).items()}
+    spin = getattr(model, "spin", ())
     g = nx.DiGraph()
     g.add_nodes_from(model.vertices)
-    g.add_edges_from((u, v) for u in model.vertices for v, _ in model.succs[u])
+    g.add_edges_from((u, v) for u in model.vertices for v, _ in model.succs[u] if (u, v) not in spin)
     for seq in seqs.values():
         g.add_edges_from(zip(seq, seq[1:]))
+    g = with_spin_order(g, spin, g.successors)
     desc = reach_sets(g)
     for v in model.vertices:
         desc.setdefault(v, frozenset())
-    _placement, stats = pack(users, desc, "L1", constraints=collect_placement_order(nodes), opts=opts, capacity=cap)
+    placement, stats = pack(users, desc, "L1", constraints=collect_placement_order(nodes), opts=opts, capacity=cap)
+    model.l1_plan = ({hid: off for hid, (_h, off) in placement.items()}, stats)    # the static L1 plan's start
     return max((st["peak"] - cap for st in stats.values()), default=0)
+
+
+def _l1_live_peak(dfg, model, tl, opts):
+    """The most bytes of L1 buffers a cluster holds at one time of the timeline `tl`, the fullest cluster's: a lower
+    bound of what the static L1 plan packs these programs into. Two buffers ordered by the edges and the programs are
+    never live at one time (every user of the one ends before any user of the other starts), so buffers live at one time
+    may not share space. 0 without a static plan."""
+    if not opts:
+        return 0
+    events = {}
+    for key, size, users in _l1_buffers(dfg, model, opts):
+        us = [u for u in users if u in tl.fin]
+        if us:
+            ev = events.setdefault(key, [])
+            ev.append((min(tl.start[u] for u in us), size))
+            ev.append((max(tl.fin[u] for u in us), -size))
+    peak = 0
+    for ev in events.values():
+        live = 0
+        for _t, d in sorted(ev, key=lambda e: (e[0], e[1])):     # a buffer that ends frees before one that starts
+            live += d
+            peak = max(peak, live)
+    return peak
 
 
 def _l1_fits(dfg, model, seqs, opts):
@@ -851,18 +910,31 @@ class BingoDFGScheduleMixin:
             buffers held back (schedule's l1), the budget lowered by what the plan still overflows: (that, budget);
             (None, None) if none fits."""
             m, sq, t = c
-            if _l1_over(self, m, sq, static) <= 0:
+            cap = _l1_cap(self, m)
+            live = _l1_live_peak(self, m, t, static) if static and cap else 0
+            if cap and live - cap > cap:                # beyond what holding back can recover (below): no packing
+                l1_log.append([live - cap])
+                return None, None
+            over = _l1_over(self, m, sq, static)
+            tried = [over]
+            l1_log.append(tried)
+            if over <= 0:
                 return c, None
-            if not static or not cap:
+            if not static or not cap or over > cap:
                 return None, None
             bufs, budget = _l1_buffers(self, m, static), cap
             for _ in range(L1_TRIES):
                 sq, t, mg = schedule_best(m, (budget, bufs))
-                over = _l1_over(self, mg, sq, static)
+                was, over = over, _l1_over(self, mg, sq, static)
+                tried.append(over)
                 if over <= 0:
                     return (mg, sq, t), budget
+                if over > was // 2:
+                    break                           # the budget no longer gains enough a try
                 budget -= max(over + L1_SLACK, cap // L1_STEPS)
             return None, None
+
+        l1_log = []                         # each candidate fitted: its overflow, then each try's (fitted)
 
         def best(keep_order):
             """The plain programs, and the asynchronous ones: each accelerator's splits added where the model says the
@@ -912,6 +984,14 @@ class BingoDFGScheduleMixin:
                 plain = _Model(self, roles, {}, True)
                 picked = (plain, *schedule_best(plain)[:2], None)
         model, seqs, tl, no_gain = picked
+        # the placement the schedule was fitted with: the static L1 plan keeps it where the final graph still allows it
+        plan = getattr(model, "l1_plan", None)
+        if getattr(self, "l1_capacity_auto", False) and _l1_cap(self, model):
+            cap = self.l1_capacity_bytes = _l1_cap(self, model)
+            print(f"[schedule] static L1 capacity {cap:,} B a cluster: what each cluster's L1 heap leaves beside its "
+                  f"lists, scratch pools, scratchpads and args (the least of them)")
+        cap_ok = plan is not None and cap and all(st["peak"] <= cap for st in plan[1].values())
+        self.l1_plan_hint = plan if cap_ok else None
         plain = model if not model.parts and not model.l1_edges else _Model(self, roles, {})
         # the order the generator made its tasks in, every task whole, under the same model
         written = {}
@@ -954,6 +1034,10 @@ class BingoDFGScheduleMixin:
         elif no_gain is not None:
             line += f"; async: no gain ({no_gain[0]:,} cycles split), the {no_gain[1]} tasks stay whole"
         print(line)
+        if l1_log and any(t[0] > 0 for t in l1_log):
+            print("[schedule] L1 overflow of each candidate tried (at least, where it was not packed), then of each "
+                  "held-back try: "
+                  + "; ".join(" -> ".join(f"{o:,}" for o in t) for t in l1_log))
 
     def _materialize(self, model, seqs, tl):
         """The programs as tasks: each split task's parts fused where the schedule left them side by side and the
