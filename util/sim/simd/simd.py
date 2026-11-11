@@ -259,13 +259,16 @@ def reduce_lanes(beats16, op, partials=None):
     partials = REDUCE_PARTIALS if partials is None else partials
     x = np.asarray(beats16, dtype=F16).astype(F32)
     ident = np.full(x.shape[1:], -np.inf if op == MAX else 0.0, dtype=F32)
-    parts = []
-    for p in range(partials):
-        acc = None
-        for k in range(p, x.shape[0], partials):
-            acc = _acc(op, x[k], acc)
-        parts.append(ident if acc is None else acc)
-    return _tree(parts, op)
+    # the partials accumulate side by side: round r takes beats r P .. r P + P - 1, beat r P + p into partial p
+    acc = None
+    for r0 in range(0, x.shape[0], partials):
+        blk = x[r0:r0 + partials]
+        if acc is None:
+            acc = _acc(op, blk, None)
+        else:
+            acc[:len(blk)] = _acc(op, blk, acc[:len(blk)])
+    n = 0 if acc is None else len(acc)
+    return _tree([acc[p] if p < n else ident for p in range(partials)], op)
 
 
 def reduce_lanewise(beats16, op):
