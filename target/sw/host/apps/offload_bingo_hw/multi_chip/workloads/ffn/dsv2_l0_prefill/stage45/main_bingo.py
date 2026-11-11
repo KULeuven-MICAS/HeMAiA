@@ -101,49 +101,60 @@ class Stage45(cm.ChipletBuild):
         stages 4-5  down GEMMs, the ChainGathers into the root, the stores of Y       this app
 
     Stage 3's result, each chip's A8 in both its clusters' L1, is loaded before the window instead, so the window
-    (S0_start .. S1_end) is these stages' time. run_driver makes the program in three steps: __init__ (the mapping,
-    the data, the golden and the memory), build() (the task graph: every task and edge) and finish() (the buffer-hazard
-    check, then the compile into the C header and the data image, in which the compiler orders every core's tasks and
-    reuses a repeated GEMM configuration)."""
+    (S0_start .. S1_end) is these stages' time. run_driver makes the program in four steps: __init__ (the parameters),
+    mem_handles() (the mapping, the data, the golden and the memory), build() (the task graph: every task and edge) and
+    finish() (the buffer-hazard check, then the compile into the C header and the data image, in which the compiler
+    orders every core's tasks and reuses a repeated GEMM configuration)."""
 
     TAG = "pf"      # prefill FFN, as in the whole block: the prefix of the symbols, task names and printed lines
 
     def __init__(self, args, p, plat, hw):
-        """The mapping, the data, the golden and the memory. ChipletBuild.__init__ first: the chips, each one's memory
-        chip and its push engine there, the fold order, the empty DFG, the data staging (self.st) and the stamp buffer.
-        Then: each chip's intermediate columns (split_columns) and each cluster's output columns as down slices
-        (_dn_out_split); the golden Y, added in the fold order the ChainGathers add in; _stage(): each chip's A8 and
-        every cluster's down chunks into HBM, Y_raw's place in the root's L3; make_streams(): each cluster's L1 weight
-        slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
-        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's symmetric buffer, the root's fold
-        slots, every cluster's A8. The prefetchers are the only tasks made here."""
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the fold order, the empty DFG, the data
+        staging (self.st) and the stamp buffer. Then this stage's: the model (params model), the rows of the one pass
+        (params rows = tokens, whole POST_BLOCKS blocks of 16), the output columns a down slice (params dn_cols), the
+        reduce's chain groups and output slots, chain_alt and dn_balance."""
         super().__init__(args, p, plat, hw)
-        d = self.d = ffn_data.FFNData(CACHE, p["model"], wbits=self.wbits, tokens=self.T)
+        self.model = p["model"]
         R = self.ROWS = int(p["rows"])
         if self.T != R or R % (16 * POST_BLOCKS):
             raise ValueError(f"params tokens={self.T} rows={R}: one pass (tokens = rows), rows whole blocks of 16")
-        self.MT, self.D, self.I = R // 16, d.H, d.I
-        self.YB = R * self.D * 2                # Y_raw of the pass, FP16
+        self.MT = R // 16
         # params dn_cols: output columns a down slice (whole pairs of column tiles)
         self.DNC = int(p.get("dn_cols", 512))
-        if self.DNC % (2 * BLK) or self.D % self.DNC or (self.D // self.DNC) % self.NC:
-            raise ValueError(f"params dn_cols={self.DNC}: whole pairs of column tiles, an even number of slices")
-        self.NDN = self.D // self.DNC
-        self.cols = split_columns(self, p)
-        h = self.NDN // self.NC
-        self.dn_sl = self._dn_out_split(bool(p.get("dn_balance", False)))
         # params chain_group: one ChainGather carries this many consecutive slices of a cluster (back to back in its
         # output slots) into a fold slot of the root; out_slots: the output slots of each cluster's symmetric buffer the
         # slices go through (slice j into slot j mod out_slots), so the down GEMMs run that many slices ahead of the
         # serial gathers
-        self.chain_group = GS = int(p.get("chain_group", 1))
+        self.chain_group = int(p.get("chain_group", 1))
         self.out_slots = int(p.get("out_slots", 2))
-        if self.out_slots < 2 or h % GS or self.out_slots % GS:
-            raise ValueError(f"params chain_group={GS} out_slots={self.out_slots}: at least 2 slots, the group "
-                             f"dividing them and the {h} slices a cluster")
         # params chain_alt: cluster 1's ChainGathers run the chips in the reverse order, so a gather's data follows the
         # previous gather's finish back along the ring instead of meeting it mid-chain
         self.chain_alt = bool(p.get("chain_alt", False))
+        # params dn_balance: each cluster's share of the outputs set by the array steps (_dn_out_split)
+        self.dn_balance = bool(p.get("dn_balance", False))
+
+    def mem_handles(self):
+        """The mapping, the data, the golden and the memory; the only tasks made are the prefetchers. The model's FFN
+        data (FFNData); each chip's intermediate columns (split_columns) and each cluster's output columns as down slices
+        (_dn_out_split); the golden Y, added in the fold order the ChainGathers add in; _stage(): each chip's A8 and
+        every cluster's down chunks into HBM, Y_raw's place in the root's L3; make_streams(): each cluster's L1 weight
+        slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
+        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's symmetric buffer, the root's fold
+        slots, every cluster's A8."""
+        d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
+        R, GS = self.ROWS, self.chain_group
+        self.D, self.I = d.H, d.I
+        self.YB = R * self.D * 2                # Y_raw of the pass, FP16
+        if self.DNC % (2 * BLK) or self.D % self.DNC or (self.D // self.DNC) % self.NC:
+            raise ValueError(f"params dn_cols={self.DNC}: whole pairs of column tiles, an even number of slices")
+        self.NDN = self.D // self.DNC
+        self.cols = split_columns(self, self.p)
+        h = self.NDN // self.NC
+        self.dn_sl = self._dn_out_split(self.dn_balance)
+        if self.out_slots < 2 or h % GS or self.out_slots % GS:
+            raise ValueError(f"params chain_group={GS} out_slots={self.out_slots}: at least 2 slots, the group "
+                             f"dividing them and the {h} slices a cluster")
         self.gold = d.golden([self.kcols[k] for k in self.chips], {k: [i] for i, k in enumerate(self.chips)},
                              self.fold_order())
         if self.chain_alt:

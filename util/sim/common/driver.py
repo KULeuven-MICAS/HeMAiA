@@ -18,8 +18,9 @@ main_bingo.py takes, and the body of a `run()`:
         run_driver("moe workload generator", MBuild, _app_name)
 
 run_driver parses the command line, loads the params (-c), the platform and the cluster configuration, points the
-goldens' SIMD model (../simd/simd.py) at that cluster, builds the workload (`build()`), and finishes it
-(`finish(app_name)`: checks, emission, compile).
+goldens' SIMD model (../simd/simd.py) at that cluster, makes the workload's data and memory (`mem_handles()`, where
+its class has one; otherwise its constructor does), builds it (`build()`), and finishes it (`finish(app_name)`:
+checks, emission, compile).
 
 A driver imports this module before it puts mini_compiler on sys.path (repo_root gives the path), so the
 compiler's modules are imported inside run_driver.
@@ -48,9 +49,9 @@ def parse_args(description):
 
 
 def run_driver(description, build_cls, app_name, **finish_kw):
-    """Build and emit one workload: `build_cls(args, params, platform, hw)`, then `build()`, then
-    `finish(app_name(S), **finish_kw)`. `app_name` takes the built workload and returns the name the
-    report and the emitted header carry."""
+    """Build and emit one workload: `build_cls(args, params, platform, hw)`, then `mem_handles()` where the class
+    has one, then `build()`, then `finish(app_name(S), **finish_kw)`. `app_name` takes the built workload and
+    returns the name the report and the emitted header carry."""
     import hjson
     from bingo_platform import load_cluster_cfg, parse_platform_cfg
     args = parse_args(description)
@@ -65,5 +66,7 @@ def run_driver(description, build_cls, app_name, **finish_kw):
     import simd
     simd.use_hwcfg(hw)
     S = build_cls(args, p, plat, hw)
+    if hasattr(S, "mem_handles"):
+        S.mem_handles()
     S.build()
     S.finish(app_name(S), **finish_kw)

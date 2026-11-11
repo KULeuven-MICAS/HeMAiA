@@ -69,23 +69,31 @@ class Stage0(cm.ChipletBuild):
         stages 4-5  down GEMMs, the ChainGathers into the root, the stores of Y       ../stage45
 
     Nothing follows it here, so the window (S0_start .. S1_end) is stage 0's time. run_driver makes the program in
-    three steps: __init__ (the data and the memory, no task), build() (the task graph: every task and edge) and
-    finish() (the compile into the C header and the data image, in which the compiler orders every core's tasks)."""
+    four steps: __init__ (the parameters), mem_handles() (the data and the memory, no task), build() (the task graph:
+    every task and edge) and finish() (the compile into the C header and the data image, in which the compiler orders
+    every core's tasks)."""
 
     TAG = "pf"      # prefill FFN, as in the whole block: the prefix of the symbols, task names and printed lines
 
     def __init__(self, args, p, plat, hw):
-        """The data and the memory; no task yet. ChipletBuild.__init__ first: the chips, each one's memory chip and its
-        push engine there, the empty DFG, the data staging (self.st) and the stamp buffer. Then: every pass's X
-        (FFNData, quantised INT8, A layout) staged in the root's memory chip's HBM (pf_xhbm); in every chip's L3 the
-        landing area for it (pf_xland) and a flag a tile (pf_xtflag); the flags' value in HBM (pf_one); every
-        cluster's L1 buffer for the first pass's X (pf_x0)."""
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the empty DFG, the data staging (self.st)
+        and the stamp buffer. Then this stage's: the model (params model), and the rows a pass (params rows), whole
+        X_BLOCKS blocks of 16 rows dividing the tokens, so NI passes."""
         super().__init__(args, p, plat, hw)
-        d = self.d = ffn_data.FFNData(CACHE, p["model"], wbits=self.wbits, tokens=self.T)
+        self.model = p["model"]
         R = self.ROWS = int(p["rows"])
         if R % (16 * X_BLOCKS) or self.T % R:
             raise ValueError(f"params tokens={self.T} rows={R}: rows whole {X_BLOCKS} blocks of 16, dividing tokens")
-        self.NI, self.D = self.T // R, d.H
+        self.NI = self.T // R
+
+    def mem_handles(self):
+        """The data and the memory; no task yet: the model's FFN data (FFNData) and every pass's X from it (quantised
+        INT8, A layout) staged in the root's memory chip's HBM (pf_xhbm); in every chip's L3 the landing area for it
+        (pf_xland) and a flag a tile (pf_xtflag); the flags' value in HBM (pf_one); every cluster's L1 buffer for the
+        first pass's X (pf_x0)."""
+        d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
+        R, self.D = self.ROWS, d.H
         self.XB = R * self.D                    # X of a pass, INT8
         self.XT = self.XB // X_BLOCKS           # a multicast tile: a row block of X
         T, st, m = self.TAG, self.st, self.mem[self.ROOT]

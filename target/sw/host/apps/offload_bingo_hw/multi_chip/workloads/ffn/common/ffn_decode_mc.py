@@ -126,10 +126,17 @@ ATOM, LANES = 8, 8                         # gu_gemv: the xDMA's 8-byte atom (4 
 
 
 class DBuild(fp.PBuild):
+    """The FFN decode block (the module docstring), the prefill's PBuild run as one pass of one 16-row tile. run_driver
+    makes the program in four steps: __init__ (the parameters), mem_handles() (the data, the golden and the memory),
+    build() (the task graph: every task and edge) and finish() (the buffer-hazard check, then the compile into the C
+    header and the data image)."""
     TAG = "fd"
     MIN_POST_BLOCKS = 1
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet: the decode's refusals of what needs more than one pass, row
+        tile or post block, its switches (x_row, dn_gemv, gu_gemv, y_dequant), then PBuild.__init__ with the params of
+        one pass of one 16-row tile; the decode's token count is one."""
         if int(p.get("tokens", 1)) != 1:
             raise ValueError(f"params tokens={p['tokens']}: the decode runs one token")
         bad = [k for k in ("l3_overlay", "y_scatter", "split_last", "split_first_dn", "restream")
@@ -158,6 +165,12 @@ class DBuild(fp.PBuild):
         # the prefill's builder runs the tile as one pass of ROWS tokens
         super().__init__(args, dict(p, tokens=ROWS, rows=ROWS, post_blocks=1, x_blocks=1), plat, hw, shared=shared)
         self.T = 1
+
+    def mem_handles(self):
+        """PBuild's data, golden and memory of the one-token tile (this class's _data, _stage and _buffers: X and Y_raw's
+        row in the root memory chip's HBM, the 16-row or, with gu_gemv, the one-row L1 buffers); then X's multicast as
+        what the HBM holds, one tile behind one flag."""
+        super().mem_handles()
         # x_hbm_bcasts multicasts what the HBM holds as one tile behind one flag
         self.XT, self.TPP = self.XR, 1
         if self.gu_gemv:

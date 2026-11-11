@@ -4,9 +4,9 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Llama-3-8B's grouped-query attention for ONE decode token at position ctx over a ctx-position KV cache, the attention
-SPLIT BY KEY over every cluster of the 16 + 4 chiplet platform (the FA core of fa/common/fa_llama_mc.py: 32 query heads as
-two halves of 16 SIMD lanes, a block-diagonal query, K / V tiles per half, the softmax statistics met in the fabric, the
-partials reduced by a ChainGather), every projection on VersaCore's one-token GEMV. The platform, the rings, the
+SPLIT BY KEY over every cluster of the 16 + 4 chiplet platform (32 query heads as two halves of 16 SIMD lanes, a
+block-diagonal query, K / V tiles per half, the softmax statistics met in the fabric, the partials reduced by a
+ChainGather), every projection on VersaCore's one-token GEMV. The platform, the rings, the
 stamps, the broadcast and the checks are chiplet_mc.py's; the projection, W_O and append helpers llama3_decode_mc.py's
 (DBuild); the data LlamaDecodeData's (a fresh causal prompt of ctx + 1 positions, the decode token the last), the
 decode token's attention replaced by the key split's arithmetic (KsDecodeData below).
@@ -16,7 +16,7 @@ THE SPLIT. The cache holds ctx / 64 tiles of 64 keys; chip i of the chip list ho
 value groups 4 c .. 4 c + 3. A half's K tile is its four groups' keys side by side, [64, 512] (A layout, the q / k
 columns in rope_pairs' chunk order), its V tile V^T [512, 64] (A layout); the query half is block diagonal, [16, 512]:
 lane i is head 16 c + i on its group's 128 columns, zero on the others. QK is [64, 512] x [512, 16], PV [512, 64] x [64,
-16], the shapes of the FA core. Each chip holds both halves of its keys, so the chip's two clusters' partials are its
+16] (gemm_fa_qk, gemm_fa_pv). Each chip holds both halves of its keys, so the chip's two clusters' partials are its
 partial side by side (O_0 | O_1 | l_0 | l_1): the chip fold is a concatenation, not a sum.
 
 THE NEW KEY (position ctx) is a tile of NR = 16 keys on the clusters of the chip that owns tile ctx / 64 in the round
@@ -293,9 +293,14 @@ class KsBuild(lmd.DBuild):
     y_to_hbm = True
 
     def __init__(self, args, p, plat, hw, shared=None):
-        # DBuild's builder is not run (its cache, its buffers and its sweep are the head-parallel mapping's); the helpers
-        # taken from it and from ABuild (gemv, chunks, loads, rope_row, row_to_a, l3, x_multicast, y_out, _a_row,
-        # _pack_b, kv_cc, l1_of, nd, mul, add, quant, xd, copy, copy2d, _load) read only what is set here
+        """The parameters; no data, memory or task yet. The key split runs in ABuild's four steps (__init__,
+        mem_handles(), build(), finish()), but neither DBuild.__init__ nor DBuild.mem_handles: their cache, buffers and
+        sweep are the head-parallel mapping's. The helpers taken from DBuild and ABuild (gemv, chunks, loads, rope_row,
+        row_to_a, l3, x_multicast, y_out, _a_row, _pack_b, kv_cc, l1_of, nd, mul, add, quant, xd, copy, copy2d, _load)
+        read only what is set here and in mem_handles. ChipletBuild.__init__ (a layer's block shares the layer's staging
+        and graph), then the ablation's switches, the passes, the statistics, wo_push, cache_order, hbm_checks, the
+        rows, the key tile and the cache's length, the key/value groups on chip pairs and a query head a cluster, each
+        chip's cached tiles and the new key's chip."""
         cm.ChipletBuild.__init__(self, args, p, plat, hw, shared=shared)
         if self.T != 1:
             raise ValueError(f"params tokens={self.T}: the decode runs one token")
@@ -396,9 +401,21 @@ class KsBuild(lmd.DBuild):
             raise ValueError(f"params new_chip={nc}: not a compute chip")
         self.tiles = {(k, cc): self.tile_of[k] + ([NEW] if k == self.NEWCHIP else [])
                       for k in self.chips for cc in range(self.NC)}
+        self.seed = int(p.get("seed", 1))               # the synthetic weights' and prompt's draws
+        self.slot = {}
+        self.sym_zero = True
+
+    def mem_handles(self):
+        """The data and the memory; no task yet. DBuild.mem_handles is not run, as DBuild.__init__ is not: the data and
+        its golden (KsDecodeData over the plan: the tiles of each cluster, the fold order, the passes, the statistics'
+        fold), the shapes that follow from the model (the weight chunks of a head, W_O's columns a cluster, a half's
+        tiles, the partial), the report; _stage (x, y and the cache's areas and flags in L3, every chip's cache shard
+        and every cluster's weights and constants in HBM); the load streams' L1 slabs (and the check that wo_push
+        before_chains fits its W_O chunks in them), the weight rings and the L1 buffers (_buffers: the symmetric
+        buffer and its offsets, every cluster's buffers, the root's)."""
         plan = dict(tiles=self.tiles, order=self.fold_order(), passes=self.passes, merge=self.merge, fix_rows=FIX_ROWS)
-        d = self.d = KsDecodeData(plan, ctx=self.ctx, rows=self.R, bc=self.bc,
-                                  seed=int(p.get("seed", 1)), wbits=self.wbits, mask_c=True)
+        d = self.d = KsDecodeData(plan, ctx=self.ctx, rows=self.R, bc=self.bc, seed=self.seed, wbits=self.wbits,
+                                  mask_c=True)
         self.gold = d.ks
         self.lay, self.mesh = d.layout, d.mesh
         self.HD, self.H = d.HD, d.H
@@ -412,7 +429,6 @@ class KsBuild(lmd.DBuild):
         first = np.arange(QC) * 2
         self.perm = np.concatenate([np.concatenate([t * 2 * QC + first, t * 2 * QC + first + 1])
                                     for t in range(self.NQC // 2)])
-        self.slot = {}
         D = self.D
         self.KB, self.VB = BC * D, D * BC                    # a half's K tile, V tile
         self.NKB = NR * D                                    # a half's new-key K tile, V^T tile
@@ -423,7 +439,6 @@ class KsBuild(lmd.DBuild):
         self.OB = NHF * self.OH
         self.PBE = self.OB + (0 if self.merge else NHF * BEAT)   # a chip's partial
         self.P, self.PB = 2, self.NT * NHF * self.KB         # the cache push: K tiles, then V tiles (a part each)
-        self.sym_zero = True
         for line in d.report(d.y16(d.y_raw)):
             print(f"[{self.TAG}] {line}")
         print(f"[{self.TAG}] key split: {self.NT} cached tile(s) of {BC} keys a cluster (cluster c half c of its chip's "

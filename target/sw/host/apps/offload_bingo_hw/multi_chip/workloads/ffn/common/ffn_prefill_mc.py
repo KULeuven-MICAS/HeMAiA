@@ -81,11 +81,19 @@ EW_F16_ADD = cm.EW_F16_ADD
 
 
 class PBuild(cm.ChipletBuild):
+    """The FFN prefill block (the module docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the data, the golden and the memory), build() (the task graph: every task and edge) and
+    finish() (the buffer-hazard check, then the compile into the C header and the data image, in which the compiler
+    orders every core's tasks)."""
     TAG = "pf"
     # the fewest post blocks a pass may have (params post_blocks); the decode (ffn_decode_mc.py), one row tile, has one
     MIN_POST_BLOCKS = 2
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there (with `shared`, a layer's graph and data
+        staging). Then the block's: the ablation arms, the rows a pass and the passes, the X and post blocks, the
+        gate|up chunks' and down slices' widths, the root's columns, the reduce's output slots and chain groups."""
         super().__init__(args, p, plat, hw, shared=shared)
         if self.bcast_impl != "bcast_l1":
             raise ValueError("params bcast: bcast_l1 (X reaches the chips through the memory chip, params x_cast)")
@@ -141,18 +149,63 @@ class PBuild(cm.ChipletBuild):
         if self.DNC % self.dn_unit:
             raise ValueError(f"params dn_cols={self.DNC}: every down GEMM whole {self.dn_unit}-column units (pairs of "
                              f"column tiles)")
-        d = self.d = self._data(args, p)
-        self.lay = d.layout
-        self.D, self.I = d.H, d.I
-        if self.D % self.DNC:
-            raise ValueError(f"{self.D} outputs are not whole {self.DNC}-column down chunks")
-        self.NDN = self.D // self.DNC
         # the intermediate columns split over the clusters in whole GEMM column blocks, the root chip's clusters taking
         # the smaller share, since its cluster 0 also runs every gather and stores Y. params root_cols: the root chip's
         # clusters get exactly this many columns (one number for both, or one per cluster; the rest is split over the
         # others), so its extra duties (every gather and store) cost no window time
         rc = p.get("root_cols", 0)
-        rc = [int(v) for v in rc] if isinstance(rc, (list, tuple)) else [int(rc)] * self.NC
+        self.root_cols = [int(v) for v in rc] if isinstance(rc, (list, tuple)) else [int(rc)] * self.NC
+        # params dn_balance: each cluster's share of the outputs set by the array steps (_dn_out_split)
+        self.dn_balance = bool(p.get("dn_balance", False))
+        # params chain_alt: cluster 1's ChainGathers run the chips in the reverse order, so a gather's data follows the
+        # previous gather's finish back along the ring instead of meeting it mid-chain (a collector retires before its
+        # finish has walked back to the first hop)
+        self.chain_alt = bool(p.get("chain_alt", False))
+        # params l3_overlay: Y_raw of a pass is stored over that pass's X buffers in L3, one region a pass ([source |
+        # landing], as long as Y_raw), so the image holds Y beside neither; pass i's stores follow every reader of
+        # X_i (the root's put and its clusters' fetches) through the pass's GEMMs
+        self.l3_overlay = bool(p.get("l3_overlay", False))
+        # params y_scatter: the root stores each slice of Y_raw row tile by row tile (16 rows) straight into the L3 of
+        # the chip that owns the tile (tile q on the q-th chip, as a layer's tiles), behind a flag a slice there, instead
+        # of into its own L3: a tile's whole row of Y_raw is then in its owner's L3 (D layout) once the pass's slices
+        # are stored, and the block ends with one wait a chip on its tiles' flags
+        self.y_scatter = bool(p.get("y_scatter", False))
+        # params out_slots (default 2): the slots of each cluster's symmetric buffer the down slices go through (slice j
+        # into slot j mod out_slots), so the down GEMMs run that many slices ahead of the serial gathers; the root's
+        # fold buffer keeps two
+        self.out_slots = int(p.get("out_slots", 2))
+        if self.out_slots < 2:
+            raise ValueError(f"params out_slots={self.out_slots}: at least 2")
+        # params chain_group (default 1): one ChainGather carries this many consecutive down slices of a cluster, the
+        # output slots they sit in back to back, into a fold slot of that many slices at the root, stored to L3 by one
+        # copy (or row tile by row tile with y_scatter)
+        self.chain_group = int(p.get("chain_group", 1))
+        if self.per_kernel:
+            # kernel by kernel: a kernel's tasks never run inside another kernel (mem_handles sets the output slots)
+            bad = [k for k in ("split_last", "split_first_dn", "y_scatter") if p.get(k, False)]
+            if bad or "out_slots" in p:
+                raise ValueError(f"params sync barrier: no {bad or 'out_slots'} (a kernel's tasks never run inside "
+                                 f"another kernel)")
+            if self.chain_group != 1 and self.reduce_impl != "chain":
+                raise ValueError("params chain_group: with reduce chain")
+        self.NTL = -(-self.T // 16 // len(self.chips))
+
+    def mem_handles(self):
+        """The data, the golden and the memory; the only tasks made are the prefetchers. The FFN's data (_data) and the
+        mapping its sizes give: the intermediate columns each cluster computes (split_columns) and their gate|up chunks,
+        each chip's columns (K) for the down projection, each cluster's output slices (_dn_out_split); the golden Y,
+        added in the fold order the ChainGathers add in; the sizes of X and Y_raw a pass and the output slots; then
+        _stage(): every pass's X and every cluster's weight chunks and gate|up factors into HBM, X's landing area and
+        Y_raw's place in L3; make_streams(): each cluster's L1 weight slabs; make_rings(): each chip's weight rings in
+        its L3 and its host's prefetcher task (weight_prefetch_k<chip>); _buffers(): every cluster's L1 buffers."""
+        d = self.d = self._data(self.args, self.p)
+        R = self.ROWS
+        self.lay = d.layout
+        self.D, self.I = d.H, d.I
+        if self.D % self.DNC:
+            raise ValueError(f"{self.D} outputs are not whole {self.DNC}-column down chunks")
+        self.NDN = self.D // self.DNC
+        rc = self.root_cols
         self.cols = self.split_columns(self.I, last=self.gs(self.ROOT), unit=BLK,
                                        fixed=dict(zip(self.gs(self.ROOT), rc)) if any(rc) else None)
         self.chunks = {g: self._gu_chunks(n) for g, (_, n) in self.cols.items()}
@@ -168,11 +221,7 @@ class PBuild(cm.ChipletBuild):
             self.kcols[k] = (a0, an + bn)
         self.gold = d.golden([self.kcols[k] for k in self.chips],
                              {k: [i] for i, k in enumerate(self.chips)}, self.fold_order())
-        self.dn_sl = self._dn_out_split(bool(p.get("dn_balance", False)))
-        # params chain_alt: cluster 1's ChainGathers run the chips in the reverse order, so a gather's data follows the
-        # previous gather's finish back along the ring instead of meeting it mid-chain (a collector retires before its
-        # finish has walked back to the first hop)
-        self.chain_alt = bool(p.get("chain_alt", False))
+        self.dn_sl = self._dn_out_split(self.dn_balance)
         if self.chain_alt:
             loc, add16 = self.gold["loc"], d.fp.add16
             rev = self.order[1:][::-1] + self.order[:1]
@@ -185,7 +234,7 @@ class PBuild(cm.ChipletBuild):
             self.gold["y_raw"], self.gold["y16"] = yr, d.fp.mul16(yr, d.dn_f[None, :])
         for line in d.report(self.gold["y16"]):
             print(f"[pf] {line}")
-        print(f"[pf] {self.T} tokens in {self.NI} passes of {R}; fold order "
+        print(f"[pf] {self.NI * R} tokens in {self.NI} passes of {R}; fold order "
               f"{[f'{k:02x}' for k in self.order]}; columns per cluster "
               f"{sorted({n for _, n in self.cols.values()})}; gate|up chunks per cluster "
               f"{sorted({len(c) for c in self.chunks.values()})}")
@@ -193,26 +242,7 @@ class PBuild(cm.ChipletBuild):
         self.YB = R * self.D * 2                # Y_raw of a pass, FP16
         self.XT = self.XB // self.x_blocks      # the multicast's tile, each behind a flag: a first-pass block of X
         self.TPP = self.XB // self.XT           # tiles a pass
-        # params l3_overlay: Y_raw of a pass is stored over that pass's X buffers in L3, one region a pass ([source |
-        # landing], as long as Y_raw), so the image holds Y beside neither; pass i's stores follow every reader of
-        # X_i (the root's put and its clusters' fetches) through the pass's GEMMs
-        self.l3_overlay = bool(p.get("l3_overlay", False))
-        # params y_scatter: the root stores each slice of Y_raw row tile by row tile (16 rows) straight into the L3 of
-        # the chip that owns the tile (tile q on the q-th chip, as a layer's tiles), behind a flag a slice there, instead
-        # of into its own L3: a tile's whole row of Y_raw is then in its owner's L3 (D layout) once the pass's slices
-        # are stored, and the block ends with one wait a chip on its tiles' flags
-        self.y_scatter = bool(p.get("y_scatter", False))
         self.YT_B = 16 * self.D * 2             # y_scatter: a 16-row tile of Y_raw, D layout, FP16
-        # params out_slots (default 2): the slots of each cluster's symmetric buffer the down slices go through (slice j
-        # into slot j mod out_slots), so the down GEMMs run that many slices ahead of the serial gathers; the root's
-        # fold buffer keeps two
-        self.out_slots = int(p.get("out_slots", 2))
-        if self.out_slots < 2:
-            raise ValueError(f"params out_slots={self.out_slots}: at least 2")
-        # params chain_group (default 1): one ChainGather carries this many consecutive down slices of a cluster, the
-        # output slots they sit in back to back, into a fold slot of that many slices at the root, stored to L3 by one
-        # copy (or row tile by row tile with y_scatter)
-        self.chain_group = int(p.get("chain_group", 1))
         h = self.NDN // self.NC
         if h % self.chain_group or (self.out_slots % self.chain_group and not self.per_kernel):
             raise ValueError(f"params chain_group={self.chain_group}: must divide the {h} slices a cluster and "
@@ -221,14 +251,7 @@ class PBuild(cm.ChipletBuild):
             # kernel by kernel, no task of one kernel runs inside another: the down slices all wait in their output slots
             # until the reduce kernel, slot j for slice j, the symmetric buffer's two slots then the X buffer's (dead
             # until the next pass's X), so the X buffer sits right behind the symmetric buffer on every cluster
-            bad = [k for k in ("split_last", "split_first_dn", "y_scatter") if p.get(k, False)]
-            if bad or "out_slots" in p:
-                raise ValueError(f"params sync barrier: no {bad or 'out_slots'} (a kernel's tasks never run inside "
-                                 f"another kernel)")
-            if self.chain_group != 1 and self.reduce_impl != "chain":
-                raise ValueError("params chain_group: with reduce chain")
             self.out_slots = h                  # slot j for slice j of the pass
-        self.NTL = -(-self.T // 16 // len(self.chips))
         self._stage()
         self.make_streams()
         self.make_rings()

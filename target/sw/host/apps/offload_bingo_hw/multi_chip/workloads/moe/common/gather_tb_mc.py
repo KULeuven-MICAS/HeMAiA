@@ -57,9 +57,16 @@ CHECK_BYTES = 256             # bytes checked at each end of a slice
 
 
 class GatherTb(cm.ChipletBuild):
+    """The reduce testbench (the module docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the partials, the golden and the memory), build() (the task graph: every task and edge)
+    and finish() (the compile into the C header and the data image)."""
     TAG = "gt"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the empty DFG and the data staging. Then
+        the testbench's: the chain mode, the slices a cluster and their bytes, the weight loads a slice, the chain's
+        path, where the partials come from and their seed."""
         super().__init__(args, p, plat, hw)
         if self.reduce_impl != "chain" or self.sync != "edge":
             raise ValueError("this testbench builds reduce chain, sync edge")
@@ -93,7 +100,16 @@ class GatherTb(cm.ChipletBuild):
         self.part_src = str(p.get("partials", "hbm"))
         if self.part_src not in ("hbm", "l3"):
             raise ValueError(f"params partials={self.part_src!r}: hbm or l3")
-        rng = np.random.default_rng(int(p.get("seed", 1)))
+        self.seed = int(p.get("seed", 1))
+
+    def mem_handles(self):
+        """The partials, the golden and the memory; the only tasks made are the prefetchers. Every cluster's partials
+        of every slice (random multiples of 1/4, params seed; with partials l3 the same on every chip) and the golden
+        sums in the chain order (_golden); _stage(): the partials and the weight chunks into HBM (or the partials into
+        the image every chip runs), y in the root's L3; make_streams(): each cluster's L1 weight slabs; make_rings():
+        each chip's weight rings in its L3 and its host's prefetcher task; every cluster's symmetric buffer (a slot a
+        slice) and the root clusters' fold slots (p1c)."""
+        rng = np.random.default_rng(self.seed)
         n = self.SL // 2
         # parts[(k, c)]: [slice, values]
         if self.part_src == "l3":

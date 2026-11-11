@@ -159,9 +159,17 @@ class HalfSlabs:
 
 
 class MBuild(cm.ChipletBuild):
+    """The MoE prefill block (the module docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the data, the placement, the golden and the memory), build() (the task graph: every task
+    and edge) and finish() (the compile into the C header and the data image, in which the compiler orders every core's
+    tasks)."""
     TAG = "mp"
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there (with `shared`, a layer's graph and data
+        staging). Then the block's switches: the ablation arms, where X comes from, the experts a chip, the gate|up
+        chunks and down slices, the row blocks of X, the route, the placement's, the reduce's and the schedule's."""
         super().__init__(args, p, plat, hw, shared=shared)
         # THE ABLATION (workloads/moe/dsv2_l1_prefill_ablation): params x_cast, reduce and sync take the paper's three
         # mechanisms off one at a time, on the same mapping, as ffn_prefill_mc.py's do for the FFN.
@@ -197,7 +205,7 @@ class MBuild(cm.ChipletBuild):
             raise ValueError("params barrier_fence: barrier_at sets it (kernel: every core waits; cross: the named tasks)")
         self.barrier_fence = self.per_kernel
         self.barrier_role = "xdma"
-        # x_device (a block of a whole layer, dsv2_prefill_mc.py): X's source on the root is made on the device,
+        # x_device (a block of a whole layer, dsv2_layer_prefill_mc.py): X's source on the root is made on the device,
         # so it is staged as zeros. resid: {chip, src, piece, h16}: the residual (h16, FP16 [T, H], in L3 at src in
         # the output's slice layout) added into that chip's partial of every slice, `piece` bytes at a time
         self.x_device = bool(p.get("x_device", False))
@@ -214,33 +222,12 @@ class MBuild(cm.ChipletBuild):
         # of the multicast with the route; the reference for it)
         self.route_after_x = bool(p.get("route_after_x", False))
         self.resid = getattr(self, "resid", None)
-        d = self.d = self._data(args, p, hw)
-        self.lay = d.layout
-        self.H, self.IE, self.ISH = d.H, d.I_e, d.I_sh
-        self.EB, self.SHB = self.IE // BLK, self.ISH // BLK
         nch = len(self.chips)
         if md.N_EXP % nch:
             raise ValueError(f"{md.N_EXP} experts over {nch} chips")
         self.EPC = md.N_EXP // nch
-        # the shared MLP's column blocks per chip (self.shk) and each chip's first block (self.sho):
-        # an even split, or (params root_shared_blocks) the root's count set and the rest spread over
-        # the other chips, a block more on the first ones -- the root's cluster 0 runs the route
-        rsb = p.get("root_shared_blocks")
-        if rsb is None:
-            if self.SHB % nch:
-                raise ValueError(f"{self.SHB} shared blocks over {nch} chips")
-            self.shk = {k: self.SHB // nch for k in self.chips}
-        else:
-            rest = self.SHB - int(rsb)
-            if not 0 <= int(rsb) <= self.SHB:
-                raise ValueError(f"params root_shared_blocks={rsb}: 0..{self.SHB}")
-            others = [k for k in self.chips if k != self.ROOT]
-            q, r = divmod(rest, len(others))
-            self.shk = {self.ROOT: int(rsb)}
-            self.shk.update({k: q + (1 if i < r else 0) for i, k in enumerate(others)})
-        self.sho, acc = {}, 0
-        for k in self.chips:
-            self.sho[k], acc = acc, acc + self.shk[k]
+        # params root_shared_blocks: the root's count of the shared MLP's column blocks (mem_handles splits them)
+        self.root_shared_blocks = p.get("root_shared_blocks")
         self.BPC = int(p.get("blocks", 3))                 # gate blocks a gate|up chunk
         # params a16_pairs: an expert's SwiGLU output two gate|up chunks at a time, in a buffer of two chunks' blocks,
         # quantised into its A8 behind each pair (an even number of blocks: the quantisation writes 16 values past an
@@ -254,17 +241,11 @@ class MBuild(cm.ChipletBuild):
         # values past its columns, so the other cluster's copy of its columns into this A8 follows the last quantise
         self.sh_qb = bool(p.get("sh_quant_blocks", False))
         self.SW = int(p.get("slice", 128))                 # output columns a down slice
-        if (self.H // self.NC) % self.SW or self.SW % BLK:
-            raise ValueError(f"params slice={self.SW}: whole column blocks dividing a cluster's {self.H // self.NC} outputs")
-        self.NSLC = self.H // self.NC // self.SW           # slices a cluster
         self.XB = int(p.get("x_blocks", 4))                # row blocks of X (shared MLP, router)
         if self.T % (8 * self.XB):
             raise ValueError(f"params x_blocks={self.XB}: whole 8-row tiles of {self.T} tokens a block")
         self.XR = self.T // self.XB
-        self.XT, self.NXT = 8 * self.H, self.T // 8          # x_hbm: a multicast tile of X, 8 tokens; the tiles
-        self.PX = row_pitch(self.H)
-        self.PE = row_pitch(self.IE)
-        self.PS = row_pitch(BLK * max(self.shk.values()))
+        self.NXT = self.T // 8                             # x_hbm: X's multicast tiles, 8 tokens each
         self.SL = self.T * self.SW * 2                     # one output slice, FP16
         self.stop = str(p.get("stop", "full"))
         # params stop: where the window ends. route: X and the route (no shared MLP); shared: + the shared MLP's gate|up;
@@ -367,8 +348,6 @@ class MBuild(cm.ChipletBuild):
         # params down_phases (in a layer with args phases): the down slices in that many args phases, so a cluster's
         # args region holds a part of the down phase's, not all of it (args_phase)
         self.down_phases = int(p.get("down_phases", 1))
-        if self.down_phases < 1 or self.NSLC % self.down_phases:
-            raise ValueError(f"params down_phases={self.down_phases}: dividing the {self.NSLC} slices a cluster")
         # params args_phases (the block alone): args phases as a layer has them (bingo_dfg_emit.py ARGS PHASES), one
         # boundary before the down projection and one at each of down_phases' boundaries: a cluster's args of each
         # phase share one L1 region, loaded by a DM task after every task of the previous phase on the chip
@@ -437,10 +416,6 @@ class MBuild(cm.ChipletBuild):
         # output slots they sit in back to back, into a fold slot of that many slices at the root, stored to L3 by one
         # copy (Y is slice by slice)
         self.chain_group = int(p.get("chain_group", 1))
-        if self.chain_group > 1 and (self.halves or self.sd_early is not None or self.NSLC % self.chain_group
-                                     or self.NOUT % self.chain_group):
-            raise ValueError(f"params chain_group={self.chain_group}: not with chain_halves or shared_down_early, and "
-                             f"must divide the {self.NSLC} slices a cluster and out_slots={self.NOUT}")
         # params esrc_early (chain_halves): the east collector's copy of its own partial waits for its slice and its own
         # cluster's previous reduce (the last to read esrc and to use the collector's xDMA), not for the chain before it,
         # so it is done before its east chain may start. The copy stays inside the collector's L1
@@ -510,6 +485,53 @@ class MBuild(cm.ChipletBuild):
                              "route_early, prefetch_after_x, two output slots, stop full; no chain_halves, chain_group, "
                              "shared_down_early or residual")
         self.plain_trailer = bool(p.get("weight_ring", {}).get("trailer", False))
+
+    def mem_handles(self):
+        """The data, the placement, the golden and the memory; the only tasks made are the prefetchers. The MoE's data
+        (_data: the experts, the shared MLP, the router, X and the route) and the sizes it gives: the shared MLP's
+        column blocks a chip (shk, from params root_shared_blocks) and each chip's first (sho), the slices a cluster,
+        the row pitches; the placement of the experts on the chips (_place, params slot_order) and their split over
+        each chip's clusters (_split_all); the golden (_golden); then _stage(): X, the router's weights and every
+        cluster's weight chunks and factors into HBM, every L3 landing area, table and flag; make_streams(): each
+        cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
+        (weight_prefetch_k<chip>); _buffers(): every cluster's L1 buffers."""
+        d = self.d = self._data(self.args, self.p, self.hw)
+        self.lay = d.layout
+        self.H, self.IE, self.ISH = d.H, d.I_e, d.I_sh
+        self.EB, self.SHB = self.IE // BLK, self.ISH // BLK
+        nch = len(self.chips)
+        # the shared MLP's column blocks per chip (self.shk) and each chip's first block (self.sho):
+        # an even split, or (params root_shared_blocks) the root's count set and the rest spread over
+        # the other chips, a block more on the first ones -- the root's cluster 0 runs the route
+        rsb = self.root_shared_blocks
+        if rsb is None:
+            if self.SHB % nch:
+                raise ValueError(f"{self.SHB} shared blocks over {nch} chips")
+            self.shk = {k: self.SHB // nch for k in self.chips}
+        else:
+            rest = self.SHB - int(rsb)
+            if not 0 <= int(rsb) <= self.SHB:
+                raise ValueError(f"params root_shared_blocks={rsb}: 0..{self.SHB}")
+            others = [k for k in self.chips if k != self.ROOT]
+            q, r = divmod(rest, len(others))
+            self.shk = {self.ROOT: int(rsb)}
+            self.shk.update({k: q + (1 if i < r else 0) for i, k in enumerate(others)})
+        self.sho, acc = {}, 0
+        for k in self.chips:
+            self.sho[k], acc = acc, acc + self.shk[k]
+        if (self.H // self.NC) % self.SW or self.SW % BLK:
+            raise ValueError(f"params slice={self.SW}: whole column blocks dividing a cluster's {self.H // self.NC} outputs")
+        self.NSLC = self.H // self.NC // self.SW           # slices a cluster
+        self.XT = 8 * self.H                               # x_hbm: a multicast tile of X, 8 tokens
+        self.PX = row_pitch(self.H)
+        self.PE = row_pitch(self.IE)
+        self.PS = row_pitch(BLK * max(self.shk.values()))
+        if self.down_phases < 1 or self.NSLC % self.down_phases:
+            raise ValueError(f"params down_phases={self.down_phases}: dividing the {self.NSLC} slices a cluster")
+        if self.chain_group > 1 and (self.halves or self.sd_early is not None or self.NSLC % self.chain_group
+                                     or self.NOUT % self.chain_group):
+            raise ValueError(f"params chain_group={self.chain_group}: not with chain_halves or shared_down_early, and "
+                             f"must divide the {self.NSLC} slices a cluster and out_slots={self.NOUT}")
         self._place()
         if self.slot_order == "alternate":
             for k in self.chips:

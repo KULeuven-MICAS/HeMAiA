@@ -88,9 +88,15 @@ class _Part:
 
 
 class FaBuild(cm.ChipletBuild):
+    """The key-split MLA decode (the module's docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the data and the memory, no task), build() (the task graph: every task and edge) and
+    finish() (the compile into the C header and the data image, in which the compiler orders every core's tasks)."""
     TAG = "fa"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet: ChipletBuild's (the platform's and the graph's switches, the
+        chips and their memory chips, the empty DFG, the data staging), then the keys, their tiles over the clusters
+        (a contiguous shard of NT tiles each, in cluster order) and the data's inputs."""
         super().__init__(args, p, plat, hw)
         if self.T != 1:
             raise ValueError("params tokens: the fa workloads run one decode token")
@@ -104,12 +110,19 @@ class FaBuild(cm.ChipletBuild):
         if tiles % self.G:
             raise ValueError(f"{tiles} key tiles over {self.G} clusters")
         self.NT = NT = tiles // self.G
-        kv = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
-                                                  "dsv2_l1_kv_8193.npz"))
-        cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = fa_data.FaData(kv, cache, keys=self.keys)
+        self.kv_path = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
+                                                            "dsv2_l1_kv_8193.npz"))
+        self.w_cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
         # every cluster a contiguous shard of NT tiles, in cluster order
         self.shards = {g: (g * NT, NT) for g in range(self.G)}
+
+    def mem_handles(self):
+        """The data and the memory; no task yet: the data and its golden (fa_data.FaData) and their report; _stage (the
+        query in L3, every cluster's shard of the cache in its memory chip's HBM); the load streams' L1 slabs, the
+        weight rings, and every cluster's symmetric buffer (its offsets: the query, the flags, the arenas, the
+        partial)."""
+        NT = self.NT
+        d = self.d = fa_data.FaData(self.kv_path, self.w_cache, keys=self.keys)
         self.gold = d.golden(self.shards, {k: self.gs(k) for k in self.chips},
                              self.fold_order())
         for line in d.report(self.gold["xt"]):

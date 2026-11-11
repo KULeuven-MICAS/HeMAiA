@@ -98,8 +98,8 @@ kv_append(deps) makes the append (a layer may make it at its own end). What a la
 
 PARAMETERS (params.hjson): cache (P, a multiple of 64 x 16), n_calib, m_exchange (gather | chain), chains_after_stream,
 kva_extra (the chips whose cluster 1 takes W_KVA's chunks 16, 17; hex strings), checks (y | stages), stats (max) and
-passes (2) (fa_llama_mc's names; its merge and its one-pass rebase are not built here), w_chunk_bytes (one K tile,
-36,864), weight_ring (slots, batch, policy, head, batch_head), and the platform's and the graph's switches (static_l1,
+passes (2) (the only values: the statistics' merge and the one-pass rebase are not built here), w_chunk_bytes (one K
+tile, 36,864), weight_ring (slots, batch, policy, head, batch_head), and the platform's and the graph's switches (static_l1,
 l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, desc_in_image, fast_host_init, d2d_ddr,
 d2d_rx_yield, relay_per_gather).
 """
@@ -302,6 +302,9 @@ class KsGolden:
 
 
 class FaDecodeKs(FaBuild):
+    """The key-split MLA decode step with GEMV projections (the module's docstring). run_driver makes the program in
+    four steps: __init__ (the parameters), mem_handles() (the data and the memory, no task), build() (the task graph:
+    every task and edge) and finish() (the compile into the C header and the data image)."""
     TAG = "fk"
     QC, KC = 0, 1                    # every chip's query / attention cluster, and its W_KVA cluster
     # x_on_host: x's row sits in the root memory chip's HBM and its push engine multicasts it (x_multicast); y_to_hbm:
@@ -310,6 +313,11 @@ class FaDecodeKs(FaBuild):
     y_to_hbm = True
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__, not FaBuild's (fa_mc's shards and data
+        are not this step's): the platform's and the graph's switches, the chips, the empty DFG, the data staging (a
+        layer's block shares the layer's). Then the step's: the cache's length P and its tiles, m_exchange,
+        chains_after_stream, the checks, the data's inputs, the head of each chip, the attention's units and the
+        chunks of W_KVA a chip."""
         cm.ChipletBuild.__init__(self, args, p, plat, hw, shared=shared)
         if self.T != 1:
             raise ValueError("params tokens: the decode runs one token")
@@ -336,13 +344,11 @@ class FaDecodeKs(FaBuild):
         self.checks_kind = str(p.get("checks", "y"))
         if self.checks_kind not in ("y", "stages"):
             raise ValueError(f"params checks={self.checks_kind!r}: y or stages")
-        kv = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
-                                                  "dsv2_l1_kv_8193.npz"))
-        wc = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = fdm.FaDecodeData(kv, wc, cache=self.P, bc=BC, n_calib=int(p.get("n_calib", 32)),
-                                      rope_perm=True, mask_c=True, wbits=4)
-        if d.H != nchip:
-            raise ValueError(f"{nchip} chips: the attention has {d.H} heads, one a chip")
+        # the data's inputs: the cache of hidden states, the checkpoint's weights, the calibration tokens
+        self.kv_path = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
+                                                            "dsv2_l1_kv_8193.npz"))
+        self.w_cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
+        self.n_calib = int(p.get("n_calib", 32))
         R = self.ROOT
         self.head = {k: i for i, k in enumerate(self.chips)}
         self.tiles = {k: [i + nchip * t for t in range(self.NTC // nchip)] for i, k in enumerate(self.chips)}
@@ -351,9 +357,22 @@ class FaDecodeKs(FaBuild):
         extra = [int(str(x), 16) for x in p.get("kva_extra", [])] or self._kva_extra_default(N_KVA - nchip)
         if len(extra) != N_KVA - nchip or any(x not in self.chips for x in extra):
             raise ValueError(f"params kva_extra={p.get('kva_extra')}: {N_KVA - nchip} compute chips")
+        self.kva_extra = extra
         self.kva = {k: [i] for i, k in enumerate(self.chips)}
         for n, k in enumerate(extra, start=nchip):
             self.kva[k].append(n)
+
+    def mem_handles(self):
+        """The data and the memory; no task yet. FaBuild.mem_handles is not run, as FaBuild.__init__ is not: the data
+        (fa_decode_mc.FaDecodeData) and its golden (KsGolden) with their report and the cross-check of head 0's Q8;
+        _stage (x, y, the gathers' and multicasts' areas in L3, every chip's weights, cache shard and constants in its
+        memory chip's HBM); one weight ring a chip (_make_ring); every cluster's symmetric buffer (its offsets: the
+        query, the flags, the arenas, the partial)."""
+        R, nchip, extra = self.ROOT, len(self.chips), self.kva_extra
+        d = self.d = fdm.FaDecodeData(self.kv_path, self.w_cache, cache=self.P, bc=BC, n_calib=self.n_calib,
+                                      rope_perm=True, mask_c=True, wbits=4)
+        if d.H != nchip:
+            raise ValueError(f"{nchip} chips: the attention has {d.H} heads, one a chip")
         self.gold = KsGolden(d, self.units, self.chips, self.fold_order(), self.NTC)
         sc = lambda q: f"{q.s:.4g}"     # noqa: E731
         print(f"[{self.TAG}] DeepSeek-V2-Lite layer 1 MLA, one decode token at position {self.P} over keys "

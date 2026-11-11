@@ -115,32 +115,43 @@ class Stage123(cm.ChipletBuild):
         stages 4-5  down GEMMs, the ChainGathers into the root, the stores of Y       ../stage45
 
     Stage 0's result, X in every cluster's L1, is loaded before the window instead, so the window (S0_start ..
-    S1_end) is these stages' time. run_driver makes the program in three steps: __init__ (the mapping, the data and
-    the memory), build() (the task graph: every task and edge) and finish() (the compile into the C header and the
-    data image, in which the compiler orders every core's tasks and reuses a repeated GEMM configuration)."""
+    S1_end) is these stages' time. run_driver makes the program in four steps: __init__ (the parameters),
+    mem_handles() (the mapping, the data and the memory), build() (the task graph: every task and edge) and finish()
+    (the compile into the C header and the data image, in which the compiler orders every core's tasks and reuses a
+    repeated GEMM configuration)."""
 
     TAG = "pf"      # prefill FFN, as in the whole block: the prefix of the symbols, task names and printed lines
 
     def __init__(self, args, p, plat, hw):
-        """The mapping, the data and the memory. ChipletBuild.__init__ first: the chips, each one's memory chip and its
-        push engine there, the empty DFG, the data staging (self.st) and the stamp buffer. Then: the intermediate
-        columns each cluster computes (split_columns) and their gate|up chunks (gu_chunks); _stage(): X and every
-        cluster's weight chunks and dequantisation factors into HBM; make_streams(): each cluster's L1 weight slabs;
-        make_rings(): each chip's weight rings in its L3 and its host's prefetcher task (weight_prefetch_k<chip>,
-        which walks the chip's ring schedule and has its memory chip push the chunks into the rings); _buffers():
-        every cluster's L1 buffers. The prefetchers are the only tasks made here."""
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the empty DFG, the data staging (self.st)
+        and the stamp buffer. Then this stage's: the model (params model), the rows of the one pass (params rows =
+        tokens, whole X_BLOCKS and POST_BLOCKS blocks of 16), the gate blocks a gate|up chunk (params blocks) and the
+        first chunk's (params first_blocks)."""
         super().__init__(args, p, plat, hw)
-        d = self.d = ffn_data.FFNData(CACHE, p["model"], wbits=self.wbits, tokens=self.T)
+        self.model = p["model"]
         R = self.ROWS = int(p["rows"])
         if self.T != R or R % (16 * X_BLOCKS) or R % (16 * POST_BLOCKS):
             raise ValueError(f"params tokens={self.T} rows={R}: one pass (tokens = rows), rows whole blocks of 16")
-        self.MT, self.D, self.I = R // 16, d.H, d.I
-        self.XB = R * self.D                    # X of the pass, INT8
+        self.MT = R // 16
         # params blocks: 16-column gate blocks a gate|up chunk; first_blocks: the first chunk's (a narrow first chunk is
         # pushed sooner, so the first GEMM starts sooner)
         self.BPC = int(p.get("blocks", 3))
-        self.cols = split_columns(self, p)
-        self.chunks = {g: gu_chunks(n, self.BPC, int(p.get("first_blocks", 0))) for g, (_, n) in self.cols.items()}
+        self.first_blocks = int(p.get("first_blocks", 0))
+
+    def mem_handles(self):
+        """The mapping, the data and the memory; the only tasks made are the prefetchers. The model's FFN data
+        (FFNData); the intermediate columns each cluster computes (split_columns) and their gate|up chunks (gu_chunks);
+        _stage(): X and every cluster's weight chunks and dequantisation factors into HBM; make_streams(): each
+        cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
+        (weight_prefetch_k<chip>, which walks the chip's ring schedule and has its memory chip push the chunks into the
+        rings); _buffers(): every cluster's L1 buffers."""
+        d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
+        R = self.ROWS
+        self.D, self.I = d.H, d.I
+        self.XB = R * self.D                    # X of the pass, INT8
+        self.cols = split_columns(self, self.p)
+        self.chunks = {g: gu_chunks(n, self.BPC, self.first_blocks) for g, (_, n) in self.cols.items()}
         print(f"[{self.TAG}] one pass of {R} tokens; columns per cluster {sorted({n for _, n in self.cols.values()})}; "
               f"gate|up chunks per cluster {sorted({len(c) for c in self.chunks.values()})}")
         self._stage()

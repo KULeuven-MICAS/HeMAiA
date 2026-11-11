@@ -283,9 +283,21 @@ class FfnPart(fpm.PBuild):
 
 # ---- the layer ---------------------------------------------------------------------------------------------------------
 class LayerBuild(cm.ChipletBuild):
+    """The whole prefill layer (the module docstring), its blocks parts of the layer's graph. run_driver makes the
+    program in four steps: __init__ (the parameters, the layer's staging, the attention part made), mem_handles() (the
+    data, the golden and the memory: the attention's, the FFN part made on the passes the attention builds and its
+    own, then the layer's), build() (the task graph: the attention's with the norms and the glue at its step points,
+    the FFN's with the final, the checks) and finish() (the checks of the graph, then the compile into the C header
+    and the data image)."""
     TAG = "ll"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ with the switches both blocks share;
+        params layer (the steps' clusters, pieces and lags, x_slots, alias_l3, rope_hbm); the layer's staging
+        (LayerStaging: the HBM regions the steps write, the FFN's dropped root Y, the x rings and the aliased L3
+        regions, the RoPE tables in HBM); the synthetic FFN registered (llama3_data.register_ffn); the attention part
+        (AttnPart), checked for what the layer needs of it; the FFN's params. The FFN part is made in mem_handles: its
+        passes default to the attention's built ones, which the attention's data gives."""
         common = {k: v for k, v in p.items() if k not in ("attn", "ffn", "layer")}
         lp = self.lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
@@ -349,8 +361,8 @@ class LayerBuild(cm.ChipletBuild):
             raise ValueError(f"params layer.norm_lead={self.norm_lead} with {self.NPC} pieces a tile: at least {self.NPC + 1}")
         self.ps = {}
         self.marks, self.pending, self.made = {}, [], set()
-        seed = int(common.get("seed", 1))
-        llama3_data.register_ffn(seed=seed)
+        self.seed = int(common.get("seed", 1))
+        llama3_data.register_ffn(seed=self.seed)
 
         # ---- the attention ---------------------------------------------------------------------------------------
         pa = dict(common, **p["attn"])
@@ -359,29 +371,44 @@ class LayerBuild(cm.ChipletBuild):
         A = self.attn = AttnPart(self, args, pa, plat, hw)
         if not (A.y_scatter and A.wo_cols and A.x_mem and A.kv_split):
             raise ValueError("params attn: the layer needs y_scatter, wo_cols, kv_split and x from HBM")
-        d = A.d
-        fp = d.fp
-        self.H = d.H
         if A.R % TR or self.T != A.T:
             raise ValueError(f"{A.T} tokens in passes of {A.R}: whole {TR}-row tiles, and the layer's tokens")
         self.NQ = A.R // TR                                       # tiles a pass
+
+        # ---- the FFN's params (its part made in mem_handles) --------------------------------------------------------
+        self.ffn_p = dict(common, **p["ffn"])
+        if not self.ffn_p.get("y_scatter") or self.ffn_p.get("l3_overlay"):
+            raise ValueError("params ffn: y_scatter, no l3_overlay (Y_raw goes to the tiles' owners, no pass of it whole "
+                             "in the root's L3)")
+
+    def mem_handles(self):
+        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        (AttnPart's mem_handles), then the golden on its data: x and h. The FFN part (FfnPart), on params
+        layer.ffn_passes of the attention's built passes (default all of them), then its data, golden and memory (its
+        mem_handles, on h), its gain checked against the layer's, the output's golden. The layer's own data: per memory
+        chip, in its HBM, x of the tiles its chips own, the regions the steps write (h, the output) and their flags, the
+        constants (the gains, W_O's and the down projection's factors); in the root memory chip's HBM the flags of the
+        x8 and X tiles; with pieces of fewer than 16 rows, the INT8 staging tiles in L3."""
+        A, args = self.attn, self.args
+        A.mem_handles()
+        d = A.d
+        fp = d.fp
+        self.H = d.H
         self.x16 = np.asarray(d.x16, dtype=np.float16)
         self.h16 = fp.add16(d.y16(A.gold_y), self.x16)           # the residual stream after the attention
 
         # ---- the FFN ----------------------------------------------------------------------------------------------
-        nf = int(lp.get("ffn_passes", A.NP))
+        nf = int(self.lp.get("ffn_passes", A.NP))
         if not 0 < nf <= A.NP:
             raise ValueError(f"params layer.ffn_passes={nf}: 1 .. attn.passes ({A.NP}), the passes the glue makes")
-        pf = dict(common, **p["ffn"])
+        pf = dict(self.ffn_p)
         pf["model"] = llama3_data.MODEL
         pf["tokens"] = nf * int(pf.get("rows", A.R))
-        if not pf.get("y_scatter") or pf.get("l3_overlay"):
-            raise ValueError("params ffn: y_scatter, no l3_overlay (Y_raw goes to the tiles' owners, no pass of it whole "
-                             "in the root's L3)")
-        F = self.ffn = FfnPart(self, args, pf, plat, hw)
+        F = self.ffn = FfnPart(self, args, pf, self.plat, self.hw)
         if F.ROWS != A.R:
             raise ValueError("params ffn.rows: the attention's rows (a pass's tiles are the same in both blocks)")
-        if not np.array_equal(F.d.gain16, llama3_data.ffn_gain(seed).astype(np.float16)):
+        F.mem_handles()                                           # its data on h
+        if not np.array_equal(F.d.gain16, llama3_data.ffn_gain(self.seed).astype(np.float16)):
             raise AssertionError("the FFN block's gain and the layer's differ")
         self.out16 = fp.add16(fp.mul16(F.gold["y_raw"], F.d.dn_f[None, :]), self.h16[:F.T])
 

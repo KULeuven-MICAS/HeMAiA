@@ -95,7 +95,8 @@ sys.path.insert(0, HERE)
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelSimdAddF16Args,
-    SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdRmsnormArgs, simd_beats)
+    SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdRmsnormArgs,
+    SnaxBingoKernelXdma6dArgs, simd_beats)
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
@@ -105,11 +106,70 @@ import ffn_data  # noqa: E402
 import ffn_prefill_mc as fpm  # noqa: E402
 import moe_prefill_data as mpd  # noqa: E402
 import moe_prefill_mc as mom  # noqa: E402
-from dsv2_prefill_mc import AliasStaging, fa_d_to_rows, rows_to_slices  # noqa: E402
+from chiplet_mc import AliasStaging  # noqa: E402
 
 HIDDEN = 2048
 TR = 16                        # rows a step tile: one A-layout row block
 TB = TR * HIDDEN * 2           # a tile of FP16 rows
+ATOM, LANES = 8, 8            # the xDMA: bytes a lane moves a beat, lanes
+
+
+# ---- the xDMA nests the glue needs ------------------------------------------------------------------------
+def xdma_nest(src, dst, axes, expect):
+    """One xDMA pass over `axes` [(bound, src stride, dst stride)] in bytes, the innermost one the 8-byte atoms of
+    a run (its strides 8, its bound the run's atoms); one axis whose bound is a multiple of 8 takes the lanes.
+    `expect` (src element offset -> dst element offset, FP16 elements) is the mapping it must make: the nest is
+    walked here and compared with it element by element."""
+    atom, rest = axes[0], list(axes[1:])
+    if atom[1] != ATOM or atom[2] != ATOM:
+        raise ValueError(f"the innermost axis {atom} is not the 8-byte atoms of a run")
+    lane = next(i for i, a in enumerate(rest) if a[0] % LANES == 0)
+    b, ss, ds = rest.pop(lane)
+    temporal = [atom] + rest + ([(b // LANES, ss * LANES, ds * LANES)] if b > LANES else [])
+    if len(temporal) > 5:
+        raise ValueError(f"{len(temporal)} temporal dimensions: the xDMA has 5")
+    args = SnaxBingoKernelXdma6dArgs(
+        src, dst, spatial_stride_src=ss, spatial_stride_dst=ds,
+        temporal_strides_src=[t[1] for t in temporal], temporal_bounds_src=[t[0] for t in temporal],
+        temporal_strides_dst=[t[2] for t in temporal], temporal_bounds_dst=[t[0] for t in temporal])
+    # walk it: every lane of every temporal point moves 4 FP16 elements
+    grids = np.meshgrid(*[np.arange(t[0]) for t in temporal], np.arange(LANES), indexing="ij")
+    so = sum(g * t[1] for g, t in zip(grids, temporal)) + grids[-1] * ss
+    do = sum(g * t[2] for g, t in zip(grids, temporal)) + grids[-1] * ds
+    so, do = so.reshape(-1) // 2, do.reshape(-1) // 2
+    so = (so[:, None] + np.arange(4)).reshape(-1)
+    do = (do[:, None] + np.arange(4)).reshape(-1)
+    if so.size != expect.size or not np.array_equal(np.sort(so), np.arange(expect.size)) \
+            or not np.array_equal(expect[so], do):
+        raise ValueError("the xDMA nest does not make the mapping it is meant to")
+    return args
+
+
+def fa_d_to_rows(src, dst, rows):
+    """`rows` rows of the attention's y, D layout of its (16, 4, 16) array in two halves of 1024 columns
+    ([half][column tile][16 rows][16 columns], the halves at 32 KiB a 16-row tile), into row major [rows, 2048]."""
+    if rows != 16:
+        raise ValueError("a glue tile is one 16-row tile of the attention's D layout")
+    h, n, r, cc = np.meshgrid(np.arange(2), np.arange(64), np.arange(16), np.arange(16), indexing="ij")
+    src_el = ((h * 64 + n) * 16 + r) * 16 + cc
+    dst_el = r * HIDDEN + 1024 * h + 16 * n + cc
+    expect = np.empty(src_el.size, dtype=np.int64)
+    expect[src_el.reshape(-1)] = dst_el.reshape(-1)
+    return xdma_nest(src, dst, [(4, 8, 8), (16, 32, 2 * HIDDEN), (128, 512, 32)], expect)
+
+
+def rows_to_slices(src, dst, rows, sw):
+    """`rows` row-major FP16 rows [rows, 2048] into the MoE output's slice layout, slice-major: per slice of `sw`
+    columns the rows' row tiles of 8, each D layout of (8, 8, 16) ([slice][row tile][column tile][8][16])."""
+    ns, nt, nm = HIDDEN // sw, sw // 16, rows // 8
+    s, m, n, rr, cc = np.meshgrid(np.arange(ns), np.arange(nm), np.arange(nt), np.arange(8), np.arange(16),
+                                  indexing="ij")
+    src_el = (8 * m + rr) * HIDDEN + sw * s + 16 * n + cc
+    dst_el = (((s * nm + m) * nt + n) * 8 + rr) * 16 + cc
+    expect = np.empty(src_el.size, dtype=np.int64)
+    expect[src_el.reshape(-1)] = dst_el.reshape(-1)
+    return xdma_nest(src, dst, [(4, 8, 8), (8, 2 * HIDDEN, 32), (nm, 16 * HIDDEN, nt * 256), (nt, 32, 256),
+                                (ns, 2 * sw, nm * nt * 256)], expect)
 XT = TR * HIDDEN               # a tile of INT8 rows (either layout)
 CB = HIDDEN * 2                # one FP16 constant row
 PASS_TAGS = ("mp", "mq", "mr", "ms")   # the MoE passes' tags (params layer.moe_passes)
@@ -224,13 +284,21 @@ class MoePart(mom.MBuild):
     window opened per chip after the glue, the residual read from HBM, its output stored into HBM."""
     stream_name = "zs_mp_stream"
 
-    def __init__(self, layer, args, p, plat, hw, n=0, rows=None):
-        """Pass n of the MoE (params layer.moe_passes): its rows of h (rows), its output and h at its offset (base)."""
+    def __init__(self, layer, args, p, plat, hw, n=0):
+        """Pass n of the MoE (params layer.moe_passes): its output and h at its offset (base), the layer's residual
+        (its rows of h set in mem_handles)."""
         self.layer, self.n = layer, n
-        self.rows = rows
         self.base = n * int(p["tokens"]) * HIDDEN * 2
-        self.resid = dict(layer.resid, h16=rows["x16"])
+        self.resid = dict(layer.resid)
         super().__init__(args, p, plat, hw, shared=layer)
+
+    def mem_handles(self):
+        """MBuild's, on the pass's rows of the layer's h (rows: the layer's mlp_rows with x16 the pass's rows, the
+        residual's h16 the same rows)."""
+        L, n = self.layer, self.n
+        self.rows = dict(L.mlp_rows, x16=L.h16[n * L.Tp:(n + 1) * L.Tp])
+        self.resid["h16"] = self.rows["x16"]
+        super().mem_handles()
 
     def _data(self, args, p, hw):
         cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
@@ -348,9 +416,20 @@ class FfnPart(fpm.PBuild):
 
 # ---- the layer -------------------------------------------------------------------------------------------------------
 class LayerBuild(cm.ChipletBuild):
+    """The whole prefill layer (the module docstring), its blocks parts of the layer's graph. run_driver makes the
+    program in four steps: __init__ (the parameters, the layer's staging, the parts made), mem_handles() (the data, the
+    golden and the memory: each part's in turn, between them the layer's golden that the next one reads, then the
+    layer's own), build() (the task graph: the attention's, the glue's, the MoE's passes' or the FFN's with the final,
+    the checks) and finish() (the checks of the graph and of the L3 overlays, then the compile into the C header and the
+    data image)."""
     TAG = "dl"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ with the switches every block shares;
+        params layer; the layer's staging (LayerStaging: dl_act and the names that are it, the HBM regions the steps
+        write); then the parts, each a block over the layer's graph and staging with its own params and checked against
+        the others: the attention (AttnPart; the chunks it makes give the MoE's / FFN's rows), and the MoE's passes
+        (MoePart, one a pass, its weight slots in dl_act) or the dense FFN (FfnPart, its weight slots in dl_act)."""
         common = {k: v for k, v in p.items() if k not in ("attn", "moe", "ffn", "layer")}
         lp = self.lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
@@ -393,26 +472,9 @@ class LayerBuild(cm.ChipletBuild):
         if pa.get("stage") != "full" or not pa.get("x_hbm", True) or pa.get("x_bcast") != "memchip":
             raise ValueError("params attn: stage full, x from HBM multicast by the memory chip (x_hbm, x_bcast memchip)")
         A = self.attn = AttnPart(self, args, pa, plat, hw)
-        d, fp = A.d, A.d.fp
-        self.fp = fp
         self.NB = int(A.chunks_built) if A.chunks_built is not None else A.NCH      # the chunks made
         self.T_mlp = self.NB * A.C
-        self.x16 = np.asarray(d.x1, dtype=np.float16)                                 # [T, 2048]
-        self.oscale = np.asarray(d.out_scale(), dtype=np.float16)
-        self.in_gain = np.asarray(d.in_norm, dtype=np.float16)
-        # y of the chunks made, each W_O block folded in its collector's chain order
-        y = np.zeros((self.T_mlp, HIDDEN), dtype=np.float16)
-        half = HIDDEN // 2
-        for i in range(self.NB):
-            for c in range(self.NC):
-                r0 = A.r0(i, c)
-                yh = [A.y_raw(r0, A.ROWS, A.y_fold_heads(A.y_root(i, h)) if A.y_roots else None) for h in range(2)]
-                y[r0:r0 + A.ROWS, :half] = yh[0][:, :half]
-                y[r0:r0 + A.ROWS, half:] = yh[1][:, half:]
-        self.y_raw = y
-        self.h16 = fp.add16(fp.mul16(y, self.oscale[None, :]), self.x16[:self.T_mlp])     # the residual stream
-        n_cal_act = int(p.get("moe", {}).get("n_cal_act", 32))
-        self.mlp_rows = dict(x16=self.h16, cal=self.h16, cal_act=self.h16[-n_cal_act:])
+        self.n_cal_act = int(p.get("moe", {}).get("n_cal_act", 32))      # mlp_rows' cal_act: the last that many of h
 
         # ---- the MoE (layer 1) or the dense FFN (layer 0) --------------------------------------------------
         self.resid = None
@@ -429,7 +491,7 @@ class LayerBuild(cm.ChipletBuild):
             self.resid_chip = int(str(lp.get("resid_chip", "33")), 16)
             if self.resid_chip not in self.chips or self.resid_chip == self.ROOT:
                 raise ValueError(f"params layer.resid_chip={lp.get('resid_chip')}: a compute chip other than the root")
-            self.resid = dict(chip=self.resid_chip, src=None, piece=int(lp.get("resid_piece", 16384)), h16=self.h16)
+            self.resid = dict(chip=self.resid_chip, src=None, piece=int(lp.get("resid_piece", 16384)))
             self.SW = int(pm.get("slice", 128))
             self.Tp = Tp
             SL = Tp * self.SW * 2
@@ -439,19 +501,11 @@ class LayerBuild(cm.ChipletBuild):
             self.mlps = []
             for n, tag in enumerate(tags):
                 # its weight slots behind its X landing (l3_overlay: [source | landing | zero row]); a later pass's over
-                # the pass before's (it starts once that pass is done). The input scale is calibrated on every row of
-                # the layer: one static scale for every pass
+                # the pass before's (it starts once that pass is done)
                 self.st.aliases[f"{tag}_wring_slots"] = ("dl_act", (2 * Tp + 1) * HIDDEN)
                 cls = type(f"MoePart_{tag}", (MoePart,), {"TAG": tag, "stream_name": f"zs_{tag}_stream"})
-                rows = dict(self.mlp_rows, x16=self.h16[n * Tp:(n + 1) * Tp])
-                self.mlps.append(cls(self, args, pm, plat, hw, n=n, rows=rows))
-            M = self.mlp = self.mlps[-1]
-            self.post_gain = np.asarray(M.d.gain16, dtype=np.float16)
-            self.s_h = M.d.s_h
-            self.out16 = np.concatenate([m.y_raw for m in self.mlps])
-            for m in self.mlps:
-                if m.d.s_h.s != self.s_h.s:
-                    raise AssertionError("the MoE passes' input scales differ")
+                self.mlps.append(cls(self, args, pm, plat, hw, n=n))
+            self.mlp = self.mlps[-1]
         else:
             pf = dict(common, **p["ffn"])
             if int(pf.get("tokens", 0)) != self.T_mlp:
@@ -472,6 +526,51 @@ class LayerBuild(cm.ChipletBuild):
             self.mlps = [M]
             if M.ROWS != A.C:
                 raise ValueError("params ffn.rows: the attention's chunk (a pass a chunk)")
+
+    def mem_handles(self):
+        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        (AttnPart's mem_handles: FaBuild's, with the stage-full inputs), then the golden on its data: x, y of the chunks
+        made (each W_O block folded in its collector's chain order), h, and the rows the second block's data is made
+        on. Layer 1: each MoE pass's (MoePart's mem_handles, on its rows of h), the output's golden (each pass's y with
+        h in the residual chip's partial); layer 0: the FFN's (FfnPart's mem_handles, on h), the output's golden (Y_raw
+        dequantised plus h). X, checked against the blocks' golden X, and x against the attention's. The layer's own
+        data in each memory chip's HBM: x, the constants (W_O's factors, the gains, the down scale), and the regions the
+        steps write (h, the output; layer 0 with ffn_y hbm, Y_raw)."""
+        A = self.attn
+        A.mem_handles()
+        d, fp = A.d, A.d.fp
+        self.fp = fp
+        self.x16 = np.asarray(d.x1, dtype=np.float16)                                 # [T, 2048]
+        self.oscale = np.asarray(d.out_scale(), dtype=np.float16)
+        self.in_gain = np.asarray(d.in_norm, dtype=np.float16)
+        # y of the chunks made, each W_O block folded in its collector's chain order
+        y = np.zeros((self.T_mlp, HIDDEN), dtype=np.float16)
+        half = HIDDEN // 2
+        for i in range(self.NB):
+            for c in range(self.NC):
+                r0 = A.r0(i, c)
+                yh = [A.y_raw(r0, A.ROWS, A.y_fold_heads(A.y_root(i, h)) if A.y_roots else None) for h in range(2)]
+                y[r0:r0 + A.ROWS, :half] = yh[0][:, :half]
+                y[r0:r0 + A.ROWS, half:] = yh[1][:, half:]
+        self.y_raw = y
+        self.h16 = fp.add16(fp.mul16(y, self.oscale[None, :]), self.x16[:self.T_mlp])     # the residual stream
+        self.mlp_rows = dict(x16=self.h16, cal=self.h16, cal_act=self.h16[-self.n_cal_act:])
+
+        # ---- the MoE (layer 1) or the dense FFN (layer 0) --------------------------------------------------
+        M = self.mlp
+        if self.which == 1:
+            # one pass after the other; the input scale is calibrated on every row of the layer: one static scale for
+            # every pass
+            for m in self.mlps:
+                m.mem_handles()
+            self.post_gain = np.asarray(M.d.gain16, dtype=np.float16)
+            self.s_h = M.d.s_h
+            self.out16 = np.concatenate([m.y_raw for m in self.mlps])
+            for m in self.mlps:
+                if m.d.s_h.s != self.s_h.s:
+                    raise AssertionError("the MoE passes' input scales differ")
+        else:
+            M.mem_handles()
             self.post_gain = np.asarray(M.d.gain16, dtype=np.float16)
             self.s_h = M.d.s_h
             self.dn_f = np.asarray(M.d.dn_f, dtype=np.float16)

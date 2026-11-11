@@ -28,9 +28,9 @@ chips' links idle. Instead:
 Every chip holds the same number of intermediate columns (the shared run and its pieces: 44 blocks at the model's size)
 and streams the same bytes: per column, its gate and up columns over every input and its row of the down projection
 over every output. A memory chip feeds the four chips of its row, two over each of its links, so every memory chip and
-every link carries the same share (the root's link one chunk more: the router's). The old decode mapping
-(moe_mc.py) is balanced too, each routed slot on 2 chips and the shared expert on 4, but
-there 12 chips have nothing to stream until the route is known; here every chip streams its shared run meanwhile.
+every link carries the same share (the root's link one chunk more: the router's). Each routed slot on 2 chips and the
+shared expert on 4 would balance the streams too, but 12 chips would then have nothing to stream until the route is
+known; here every chip streams its shared run meanwhile.
 
 THE CLUSTERS. Each piece's columns are split over the chip's two clusters by 16-column blocks, cluster 0 an even number
 (cluster 1's columns then start on a SIMD beat of the A8 rows), moved two at a time until the two clusters hold the
@@ -242,12 +242,16 @@ class Piece:
 
 
 class DBuild(mp.MBuild):
+    """The MoE decode block (the module docstring), on the prefill's helpers. run_driver makes the program in four
+    steps: __init__ (the parameters), mem_handles() (the data, the placement, the golden and the memory), build() (the
+    task graph: every task and edge) and finish() (the compile into the C header and the data image)."""
     TAG = "md"
 
     def __init__(self, args, p, plat, hw, shared=None):
-        # The prefill's constructor sizes its buffers by whole 8-token tiles of a prompt and places whole experts by
-        # their tokens; this one builds the decode's placement and buffers and sets the attributes the prefill's
-        # helpers it reuses read (gemm, _load, _release, _pack_b, _chunk, chain_order, finish).
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__, not MBuild's: the decode refuses the
+        prefill's switches it does not take and sets the ones the prefill's helpers it reuses read (gemm, _load,
+        _release, _pack_b, _chunk, chain_order, finish) at what it builds; then its own (gemv, the reduce's chains, the
+        gate blocks a gate|up chunk)."""
         cm.ChipletBuild.__init__(self, args, p, plat, hw, shared=shared)
         if self.T != 1:
             raise ValueError(f"params tokens={self.T}: the decode runs one token")
@@ -286,13 +290,22 @@ class DBuild(mp.MBuild):
             if bad:
                 raise ValueError(f"params gemv with {bad}: the GEMV reads its own paired INT4 layout, its factor rows "
                                  f"from the slab, and is a blocking task (no GEMM to queue)")
+        self.BPC = int(p.get("blocks", 3))
 
-        d = self.d = self._data(args, p, hw)
+    def mem_handles(self):
+        """The data, the placement, the golden and the memory; the only tasks made are the prefetchers. The decode's
+        own, not MBuild's (which sizes its buffers by a prompt's 8-token tiles and places whole experts by their
+        tokens): the token's data (_data) and the sizes it gives (the output slices, params slice, its default a
+        cluster's outputs; X's multicast tile); the pieces of the token's experts and of the shared MLP on the chips
+        (_place, params routed_split); the golden (_golden); then _stage(): X and Y's row in the HBM of the root's memory
+        chip, every chip's landing areas and flags, every cluster's weight chunks and factors in its memory chip's HBM;
+        make_streams(): each cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's
+        prefetcher task; _buffers(): every cluster's L1 buffers."""
+        d = self.d = self._data(self.args, self.p, self.hw)
         self.lay = d.layout
         self.H, self.IE, self.ISH = d.H, d.I_e, d.I_sh
         self.EB, self.SHB = self.IE // BLK, self.ISH // BLK
-        self.BPC = int(p.get("blocks", 3))
-        self.SW = int(p.get("slice", self.H // self.NC))
+        self.SW = int(self.p.get("slice", self.H // self.NC))
         if (self.H // self.NC) % self.SW or self.SW % BLK:
             raise ValueError(f"params slice={self.SW}: whole column blocks dividing a cluster's {self.H // self.NC} "
                              f"outputs")
@@ -304,7 +317,7 @@ class DBuild(mp.MBuild):
             self.SL = self.SW * 2                         # gemv: one output slice is the token's row
             self.XT = 2 * self.H                          # gemv: X's multicast is the token's a_row
 
-        self._place(p)
+        self._place(self.p)
         self._golden()
         self._stage()
         self.make_streams()

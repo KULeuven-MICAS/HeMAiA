@@ -9,7 +9,7 @@ latent cache, head parallel over the 16 + 4 chiplet platform. The platform, the 
 barriers and the synchronisation arm are chiplet_mc.py's; the data and the golden are
 fa_prefill_data.py's; the sweep over the cache is libs/blocks/fa_sweep.py's.
 
-A FRESH PROMPT (params fresh, in a whole layer: dsv2_prefill_mc.py with layer.tiles chips): no cache; the
+A FRESH PROMPT (params fresh, alone or as a block of a whole layer): no cache; the
 keys are the prompt's own and causal. Each chip makes the latent of the 16-token tiles its input norm gave
 it (stage_kv, cluster 0; tile q on chip q mod 16, T / 256 tiles a chip): kv = x8 . W_KVA in nine GEMMs of 64
 columns a tile (W_KVA through the ring once, ahead of the chunks' weights), dequantised; c~ = RMSNorm of its
@@ -212,6 +212,9 @@ class TileSource:
 
 
 class FaBuild(cm.ChipletBuild):
+    """The MLA prefill block (the module's docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the data and the memory, no task), build() (the task graph: every task and edge) and
+    finish() (the compile into the C header and the data image, in which the compiler orders every core's tasks)."""
     TAG = "fp"
 
     def kbuf(self, g):
@@ -221,8 +224,13 @@ class FaBuild(cm.ChipletBuild):
         return self._kbuf[g]
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the empty DFG, the data staging (self.st)
+        and the stamp buffer (a layer's block shares the layer's). Then the block's: the chunks, their query and key
+        tiles (check), every switch with its checks, the head of each chip and the fold order, the data's inputs and
+        the sizes of a chunk's x and of a cluster's partial y."""
         super().__init__(args, p, plat, hw, shared=shared)
-        # x_device (a block of a whole layer, dsv2_prefill_mc.py): the root's x source is made on the device,
+        # x_device (a block of a whole layer): the root's x source is made on the device,
         # chunk i's tasks in x_ready[i]: staged as zeros, and each chunk's multicast waits for them
         self.x_device = bool(p.get("x_device", False))
         self.x_ready = {}
@@ -467,24 +475,34 @@ class FaBuild(cm.ChipletBuild):
         self.head = {k: i for i, k in enumerate(by_row)}
         if len(self.head) != 16:
             raise ValueError(f"{len(self.head)} compute chips: the layer has 16 heads, one a chip")
-        kv = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
-                                                  "dsv2_l1_kv_8193.npz"))
-        wc = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        d = self.d = fa_prefill_data.FaPrefillData(kv, wc, tokens=self.T, keys=self.keys,
-                                                   bc=self.bc, n_calib=int(p.get("n_calib", 32)), fresh=self.fresh,
-                                                   chunk=self.C, rope_perm=self.rope_perm, mask_c=self.mask_c,
-                                                   wbits=self.wbits, skip_masked=bool(p.get("skip_masked", False)))
-        self.lay = d.layout
         # the fold order of the 16 partials: the chips' order from the base class, as heads
         self.fold_heads = [self.head[k] for k in self.fold_order()]
+        # the data's inputs: the cache of hidden states, the checkpoint's weights, the calibration tokens
+        self.kv_path = os.path.join(REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
+                                                            "dsv2_l1_kv_8193.npz"))
+        self.w_cache = os.path.join(REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
+        self.n_calib = int(p.get("n_calib", 32))
+        self.skip_masked = bool(p.get("skip_masked", False))
+        self.XB = self.C * HIDDEN                       # a chunk's x, INT8
+        self.YB = self.ROWS * HIDDEN * 2                # a cluster's partial y of a chunk, FP16
+        self.SL = int(p.get("root_slice", 16 * 1024))
+
+    def mem_handles(self):
+        """The data and the memory; no task yet: the data and its golden (fa_prefill_data.FaPrefillData) and their
+        report; _stage (every input staged in L3 and HBM: x, the cache or the fresh prompt's key pieces and their
+        flags, W_KVA, the weights and the dequantisation constants of each head, y); the load streams' L1 slabs
+        (make_streams); one weight ring a chip (_make_rings); the L1 buffers (_buffers: the symmetric buffer, the
+        constants, the keys' constants)."""
+        d = self.d = fa_prefill_data.FaPrefillData(self.kv_path, self.w_cache, tokens=self.T, keys=self.keys,
+                                                   bc=self.bc, n_calib=self.n_calib, fresh=self.fresh,
+                                                   chunk=self.C, rope_perm=self.rope_perm, mask_c=self.mask_c,
+                                                   wbits=self.wbits, skip_masked=self.skip_masked)
+        self.lay = d.layout
         for line in d.report(self.fold_heads):
             print(f"[fp] {line}")
         print(f"[fp] {self.T} tokens in {self.NCH} chunks of {self.C}: {self.NQ} query tiles of {BR} rows a "
               f"cluster, {self.NT} K/V tiles of {self.bc} keys; fold order "
               f"{[f'{k:02x}' for k in self.order]}")
-        self.XB = self.C * HIDDEN                       # a chunk's x, INT8
-        self.YB = self.ROWS * HIDDEN * 2                # a cluster's partial y of a chunk, FP16
-        self.SL = int(p.get("root_slice", 16 * 1024))
         self._stage()
         self.make_streams()
         self._make_rings()
@@ -1817,8 +1835,8 @@ class FaBuild(cm.ChipletBuild):
                 self._sym_blk[(k, c)] = {0: [rh[0][c]], 1: [rh[1][c]]}
 
     def chunk_start(self, i):
-        """Where the tasks of chunk i (i >= 1) begin, in the order they are made: nothing here; a layer
-        starts an args phase (dsv2_prefill_mc.py)."""
+        """Where the tasks of chunk i (i >= 1) begin, in the order they are made: nothing here; a whole layer
+        starts an args phase there."""
 
     def _reduce_chunk(self, i, parts_ready, red, stores, sym_free, gate=None):
         war = {c: [stores[(i - 1, c)]] if (i - 1, c) in stores else [] for c in range(self.NC)}

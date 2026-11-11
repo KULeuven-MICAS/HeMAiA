@@ -377,9 +377,19 @@ class FfnPart(ffd.DBuild):
 
 # ---- the layer ------------------------------------------------------------------------------------------------------
 class LayerBuild(cm.ChipletBuild):
+    """The whole decode layer (the module docstring), its blocks parts of the layer's graph. run_driver makes the
+    program in four steps: __init__ (the parameters, the parts made), mem_handles() (the data, the golden and the
+    memory: each part's in turn, between them the layer's golden that the next one reads, then the layer's own),
+    build() (the task graph: the attention's, the glue's, the second block's) and finish() (the checks of the graph,
+    then the compile into the C header and the data image)."""
     TAG = "dd"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ with the switches every block shares;
+        params layer (stop, attn, mlp, mlp_prefetch, chains_after_stream, x_arow); then the parts, each a block over the
+        layer's graph and staging with its own params: the attention (AttnPart, or AttnKsPart with attn ks) and, stop
+        full, the second block (MoePart or FfnPart). X's form follows the second block's (one INT8 row, or in a_row with
+        the GEMV)."""
         common = {k: v for k, v in p.items() if k not in ("attn", "moe", "ffn", "layer")}
         lp = self.lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
@@ -405,17 +415,49 @@ class LayerBuild(cm.ChipletBuild):
         self.early_cache = pf == "early_cache"
         self.chains_after_stream = bool(lp.get("chains_after_stream", False))
         self.part_checks, self.hbm_writes, self.check_copies = [], [], []
+
+        # ---- the parts -------------------------------------------------------------------------------------------
+        Part = AttnPart if self.attn_kind == "hp" else AttnKsPart
+        self.attn = Part(self, args, dict(common, **p["attn"]), plat, hw)
+        self.mlp = None
+        if self.stop == "full":
+            pm = dict(common, **p[self.mlp_kind])
+            if self.mlp_kind == "moe":
+                M = self.mlp = MoePart(self, args, pm, plat, hw)
+                self.mlp_gemv = M.gemv
+            else:
+                F = self.mlp = FfnPart(self, args, pm, plat, hw)
+                if not F.y_dequant or not F.x_row:
+                    raise ValueError("params ffn: y_dequant and x_row (the final residual adds Y16 to h; X is one row)")
+                self.mlp_gemv = F.gu_gemv
+            # X as the second block reads it: one INT8 row, or with the GEMV the row in a_row
+            if "x_arow" in lp and bool(lp["x_arow"]) != self.mlp_gemv:
+                raise ValueError(f"params layer.x_arow={lp['x_arow']}: the second block takes X "
+                                 f"{'in a_row' if self.mlp_gemv else 'as one row'}")
+            self.x_arow = self.mlp_gemv
+        else:
+            self.mlp_p = dict(p.get(self.mlp_kind, {}))     # the second block's params: its layer's post-attention gain
+            self.mlp_gemv = False
+            self.x_arow = bool(lp.get("x_arow", False))
+        self.xbytes = (2 if self.x_arow else 1) * HIDDEN
+
+    def mem_handles(self):
+        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        (AttnPart's or AttnKsPart's mem_handles), then the golden of the input norm and of the glue on its data: x, the
+        attention's x (checked against the block's), y, h, and the rows the second block's data is made on. Stop full:
+        the second block's (MoePart's or FfnPart's mem_handles, on h), the output's golden and X's landing area and flag
+        of the block; stop attn: the post-attention gain and s_h of the second block's layer. X, checked against the
+        second block's golden X. One symmetric buffer a cluster for both blocks. The layer's own data: x and the
+        output (stop attn: h and X) in the HBM of the root's memory chip, the constants in L3, and C00 cluster 0's L1
+        buffers of the input norm, the glue and the final step."""
         R = self.ROOT
         m = self.mem[R]
         loc = (m >> 4, m & 15)
 
         # ---- the attention, and the input norm's and the glue's golden -------------------------------------------
-        if self.attn_kind == "hp":
-            A = self.attn = AttnPart(self, args, dict(common, **p["attn"]), plat, hw)
-            self.GC = A.qc
-        else:
-            A = self.attn = AttnKsPart(self, args, dict(common, **p["attn"]), plat, hw)
-            self.GC = A.QC
+        A = self.attn
+        A.mem_handles()
+        self.GC = A.qc if self.attn_kind == "hp" else A.QC
         d = A.d
         fp, hm = d.fp, d.hm
         if self.GC != 0:
@@ -437,39 +479,24 @@ class LayerBuild(cm.ChipletBuild):
         self.mlp_rows = dict(x16=self.h16[None, :], cal=self.h16[None, :], cal_act=self.h16[None, :])
 
         # ---- the second block ------------------------------------------------------------------------------------
-        self.mlp = None
         if self.stop == "full":
-            pm = dict(common, **p[self.mlp_kind])
+            M = self.mlp
+            M.mem_handles()                         # its data on h (mlp_rows)
+            self.post_gain, self.s_h, xm = M.d.gain16, M.d.s_h, M.d.hq[0]
             if self.mlp_kind == "moe":
-                M = self.mlp = MoePart(self, args, pm, plat, hw)
-                self.post_gain, self.s_h, xm = M.d.gain16, M.d.s_h, M.d.hq[0]
                 self.out16 = fp.add16(np.asarray(M.y_row, dtype=np.float16), self.h16)
-                self.mlp_land, self.mlp_flag = M.xland(), BingoMemSymbol(f"{M.TAG}_xtflag")
-                self.mlp_gemv, mlp_xb = M.gemv, M.XT
+                self.mlp_land, mlp_xb = M.xland(), M.XT
             else:
-                F = self.mlp = FfnPart(self, args, pm, plat, hw)
-                if not F.y_dequant or not F.x_row:
-                    raise ValueError("params ffn: y_dequant and x_row (the final residual adds Y16 to h; X is one row)")
-                self.post_gain, self.s_h, xm = F.d.gain16, F.d.s_h, F.d.hq[0]
-                self.out16 = fp.add16(np.asarray(F.gold["y16"][0], dtype=np.float16), self.h16)
-                self.mlp_land, self.mlp_flag = F._xland(0), BingoMemSymbol(f"{F.TAG}_xtflag")
-                self.mlp_gemv, mlp_xb = F.gu_gemv, F.XR
-            # X as the second block reads it: one INT8 row, or with the GEMV the row in a_row
-            if "x_arow" in lp and bool(lp["x_arow"]) != self.mlp_gemv:
-                raise ValueError(f"params layer.x_arow={lp['x_arow']}: the second block takes X "
-                                 f"{'in a_row' if self.mlp_gemv else 'as one row'}")
-            self.x_arow = self.mlp_gemv
-            self.xbytes = (2 if self.x_arow else 1) * HIDDEN
+                self.out16 = fp.add16(np.asarray(M.gold["y16"][0], dtype=np.float16), self.h16)
+                self.mlp_land, mlp_xb = M._xland(0), M.XR
+            self.mlp_flag = BingoMemSymbol(f"{M.TAG}_xtflag")
             if mlp_xb != self.xbytes:
                 raise ValueError(f"the second block's X landing is {mlp_xb} B; the glue makes {self.xbytes}")
         else:
-            self.post_gain = np.asarray(self._post_gain(args, p), dtype=np.float16)
+            self.post_gain = np.asarray(self._post_gain(self.mlp_p), dtype=np.float16)
             amax = float(np.max(np.abs(fp.mul16(hm.rmsnorm(self.h16), self.post_gain).astype(np.float32))))
             self.s_h = hm.QScale.for_amax(amax)
             xm = None
-            self.mlp_gemv = False
-            self.x_arow = bool(lp.get("x_arow", False))
-            self.xbytes = (2 if self.x_arow else 1) * HIDDEN
         self.post_gain = np.asarray(self.post_gain, dtype=np.float16)
         self.x8 = fp.quant_i8(fp.mul16(hm.rmsnorm(self.h16), self.post_gain), self.s_h.inv)
         if xm is not None and not np.array_equal(self.x8, np.asarray(xm)):
@@ -523,14 +550,13 @@ class LayerBuild(cm.ChipletBuild):
               f"{'in a_row' if self.x_arow else 'one row'}; its pushes {pushes}; |h| max "
               f"{float(np.max(np.abs(self.h16.astype(np.float32)))):.3g}, s_h {self.s_h.s:.4g}")
 
-    def _post_gain(self, args, p):
-        """stop attn: the post_attention_layernorm gain of the second block's layer, read as its data reads it."""
+    def _post_gain(self, pm):
+        """stop attn: the post_attention_layernorm gain of the second block's layer (pm: that block's params), read as
+        its data reads it."""
         if self.mlp_kind == "ffn":
-            pf = dict(p.get("ffn", {}))
-            cache = os.path.join(REPO, pf.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
-            return ffn_data.load_weights(cache, pf.get("model", "dsv2-lite-l0"))["gain"]
+            cache = os.path.join(REPO, pm.get("weights", "target/sim/automation/sweep/llm_blocks/ffn/cache"))
+            return ffn_data.load_weights(cache, pm.get("model", "dsv2-lite-l0"))["gain"]
         import json
-        pm = dict(p.get("moe", {}))
         cache = os.path.join(REPO, pm.get("weights", "target/sim/automation/sweep/common/weights/cache"))
         with open(os.path.join(cache, "manifest.json")) as f:
             m = json.load(f)["dsv2-lite-bf16"]

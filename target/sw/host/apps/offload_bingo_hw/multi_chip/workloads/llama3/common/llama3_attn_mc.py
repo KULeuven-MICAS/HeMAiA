@@ -96,9 +96,16 @@ class L1Tiles:
 
 
 class ABuild(cm.ChipletBuild):
+    """The attention prefill block (the module's docstring). run_driver makes the program in four steps: __init__ (the
+    parameters), mem_handles() (the data and the memory, no task), build() (the task graph: every task and edge) and
+    finish() (the compile into the C header and the data image, in which the compiler orders every core's tasks)."""
     TAG = "la"
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ first: the platform's and the graph's
+        switches, the chips, each one's memory chip and its push engine there, the empty DFG, the data staging (self.st)
+        and the stamp buffer (a layer's block shares the layer's). Then the block's: the rows a pass, the key tile,
+        W_O's slices, every switch with its checks, the weights' INT4 layout and the synthetic draws' seed."""
         super().__init__(args, p, plat, hw, shared=shared)
         if simd_fp16_lanes() != BR:
             raise ValueError(f"the SIMD has {simd_fp16_lanes()} FP16 lanes; the softmax takes one query a lane")
@@ -303,9 +310,19 @@ class ABuild(cm.ChipletBuild):
         self.checks_kind = str(p.get("checks", "y"))
         self.w4_paired = bool(p.get("w4_paired", True))
         self.int4_b = INT4_B_LAYOUT_PAIRED if self.w4_paired else INT4_B_LAYOUT_B
-        d = self.d = llama3_data.LlamaAttnData(tokens=self.T, rows=self.R, bc=self.bc,
-                                               seed=int(p.get("seed", 1)), wbits=self.wbits,
-                                               mask_c=bool(p.get("mask_c", False)))
+        self.seed = int(p.get("seed", 1))               # the synthetic weights' and prompt's draws
+
+    def mem_handles(self):
+        """The data and the memory; no task yet: the data and its golden (llama3_data.LlamaAttnData), the shapes and
+        the split that follow from the model (the passes, a pass's query and key tiles, the weight chunks of a head,
+        W_O's slices, the key/value groups on chip pairs, a query head a cluster), the reduce's golden and the report;
+        _stage (every input staged in L3 and HBM: x, its landing areas and flags, the trades' areas, the RoPE tables,
+        every cluster's weights and constants); the load streams' L1 slabs (make_streams), the weight rings
+        (make_rings) and the L1 buffers (_buffers: the symmetric buffer, every key and value tile, the constants, o8,
+        the sweep's buffers)."""
+        p = self.p
+        d = self.d = llama3_data.LlamaAttnData(tokens=self.T, rows=self.R, bc=self.bc, seed=self.seed,
+                                               wbits=self.wbits, mask_c=self.mask_c)
         self.lay, self.mesh = d.layout, d.mesh
         self.NP, self.HD, self.H = d.NP, d.HD, d.H
         # params passes: build only the prompt's first `passes` passes (a proof of concept of a long prompt in a short
@@ -375,8 +392,8 @@ class ABuild(cm.ChipletBuild):
         self._buffers()
 
     def pass_start(self, i):
-        """Where the tasks of pass i (i >= 1) begin, in the order they are made: nothing here; a layer starts an args
-        phase (llama3_prefill_mc.py)."""
+        """Where the tasks of pass i (i >= 1) begin, in the order they are made: nothing here; a whole layer starts an
+        args phase there."""
 
     def xsrc(self, off=0, chip_id=None):
         """The root's x source (INT8, A layout a pass) at byte `off` of all passes' x: what a layer's input norm writes

@@ -53,9 +53,9 @@ new piece, as their multicasts landed. checks "stages" adds that chip's Q8 and o
 
 PARAMETERS beyond the prefill's (params.hjson): cache (P, a whole number of 64-key tiles), q_cluster, kv_owner,
 root_ring_head. The base's constructor parses every other switch; it is handed the prefill of the P cached tokens as
-its shape (tokens = keys = P, chunks of prefill_chunk, default 128: only its shape checks read them) and this module's
-data, and the decode's shape replaces the prefill's before anything is staged (_decode_shape). Switches of a
-multi-chunk prefill are refused (UNSUPPORTED).
+its shape (tokens = keys = P, chunks of prefill_chunk, default 128: only its shape checks read them). The base's
+mem_handles() is handed this module's data, and the decode's shape replaces the prefill's before anything is staged
+(_decode_shape). Switches of a multi-chunk prefill are refused (UNSUPPORTED).
 """
 
 import contextlib
@@ -167,8 +167,8 @@ class FaDecodeData(fa_prefill_data.FaPrefillData):
 
 @contextlib.contextmanager
 def _data_as(data):
-    """FaBuild's constructor makes its data as fa_prefill_data.FaPrefillData(...): while it runs, that name hands back
-    `data`, the decode's (built beforehand), so the base's data, report and fold heads are the decode's."""
+    """FaBuild.mem_handles makes its data as fa_prefill_data.FaPrefillData(...): while it runs, that name hands back
+    `data`, the decode's (built beforehand), so the base's data and report are the decode's."""
     orig = fa_prefill_data.FaPrefillData
     fa_prefill_data.FaPrefillData = lambda *a, **kw: data
     try:
@@ -193,6 +193,8 @@ class DecodeTileSource(fa.FreshTileSource):
 
 
 class FaDecode(fs.FaStages):
+    """The MLA decode step (the module's docstring), in FaBuild's four steps: __init__ (the parameters), mem_handles()
+    (the data and the memory, no task), build() (the task graph) and finish() (the compile)."""
     TAG = "fd"
     # the switches the decode sets itself: the fresh prefill's stage "full" path, one block from HBM
     FORCED = dict(stage="full", fresh=True, kv_cols=True, x_hbm=True, x_bcast="memchip", bcast="bcast_l1",
@@ -206,6 +208,8 @@ class FaDecode(fs.FaStages):
                    "yr_store_tile", "yr_rel1", "post_root_first", "s4_warm_ring")
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet: the decode's own switches (FORCED) and the refused ones
+        (UNSUPPORTED), the cache's length P, then FaStages' parameters on the prefill that left the cache."""
         p = dict(p)
         for k, v in self.FORCED.items():
             if k in p and p[k] != v:
@@ -215,23 +219,28 @@ class FaDecode(fs.FaStages):
         if bad:
             raise ValueError(f"params {bad}: not for the decode (one query tile, one block)")
         self.P = int(p.get("cache", 1024))
-        bc = int(p.get("bc", 64))
-        kv = os.path.join(fa.REPO, p.get("kv_cache", "target/sim/automation/sweep/llm_blocks/fa/cache/"
-                                                     "dsv2_l1_kv_8193.npz"))
-        wc = os.path.join(fa.REPO, p.get("weights", "target/sim/automation/sweep/common/weights/cache"))
-        # the checkpoint FaBuild's data reads (its default model)
-        data = FaDecodeData(kv, wc, cache=self.P, bc=bc, n_calib=int(p.get("n_calib", 32)),
-                            rope_perm=bool(p.get("rope_perm", False)), mask_c=bool(p.get("mask_c", False)),
-                            wbits=int(p.get("wbits", 8)))
         # the base's constructor parses every switch; its shape checks are the prefill's, so it sees the prefill that
         # left the cache (tokens = keys = P, chunks of params prefill_chunk), and _stage applies the decode's shape
         base = dict(p, tokens=self.P, keys=self.P, chunk=int(p.get("prefill_chunk", 128)))
+        super().__init__(args, base, plat, hw, shared=shared)
+        # the decode's one query tile: q~ tile 0 is the only one
+        if self.s4_q8_pairs is not None and int(self.s4_q8_pairs) != 0:
+            raise ValueError("params s4_q8_pairs: needs s4_tile_absorb, and a q~ tile index (the decode's: 0)")
+        self.kvx, self.kv_two, self.kv_half = {}, [], set()
+
+    def mem_handles(self):
+        """The data and the memory; no task yet: this module's data (FaDecodeData, from the checkpoint FaBuild's data
+        reads, its default model), which FaBuild.mem_handles takes as its own (_data_as): its report, then _stage (the
+        decode's shape, then every input staged in L3 and HBM), the load streams, the rings and the L1 buffers. Then
+        what the decode's shape sets for FaStages' helpers: the pieces of the sweep's key tiles (NX) and the chip that
+        finishes the new key (kv_root, the owner)."""
+        data = FaDecodeData(self.kv_path, self.w_cache, cache=self.P, bc=self.bc, n_calib=self.n_calib,
+                            rope_perm=self.rope_perm, mask_c=self.mask_c, wbits=self.wbits)
         with _data_as(data):
-            super().__init__(args, base, plat, hw, shared=shared)
+            super().mem_handles()
         # the pieces of the sweep's key tiles (stage_kv_split counts a piece at or past NX as made after the window)
         self.NX = self.NPC
         self.kv_root = self.owner
-        self.kvx, self.kv_two, self.kv_half = {}, [], set()
 
     # ---- the shape and the data ---------------------------------------------------------------------------------
     def _decode_shape(self):
@@ -239,7 +248,7 @@ class FaDecode(fs.FaStages):
         the query cluster, one chunk, the decode's key tiles, the token's key owned by kv_owner."""
         d, p = self.d, self.p
         if not isinstance(d, FaDecodeData):
-            raise TypeError("FaBuild's constructor no longer makes its data as fa_prefill_data.FaPrefillData (_data_as)")
+            raise TypeError("FaBuild.mem_handles does not make its data as fa_prefill_data.FaPrefillData (_data_as)")
         print(f"[{self.TAG}] decode: the prefill shape above is the cache's; the step runs one query tile of {BR} rows "
               f"at position {self.P} over {d.NT} key tiles of {self.bc}")
         self.T = 1                                     # one decode token

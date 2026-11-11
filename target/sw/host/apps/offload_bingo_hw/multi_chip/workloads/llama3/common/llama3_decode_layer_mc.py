@@ -134,7 +134,7 @@ import gemv_utils  # noqa: E402  (util/sim/gemm: ffn_data puts it on sys.path)
 import llama3_data  # noqa: E402
 import llama3_decode_mc as lmd  # noqa: E402
 import llama3_decode_ks_mc as lks  # noqa: E402
-from dsv2_prefill_mc import AliasStaging  # noqa: E402
+from chiplet_mc import AliasStaging  # noqa: E402
 
 ATOM, LANES = lmd.ATOM, lmd.LANES          # the xDMA's 8-byte lane, lanes a beat
 LINK_GBPS = 231.2                          # the memory chips' links together, GB/s
@@ -233,9 +233,19 @@ class FfnPart(fdm.DBuild):
 
 
 class LayerBuild(cm.ChipletBuild):
+    """The whole decode layer (the module docstring), its blocks parts of the layer's graph. run_driver makes the
+    program in four steps: __init__ (the parameters, the parts made), mem_handles() (the data, the golden and the
+    memory: each part's in turn, between them the layer's golden that the next one reads, then the layer's own),
+    build() (the task graph: the attention's, the glue's, the FFN's with the final) and finish() (the checks of the
+    graph, then the compile into the C header and the data image)."""
     TAG = "dl"
 
     def __init__(self, args, p, plat, hw):
+        """The parameters; no data, memory or task yet. ChipletBuild.__init__ with the switches both blocks share;
+        params layer (stop, ffn_prefetch, attn, x_arow); with one L3 region for both weight rings, the layer's staging
+        (AliasStaging); the synthetic FFN registered (llama3_data.register_ffn); then the parts, each a block over the
+        layer's graph and staging with its own params: the attention (AttnPart, or AttnPartKs with attn ks) and, stop
+        full, the FFN (FfnPart). X's form follows the FFN's (in a_row with ffn.gu_gemv)."""
         common = {k: v for k, v in p.items() if k not in ("attn", "ffn", "layer")}
         lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
@@ -264,11 +274,29 @@ class LayerBuild(cm.ChipletBuild):
         self.sym_zero = False
         self.part_checks, self.ffn, self.ffn_pre = [], None, []
         self.sym_more, self.kv_app = [], []      # attn ks: the attention's symmetric buffers, its append
-        seed = int(common.get("seed", 1))
-        llama3_data.register_ffn(seed=seed)
+        self.seed = int(common.get("seed", 1))
+        llama3_data.register_ffn(seed=self.seed)
 
+        # ---- the parts --------------------------------------------------------------------------------------------
+        self.attn = Part(self, args, dict(common, **p["attn"]), plat, hw)
+        if self.stop == "full":
+            pf = dict(common, **p["ffn"])
+            pf["model"] = llama3_data.MODEL
+            self.ffn = FfnPart(self, args, pf, plat, hw)
+        # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: ffn.gu_gemv)
+        self.x_arow = bool(self.ffn.gu_gemv) if self.ffn is not None else bool(lp.get("x_arow", False))
+
+    def mem_handles(self):
+        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        (AttnPart's or AttnPartKs's mem_handles), then the golden on its data: x (its input norm checked against the
+        block's row), x8 in a_row, h, and the post-attention gain. Stop full: the FFN's (FfnPart's mem_handles, on h),
+        its gain checked against the layer's, s_h, X and the output's golden, its symmetric buffers held to the end;
+        stop attn: s_h and X from h. X's image (x_arow: in a_row); attn ks: the attention's symmetric buffers held to
+        the end too. The layer's own data in the HBM of the root's memory chip (x, the constants, the output or stop
+        attn's h and X) and the root's cluster-0 L1 buffers."""
         # ---- the attention, and the glue's golden ------------------------------------------------------------------
-        A = self.attn = Part(self, args, dict(common, **p["attn"]), plat, hw)
+        A = self.attn
+        A.mem_handles()
         d = A.d
         fp, hm = d.fp, d.hm
         self.H = H = d.H
@@ -279,13 +307,12 @@ class LayerBuild(cm.ChipletBuild):
             raise AssertionError("the input norm of one row differs from the attention data's row")
         self.x8_attn = A._a_row(d.hq[A.ctx])                                  # what the GEMVs read, a_row
         self.h16 = fp.add16(fp.mul16(d.y_raw, d.wo_f), self.x16)             # the residual stream after the attention
-        self.ffn_gain = llama3_data.ffn_gain(seed).astype(F16)
+        self.ffn_gain = llama3_data.ffn_gain(self.seed).astype(F16)
 
         # ---- the FFN ----------------------------------------------------------------------------------------------
         if self.stop == "full":
-            pf = dict(common, **p["ffn"])
-            pf["model"] = llama3_data.MODEL
-            F = self.ffn = FfnPart(self, args, pf, plat, hw)
+            F = self.ffn
+            F.mem_handles()                     # its data on h
             if not np.array_equal(F.d.gain16, self.ffn_gain):
                 raise AssertionError("the FFN block's gain and the layer's differ")
             self.s_h = F.d.s_h
@@ -297,8 +324,6 @@ class LayerBuild(cm.ChipletBuild):
             xg = fp.mul16(hm.rmsnorm(self.h16[None, :]), self.ffn_gain[None, :])
             self.s_h = hm.QScale.for_amax(float(np.max(np.abs(xg.astype(np.float32)))))
             self.x8_ffn = np.asarray(fp.quant_i8(xg, self.s_h.inv)[0], dtype=np.int8)
-        # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: ffn.gu_gemv)
-        self.x_arow = bool(self.ffn.gu_gemv) if self.ffn is not None else bool(lp.get("x_arow", False))
         self.x_img = gemv_utils.a_row_bytes(self.x8_ffn) if self.x_arow else self.x8_ffn
         self.XN = self.x_img.size
         if self.ffn is not None and self.XN != self.ffn.XR:

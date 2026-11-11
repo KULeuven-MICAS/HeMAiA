@@ -293,9 +293,12 @@ class DBuild(ABuild):
     y_to_hbm = True
 
     def __init__(self, args, p, plat, hw, shared=None):
-        # the prefill's builder is not run: its data, staging and buffers are a prompt's passes. The helpers taken
-        # from it (_load, nd, copy, copy2d, mul, add, quant, xd, kv_cc, l1_of, ot8_bits, _pack_b) read only what is set
-        # here
+        """The parameters; no data, memory or task yet. The decode runs in ABuild's four steps (__init__, mem_handles(),
+        build(), finish()), but neither ABuild.__init__ nor ABuild.mem_handles: their data, staging and buffers are a
+        prompt's passes. The helpers taken from ABuild (_load, nd, copy, copy2d, mul, add, quant, xd, kv_cc, l1_of,
+        ot8_bits, _pack_b) read only what is set here and in mem_handles. ChipletBuild.__init__ (a layer's block shares
+        the layer's staging and graph), then the decode's switches with their checks, the rows, the key tile, the
+        cache's length and parts."""
         cm.ChipletBuild.__init__(self, args, p, plat, hw, shared=shared)
         if self.T != 1:
             raise ValueError(f"params tokens={self.T}: the decode runs one token")
@@ -315,7 +318,22 @@ class DBuild(ABuild):
         self.R = int(p.get("rows", 64))
         self.bc = int(p.get("bc", 64))
         self.ctx = int(p.get("ctx", 1024))
-        d = self.d = LlamaDecodeData(ctx=self.ctx, rows=self.R, bc=self.bc, seed=int(p.get("seed", 1)),
+        self.seed = int(p.get("seed", 1))               # the synthetic weights' and prompt's draws
+        # params cache_parts: the cache in this many parts of whole key tiles, a push and a flag each, so the sweep's
+        # first tiles start while the later parts land
+        self.P = int(p.get("cache_parts", 2))
+        self.slot = {}
+        self.sym_zero = False                                # no symmetric L1 buffer: x and o land in L3
+
+    def mem_handles(self):
+        """The data and the memory; no task yet. ABuild.mem_handles is not run, as ABuild.__init__ is not: the data
+        and its golden (LlamaDecodeData), the shapes that follow from the model (the key tiles, the weight chunks of a
+        head, W_O's columns a cluster, the cache's parts), the key/value groups on chip pairs and a query head a
+        cluster, the report; _stage (x, y, o and the cache's areas and flags in L3, every chip's half of its group's
+        cache and every cluster's weights and constants in HBM); the load streams' L1 slabs, the weight rings and the
+        L1 buffers (_buffers)."""
+        p = self.p
+        d = self.d = LlamaDecodeData(ctx=self.ctx, rows=self.R, bc=self.bc, seed=self.seed,
                                      wbits=self.wbits, mask_c=self.mask_c)
         self.lay, self.mesh = d.layout, d.mesh
         self.HD, self.H = d.HD, d.H
@@ -331,9 +349,6 @@ class DBuild(ABuild):
         first = np.arange(QC) * 2
         self.perm = np.concatenate([np.concatenate([t * 2 * QC + first, t * 2 * QC + first + 1])
                                     for t in range(self.NQC // 2)])
-        # params cache_parts: the cache in this many parts of whole key tiles, a push and a flag each, so the sweep's
-        # first tiles start while the later parts land
-        self.P = int(p.get("cache_parts", 2))
         if self.P < 1 or self.CT % self.P:
             raise ValueError(f"params cache_parts={self.P}: whole key tiles of the {self.CT} cached ones a part")
         self.PT = self.CT // self.P                          # key tiles a part
@@ -359,8 +374,6 @@ class DBuild(ABuild):
         self.HB = self.TILE_B // 2                           # a tile's half
         self.KRUN = self.NKVC * QC * BR                      # a key half's run in a 16-key block
         self.PB = 2 * self.PT * self.HB                      # a cache part: [K halves | V halves]
-        self.slot = {}
-        self.sym_zero = False                                # no symmetric L1 buffer: x and o land in L3
         for line in d.report(d.y16(d.y_raw)):
             print(f"[{self.TAG}] {line}")
         print(f"[{self.TAG}] decode: {self.CT} cached key tiles of {self.bc} in {self.P} parts and the new key's tile; "

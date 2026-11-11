@@ -35,12 +35,20 @@ from libs.blocks import fa_sweep  # noqa: E402
 
 
 class LStages(ABuild):
+    """ABuild's block stage by stage (the module's docstring), in ABuild's four steps: __init__ (the parameters),
+    mem_handles() (the data and the memory, no task), build() (the stage's task graph) and finish() (the compile)."""
 
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters: the stage, then ABuild's."""
         self.stage = str(p.get("stage", "full"))
         if self.stage not in ("full", "1234", "5", "678"):
             raise ValueError(f"params stage={self.stage!r}: full, 1234, 5 or 678")
         super().__init__(args, p, plat, hw, shared=shared)
+
+    def mem_handles(self):
+        """ABuild's data and memory, then the stage's inputs in the memory chips' HBM (stages 5 and 678) and, for
+        stage 5, the L3 area its outputs are copied into."""
+        super().mem_handles()
         if self.stage == "5":
             self._stage5_images()
         elif self.stage == "678":

@@ -81,7 +81,12 @@ STAGES = (0, 1, 2, 3, "0123", 4, 5, "678", "full", "xu")
 
 
 class FaStages(fa.FaBuild):
+    """FaBuild's block stage by stage (the module's docstring), in FaBuild's four steps: __init__ (the parameters),
+    mem_handles() (FaBuild's, whose _stage here adds each stage's inputs), build() and finish()."""
+
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters; no data, memory or task yet: FaBuild's (x from HBM by default), then the stage and its
+        switches with their checks."""
         p = dict(p)
         p.setdefault("x_hbm", True)
         super().__init__(args, p, plat, hw, shared=shared)

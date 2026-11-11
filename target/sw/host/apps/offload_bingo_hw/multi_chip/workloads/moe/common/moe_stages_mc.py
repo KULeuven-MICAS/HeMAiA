@@ -48,7 +48,12 @@ STOP = {0: "route", "01": "route", "012": "shared", "0123": "gateup", "01234": "
 
 
 class MStages(mp.MBuild):
+    """MBuild up to a stage (the module docstring). run_driver makes the program in MBuild's four steps: __init__ (the
+    parameters), mem_handles() (MBuild's: the data, the placement, the golden and the memory), build() (stage 0's task
+    graph here, every other stage's MBuild's) and finish()."""
+
     def __init__(self, args, p, plat, hw, shared=None):
+        """The parameters: the stage (params stage) and the window's end it sets (params stop), then MBuild.__init__."""
         p = dict(p)
         self.stage = p.get("stage", "full")
         if self.stage not in STAGES:
