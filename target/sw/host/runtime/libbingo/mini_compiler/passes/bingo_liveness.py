@@ -14,7 +14,7 @@
 #    names the task that waits for the engine (`operands_held_by`: a queued GEMM's start, whose
 #    array streams the operands until the wait); that task is a user of everything it names.
 #    A task that only writes addresses into an engine's configuration and starts nothing
-#    (`config_only`: a GEMM's configure task, blocks/gemm_async.py cfg_ahead) is no user: its
+#    (`config_only`: a split dispatch's configure part, bingo_dfg_schedule.py) is no user: its
 #    start task, which names the same buffers, is.
 #
 # 2. ORDERING COMES FROM THE GRAPH, NOT A SCHEDULE. BINGO has no linear time axis -- the
@@ -117,26 +117,102 @@ def can_share(users_a: Set, users_b: Set, desc: Dict[object, Set]) -> bool:
     return all_before(users_a, users_b) or all_before(users_b, users_a)
 
 
+def _column_summary(users, desc):
+    """(the latest of the users' earliest reach on each column, the earliest user on each column, the users that are
+    leaves) with desc's chain cover (bingo_reach.reach_sets, column form), else None. Every user of A precedes every
+    column user of B exactly when A's first vector is at most B's second everywhere: a reaches b on b's column when its
+    label there is at most b's position, and a user in both fails it (a node does not reach itself). A leaf of B has no
+    column: _reach_leaf tests it."""
+    import numpy as np
+    L, where, pos = getattr(desc, "L", None), getattr(desc, "where", None), getattr(desc, "pos", None)
+    if L is None:
+        return None
+    K = L.shape[1]
+    late = np.full(K, -1, dtype=np.int64)
+    first = np.full(K, np.iinfo(np.int64).max, dtype=np.int64)
+    leaves = []
+    for u in users:
+        w = where.get(u)
+        if w is None:
+            return None                         # not in the graph: the pairwise test
+        np.maximum(late, L[pos[u]], out=late)   # a leaf has a label row too
+        if w[0] < 0:
+            leaves.append(u)
+        elif w[1] < first[w[0]]:
+            first[w[0]] = w[1]
+    return late, first, leaves
+
+
+def _reach_leaf(users, upos, b, desc, memo):
+    """Whether every one of `users` (a list, upos their rows in desc.L) reaches the leaf b: bingo_reach._reaches, b's
+    ancestry walked once, the column test over all the users at once."""
+    import numpy as np
+    from bingo_reach import _leaf_ancestry
+    if b not in memo:
+        leaves, cols = _leaf_ancestry(desc.G, desc.where, b)
+        memo[b] = (leaves | set(cols), np.array([desc.where[p][0] for p in cols], dtype=np.int64),
+                   np.array([desc.where[p][1] for p in cols], dtype=np.int64))
+    above, cc, ci = memo[b]
+    if len(cc):
+        ok = (desc.L[upos[:, None], cc[None, :]] <= ci[None, :]).any(axis=1)
+    else:
+        ok = np.zeros(len(users), dtype=bool)
+    return all(k or (a is not b and a in above) for a, k in zip(users, ok))
+
+
 def build_interference(handle_users, desc, level: str = "L1"):
     """(buffers, interference) for one memory level.
 
     interference[i] is the set of buffer indices that may be live at the same time as i, and
-    therefore must not overlap in space.
+    therefore must not overlap in space. Buffers whose users all sit on the reach labels' columns are compared a whole
+    row at a time (_column_summary); the others pair by pair (can_share).
     """
+    import numpy as np
     items = [(h, u) for (h, u) in handle_users.values() if h.mem_level == level]
     items.sort(key=lambda hu: (hu[0].chip_id, hu[0].cluster_id, hu[0].name))
     n = len(items)
     interference = [set() for _ in range(n)]
-    for i in range(n):
-        hi, ui = items[i]
-        for j in range(i + 1, n):
-            hj, uj = items[j]
-            # different address spaces cannot alias
-            if (hi.chip_id, hi.cluster_id) != (hj.chip_id, hj.cluster_id):
-                continue
-            if not can_share(ui, uj, desc):
-                interference[i].add(j)
-                interference[j].add(i)
+    spaces = {}
+    for i, (h, _u) in enumerate(items):
+        spaces.setdefault((h.chip_id, h.cluster_id), []).append(i)      # different address spaces cannot alias
+    for idxs in spaces.values():
+        summ = {i: _column_summary(items[i][1], desc) for i in idxs}
+        fast = [i for i in idxs if summ[i] is not None]
+        if fast:
+            late = np.stack([summ[i][0] for i in fast])
+            first = np.stack([summ[i][1] for i in fast])
+            memo, seen, rows = {}, {}, {}
+
+            def before(x, y):
+                """every user of x precedes every user of y, given that holds for y's column users"""
+                if x not in rows:
+                    us = list(items[x][1])
+                    rows[x] = (us, np.array([desc.pos[u] for u in us], dtype=np.int64))
+                for b in summ[y][2]:
+                    k = (x, b)
+                    if k not in seen:
+                        seen[k] = _reach_leaf(*rows[x], b, desc, memo)
+                    if not seen[k]:
+                        return False
+                return True
+            leafy = np.array([bool(summ[i][2]) for i in fast])
+            for r, i in enumerate(fast):
+                fwd = np.all(late[r] <= first, axis=1)          # i's users precede j's column users
+                bwd = np.all(late <= first[r], axis=1)          # j's users precede i's column users
+                sure = (fwd & ~leafy) | (bwd & (not leafy[r]))  # no leaf on the later side: exact
+                for c in np.nonzero(~sure)[0]:
+                    j = fast[c]
+                    if j == i or j in interference[i]:
+                        continue
+                    if not ((fwd[c] and before(i, j)) or (bwd[c] and before(j, i))):
+                        interference[i].add(j)
+                        interference[j].add(i)
+        slow = [i for i in idxs if summ[i] is None]
+        for i in slow:
+            for j in idxs:
+                if j != i and j not in interference[i] and not can_share(items[i][1], items[j][1], desc):
+                    interference[i].add(j)
+                    interference[j].add(i)
     return items, interference
 
 
@@ -154,12 +230,14 @@ def liveness_report(handle_users, desc, level: str = "L1") -> str:
         # lower bound for any packer: the heaviest MUTUALLY interfering set. Greedy clique --
         # summing one buffer's neighbours is not a bound, they need not interfere each other.
         lb = 0
-        for seed in sorted(idxs, key=lambda i: -items[i][0].size):
-            clique = [seed]
-            for c in sorted(idxs, key=lambda i: -items[i][0].size):
-                if c != seed and all(c in interference[m] for m in clique):
-                    clique.append(c)
-            lb = max(lb, sum(items[i][0].size for i in clique))
+        by_size = sorted(idxs, key=lambda i: -items[i][0].size)
+        for seed in by_size:
+            weight, common = items[seed][0].size, set(interference[seed])    # interfere with the whole clique
+            for c in by_size:
+                if c in common:
+                    weight += items[c][0].size
+                    common &= interference[c]
+            lb = max(lb, weight)
         shareable = sum(1 for i in idxs if len(interference[i]) < len(idxs) - 1)
         lines.append(
             f"    chip {key[0]:#04x} cluster {key[1]}: {len(idxs):3d} buffers, "

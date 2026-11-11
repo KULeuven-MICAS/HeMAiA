@@ -59,6 +59,7 @@ class StaticL1Options:
     pin_first: Tuple[str, ...] = ()   # name substrings to place at the front
     pin_last: Tuple[str, ...] = ()    # ...and at the back
     search_tries: int = 64            # order="search": the jittered largest-first orders tried a cluster
+    search_more: int = 16             # ... and up to this many times as many, jittered wider, where it is just over the capacity
 
     def __post_init__(self):
         if self.order not in ("name", "size", "reverse", "search"):
@@ -91,20 +92,26 @@ def _order_with_constraints(preference, preds, items):
     the one the heuristic wanted first is taken first. A workload that declares no constraints
     therefore gets byte-identical output to the unconstrained packer.
     """
+    import heapq
     want = {i: n for n, i in enumerate(preference)}
-    subset = set(preference)
-    remaining = {i: {p for p in preds[i] if p in subset} for i in preference}
-    out, ready = [], sorted((i for i in preference if not remaining[i]), key=lambda i: want[i])
+    left, succ = {}, {}
+    for i in preference:
+        ps = [p for p in preds[i] if p in want]
+        left[i] = len(ps)
+        for p in ps:
+            succ.setdefault(p, []).append(i)
+    if not succ:
+        return list(preference)
+    ready = [(want[i], i) for i in preference if not left[i]]
+    heapq.heapify(ready)
+    out = []
     while ready:
-        i = ready.pop(0)
+        _w, i = heapq.heappop(ready)
         out.append(i)
-        newly = []
-        for j, ps in remaining.items():
-            if i in ps:
-                ps.discard(i)
-                if not ps and j not in out and j not in ready:
-                    newly.append(j)
-        ready = sorted(ready + newly, key=lambda k: want[k])
+        for j in succ.get(i, ()):
+            left[j] -= 1
+            if not left[j]:
+                heapq.heappush(ready, (want[j], j))
     if len(out) != len(preference):
         stuck = [items[i][0].name for i in preference if i not in out]
         raise ValueError(
@@ -114,8 +121,12 @@ def _order_with_constraints(preference, preds, items):
 
 
 def pack(handle_users, desc, level: str = "L1", constraints=None,
-         opts: Optional["StaticL1Options"] = None):
+         opts: Optional["StaticL1Options"] = None, capacity: Optional[int] = None):
     """Assign every buffer an offset within its own (chip, cluster) address space.
+
+    With a `capacity` and order="search", a cluster the orders tried overflow by no more than 1/32 of it, and whose
+    lower bound fits, is searched further (opts.search_more), each size scaled by a factor in [0.5, 1.5]: first-fit's
+    peak moves with the order by a few percent, and a narrower jitter can leave two sizes' order where it is.
 
     Returns (placement, stats) where placement maps id(handle) -> (handle, offset) and stats
     maps (chip, cluster) -> {'peak', 'sum', 'lower_bound', 'count'}.
@@ -196,8 +207,10 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             # end of one buffer, or computes an address as `other_buffer - my_buffer`, depends
             # on the RELATIVE ORDER of two allocations and nothing declares that. Allocation
             # order preserves every "X before Y" relationship by construction while still
-            # reclaiming what the liveness analysis finds. order="size" for experiments.
-            order = sorted(idxs, key=lambda i: items[i][0].name)
+            # reclaiming what the liveness analysis finds. order="size" for experiments. A buffer the compiler made
+            # (compiler_made: a shared setup's table, bingo_dfg_schedule.py) goes after the application's, so it never
+            # lands between two the application placed side by side by their names.
+            order = sorted(idxs, key=lambda i: (getattr(items[i][0], "compiler_made", False), items[i][0].name))
         elif opts.order == "reverse":
             # Every buffer moves. A bisect instrument: separates "any reordering breaks
             # this" from "this particular layout does".
@@ -209,7 +222,8 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
         # they disagree. Kahn's algorithm, taking the heuristic's order as the tie-break, so a
         # workload with no constraints gets exactly the layout it got before.
         cands = [order]
-        if opts.order == "search" and not pins and not pins_last:
+        searching = opts.order == "search" and not pins and not pins_last
+        if searching:
             # order="search": first-fit over several preference orders, the lowest peak kept. Largest
             # first, allocation order, then largest first with each size scaled by a seeded factor in
             # [0.75, 1.25] (deterministic: the seed is the cluster), so near-equal sizes trade places. Every
@@ -218,19 +232,20 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             rng = random.Random(key[0] * 64 + key[1])
             sym = lambda i: not items[i][0].name.startswith("AAAA_")
             cands = [order, sorted(idxs, key=lambda i: items[i][0].name)]
-            for _ in range(opts.search_tries):
-                f = {i: rng.uniform(0.75, 1.25) for i in idxs}
-                cands.append(sorted(idxs, key=lambda i: (-items[i][0].size * f[i], items[i][0].name)))
-            cands = [sorted(o, key=sym) for o in cands]
+
+            def jittered(lo=0.75, hi=1.25):
+                f = {i: rng.uniform(lo, hi) for i in idxs}
+                return sorted(sorted(idxs, key=lambda i: (-items[i][0].size * f[i], items[i][0].name)), key=sym)
+            cands = [sorted(o, key=sym) for o in cands] + [jittered() for _ in range(opts.search_tries)]
+
+        fp = {i: _footprint(items[i][0].size, alignment, guard) for i in idxs}
 
         def first_fit(order):
             local: Dict[int, int] = {}
-            placed: List[Tuple[int, int, int]] = []   # (idx, start, end)
             peak = 0
             for i in order:
-                size = _footprint(items[i][0].size, alignment, guard)
-                blockers = [(s, e) for (j, s, e) in placed if j in interference[i]]
-                blockers.sort()
+                size = fp[i]
+                blockers = sorted((local[j], local[j] + fp[j]) for j in interference[i] if j in local)
                 # start above every declared predecessor: one alignment unit past its base is the
                 # lowest address that still satisfies `offset[pred] < offset[i]`
                 off = 0
@@ -241,30 +256,38 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
                     if off + size <= s:
                         break          # fits in the gap below this blocker
                     off = max(off, e)
-                placed.append((i, off, off + size))
                 local[i] = off
                 peak = max(peak, off + size)
             return peak, local
 
-        peak, local = None, None
-        for cand in cands:
-            pk, lc = first_fit(_order_with_constraints(cand, preds, items))
-            if peak is None or pk < peak:
-                peak, local = pk, lc
-        for i, off in local.items():
-            placement[id(items[i][0])] = (items[i][0], off)
-        total = sum(_footprint(items[i][0].size, alignment, guard) for i in idxs)
+        total = sum(fp.values())
         # A LOWER BOUND must be the weight of a set that is MUTUALLY interfering -- a clique.
         # Summing one buffer's neighbours is not that (they need not interfere with each
         # other) and overstates it. Greedy max-weight clique instead: exact enough to tell
         # whether a better solver (MiniMalloc) has anything left to find.
         lb = 0
-        for seed in sorted(idxs, key=lambda i: -items[i][0].size):
-            clique = [seed]
-            for c in sorted(idxs, key=lambda i: -items[i][0].size):
-                if c != seed and all(c in interference[m] for m in clique):
-                    clique.append(c)
-            lb = max(lb, sum(_footprint(items[i][0].size, alignment, guard) for i in clique))
+        by_size = sorted(idxs, key=lambda i: -items[i][0].size)
+        for seed in by_size:
+            weight, common = fp[seed], set(interference[seed])     # the buffers that interfere with the whole clique
+            for c in by_size:
+                if c in common:
+                    weight += fp[c]
+                    common &= interference[c]
+            lb = max(lb, weight)
+        peak, local = None, None
+        for cand in cands:
+            pk, lc = first_fit(_order_with_constraints(cand, preds, items))
+            if peak is None or pk < peak:
+                peak, local = pk, lc
+        if searching and capacity is not None and lb <= capacity < peak <= capacity + capacity // 32:
+            for _ in range(opts.search_tries * opts.search_more):
+                pk, lc = first_fit(_order_with_constraints(jittered(0.5, 1.5), preds, items))
+                if pk < peak:
+                    peak, local = pk, lc
+                    if peak <= capacity:
+                        break
+        for i, off in local.items():
+            placement[id(items[i][0])] = (items[i][0], off)
         stats[key] = {"peak": peak, "sum": total,
                       "lower_bound": min(lb, total), "count": len(idxs)}
     return placement, stats

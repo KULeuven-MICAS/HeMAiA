@@ -63,9 +63,9 @@ class BingoDFGStaticL1Mixin:
         # An input to placement, not only a check afterwards. The check still runs: packer
         # and oracle would both have to be wrong to let a bad layout through.
         order_constraints = collect_placement_order(nodes)
-        placement, stats = pack(handle_users, desc, "L1",
-                                constraints=order_constraints, opts=opts)
         cap = getattr(self, "l1_capacity_bytes", None)
+        placement, stats = pack(handle_users, desc, "L1",
+                                constraints=order_constraints, opts=opts, capacity=cap)
         print("[static-l1] placement if enabled:")
         print(report(stats, cap))
 
