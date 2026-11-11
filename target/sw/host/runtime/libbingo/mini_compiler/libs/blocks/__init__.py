@@ -22,7 +22,8 @@ cannot honour.
 from . import collective
 from .fa_sweep import FaSweepBufs, FaSweepCfg, fa_sweep, fa_sweep_alloc
 from .flash_attention import FaCfg, FlashAttention
-from .linear import Linear, LinearCfg, LoadStream, WeightRings, record_spec
+from .linear import Linear, LinearCfg, record_spec
+from .load_stream import LoadStream, WeightRings
 from .gather import chain_gather, fa_gather
 from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, MlaDimOut, MlaDimPV,
                   MlaDimPVCfg, MlaRowMax, MlaRowMaxCfg, MlaShardCfg, MlaShardOut, MlaShardP,

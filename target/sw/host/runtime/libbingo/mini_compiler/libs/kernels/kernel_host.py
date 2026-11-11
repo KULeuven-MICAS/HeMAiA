@@ -400,7 +400,7 @@ class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
 class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
     """The weight prefetcher (host_kernel_lib.h): the memory chiplet's iDMA PUSHES every
     streamed weight chunk into per-cluster L3 rings, then a flag per chunk, as fast as the
-    clusters release slots. Built by libs/blocks/linear.py WeightRings; see there."""
+    clusters release slots. Built by libs/blocks/load_stream.py WeightRings; see there."""
     KERNEL_NAME = "__host_bingo_kernel_weight_prefetch"
 
     def __init__(self, sched_addr, ring_addr, flag_addr, release_addr, seq_addr, rec_addr,

@@ -713,11 +713,6 @@ class LayerBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] task args: at most {nb:,} B a cluster (chip {k:#04x} cluster {c}), estimate")
 
     # ---- emission -----------------------------------------------------------------------------------------------------
-    def emit_ring_schedules(self):
-        for part in (self.attn, self.ffn):
-            if part is not None:
-                part.emit_ring_schedules()
-
     def data_h_extra(self):
         return self.st.lines() if self.ring_alias else []
 

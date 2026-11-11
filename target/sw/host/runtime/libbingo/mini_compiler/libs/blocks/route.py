@@ -207,7 +207,7 @@ class SlotLoad(Block):
         rec = bound["rec"]
         rings = getattr(c.stream, "rings", None) if c.stream is not None else None
         if rings is not None:
-            from .linear import WeightRings
+            from .load_stream import WeightRings
             sl, fl, rl, seq = rings.take(c.cluster, nbytes=2 * c.cols,
                                          src=(c.slot << 8) | WeightRings.FIELDS[c.field],
                                          kind=1, offset=c.offset)

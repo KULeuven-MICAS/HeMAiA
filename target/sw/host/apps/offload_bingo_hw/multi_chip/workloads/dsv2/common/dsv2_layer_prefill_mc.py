@@ -884,10 +884,6 @@ class LayerBuild(cm.ChipletBuild):
         cm.ChipletBuild.run_checks(self, checks)
 
     # ---- emission -----------------------------------------------------------------------------------------------
-    def emit_ring_schedules(self):
-        for part in [self.attn] + self.mlps:
-            part.emit_ring_schedules()
-
     def data_h_extra(self):
         return self.st.lines()
 

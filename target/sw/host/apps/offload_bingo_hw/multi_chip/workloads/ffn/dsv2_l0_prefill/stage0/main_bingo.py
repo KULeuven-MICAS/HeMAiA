@@ -171,9 +171,6 @@ class Stage0(cm.ChipletBuild):
                          ("x_land_last", BingoMemSymbol(f"{T}_xland", offset=self.NI * self.XB - CHK, chip_id=last),
                           self.x_img[-CHK:].view(np.uint8), CHK)])
 
-    def emit_ring_schedules(self):
-        """No weight is streamed: no ring, no prefetcher."""
-
     def finish(self, app_name, x_prefixes=("x_wait_",)):
         self.dfg.split_chip_functions = True     # one host function a chip
         super().finish(app_name, x_prefixes)

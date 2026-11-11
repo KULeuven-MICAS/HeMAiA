@@ -689,7 +689,7 @@ class FaBuild(cm.ChipletBuild):
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
-                    BingoMemSymbol(f"{T}_ring_sched_k{k:02x}"), self.rings[k].slots, self.h_flags, self.h_rel,
+                    self.ring_schedule(k, self.rings[k]), self.rings[k].slots, self.h_flags, self.h_rel,
                     self.h_seq[self.mem[k]], self.h_rec, 1, 1, self.n_slots, self.slot_bytes, self.mem[k],
                     batch=self.ring_batch, policy=int(wr.get("policy", 1)), engine=self.engine[k],
                     queued=self.ring_queued, head=self.ring_head, batch_head=self.ring_batch_head))

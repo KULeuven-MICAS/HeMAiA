@@ -1123,7 +1123,7 @@ print("\nLinear: the one-token GEMV, and weights streamed through double buffers
 from bingo_kernel_args import SnaxBingoKernelGemvArgs as _Gv               # noqa: E402
 from libs.blocks import (Linear as _Lin, QuantizeARow as _QAR,                # noqa: E402
                         RMSNormRow as _RNR, ScaleCols as _SC)
-from libs.blocks.linear import DEFAULT_W_CHUNK_BYTES as _WCB                  # noqa: E402
+from libs.blocks.load_stream import DEFAULT_W_CHUNK_BYTES as _WCB                  # noqa: E402
 
 check("the D-port shift for each of the layer's depths",
       [_Gv.shift_for_depth(k) for k in (128, 512, 576, 1408, 2048, 2816)]

@@ -56,7 +56,7 @@ from bingo_kernel_args import (
 
 from ..comm import Block, BlockResult, Ctx, DType, Layout, MemLevel, Port, PortSpec
 from ..comm.ports import at_offset
-from .linear import LoadStream
+from .load_stream import LoadStream
 
 BEAT = 64
 

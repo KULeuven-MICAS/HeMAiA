@@ -521,7 +521,7 @@ class FaDecodeKs(FaBuild):
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
-                    BingoMemSymbol(f"{T}_ring_sched_k{k:02x}"), rings.slots, self.h_flags, self.h_rel,
+                    self.ring_schedule(k, rings), rings.slots, self.h_flags, self.h_rel,
                     self.h_seq[self.mem[k]], self.h_rec, 1, 1, self.n_slots, self.slot_bytes, self.mem[k],
                     batch=self.ring_batch, policy=policy, engine=self.engine[k], queued=0, head=self.ring_head,
                     batch_head=self.ring_batch_head))

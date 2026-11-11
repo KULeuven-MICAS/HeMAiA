@@ -1112,11 +1112,6 @@ class LayerBuild(cm.ChipletBuild):
             print(f"[{self.TAG}] WARNING: L1 estimate over l1_capacity on {over} clusters (params args phases needed)")
 
     # ---- emission ----------------------------------------------------------------------------------------------------
-    def emit_ring_schedules(self):
-        for part in (self.attn, self.mlp):
-            if part is not None:
-                part.emit_ring_schedules()
-
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_", "kx_ld_")):
         M = self.mlp
         self.check_collectives()

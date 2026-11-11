@@ -7,7 +7,7 @@
 // The weight prefetcher's byte guard (host_kernel_lib.h weight_prefetch): which bytes of a ring
 // still belong to a chunk the cluster has not read.
 //
-// A run's chunks sit back to back from the run's first slot (mini_compiler libs/blocks/linear.py
+// A run's chunks sit back to back from the run's first slot (mini_compiler libs/blocks/load_stream.py
 // WeightRings.take_ex, the same rule), so a chunk shorter than a slot leaves the next chunk of
 // its run starting inside a LOWER slot than its own: chunk k's bytes can reach down into slots
 // below k % n_slots. The slot rule alone (a run waits for the chunks n_slots before its own, the
@@ -23,7 +23,7 @@
 
 #include <stdint.h>
 
-// slots per ring the guard tracks; WeightRings refuses more (linear.py)
+// slots per ring the guard tracks; WeightRings refuses more (load_stream.py)
 #define WEIGHT_RING_GUARD_MAX_SLOTS 32
 
 typedef struct {

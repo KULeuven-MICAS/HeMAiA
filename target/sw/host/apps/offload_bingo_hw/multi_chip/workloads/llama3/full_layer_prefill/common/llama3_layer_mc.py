@@ -1325,10 +1325,6 @@ class LayerBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] fold slots: {n} Y_raw puts each before the next gather into their slot")
 
     # ---- emission -----------------------------------------------------------------------------------------------------
-    def emit_ring_schedules(self):
-        for part in (self.attn, self.ffn):
-            part.emit_ring_schedules()
-
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
         A, F = self.attn, self.ffn
         bad = [b for b in F.check_hazards() if "root fold slot" not in b]

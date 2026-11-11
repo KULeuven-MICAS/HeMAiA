@@ -191,7 +191,7 @@ class ChipletBuild(FabricBase):
             self.n_stamp = 0
             return
         self.st = DataStaging(plat, on_host=True)
-        self.ring_scheds = {}                  # schedule symbol: the WeightRings it holds
+        self.ring_scheds = {}                  # schedule symbol: (its WeightRings, TAG, chip), ring_schedule()
         if not self.st.has_hbm:
             raise ValueError(f"{args.platformcfg} has no HBM")
         dfg = self.dfg = BingoDFG(num_chiplets=len(chips), num_clusters_per_chiplet=NC,
@@ -402,6 +402,15 @@ class ChipletBuild(FabricBase):
         t[:8] = np.array([TRAILER_MAGIC], dtype="<u8").view(np.int8)
         return t
 
+    def ring_schedule(self, k, rings):
+        """The symbol of chip k's ring schedule, the table its prefetcher walks
+        (WeightRings.schedule), for the prefetcher task made with `rings`. The rings are
+        recorded in ring_scheds, which a layer's blocks share, and finish() stages every
+        recorded table once the build has taken all its chunks."""
+        name = f"{self.TAG}_ring_sched_k{k:02x}"
+        self.ring_scheds[name] = (rings, self.TAG, k)
+        return BingoMemSymbol(name)
+
     def make_rings(self, rec_l3=None, rec_slots=1):
         """Per chip: its clusters' weight rings in its L3, filled by its memory chip's push
         engine under its host's prefetcher (host_kernel_lib.h weight_prefetch); rec_l3 the L3
@@ -450,7 +459,7 @@ class ChipletBuild(FabricBase):
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
-                    BingoMemSymbol(f"{T}_ring_sched_k{k:02x}"), rings.slots, self.h_flags,
+                    self.ring_schedule(k, rings), rings.slots, self.h_flags,
                     self.h_rel, self.h_seq[self.mem[k]], self.h_rec, rec_slots, NR, n_slots,
                     self.slot_bytes, self.mem[k], batch=self.ring_batch,
                     policy=int(wr.get("policy", 1)), engine=self.engine[k],
@@ -634,14 +643,11 @@ class ChipletBuild(FabricBase):
                       SnaxBingoKernelWaitFlagsArgs(h, 0, 0), prev if k == self.ROOT else [self.end])
 
     # ---- emission -------------------------------------------------------------------------
-    def emit_ring_schedules(self):
-        """Each chip's ring schedule, the table its prefetcher walks."""
-        for k in self.chips:
-            r = self.rings[k]
-            name = f"{self.TAG}_ring_sched_k{k:02x}"
+    def _stage_ring_schedules(self):
+        """Every ring schedule recorded by ring_schedule() into the data image."""
+        for name, (r, tag, k) in self.ring_scheds.items():
             self.st.put(name, "uint64_t", np.array(r.schedule(), dtype=np.uint64))
-            self.ring_scheds[name] = r
-            print(f"[{self.TAG}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
+            print(f"[{tag}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
                   f"{self.mem[k]:#04x} engine {self.engine[k]}")
 
     def report_ring_races(self):
@@ -657,7 +663,7 @@ class ChipletBuild(FabricBase):
             return
         total = 0
         for name, (a, parts) in pfs.items():
-            races = self.ring_scheds[name].races(a, sorted(parts))
+            races = self.ring_scheds[name][0].races(a, sorted(parts))
             total += len(races)
             if races:
                 print(f"[{self.TAG}] {name}: {len(races)} ring races (ring, unread chunk, pushed chunk, "
@@ -670,7 +676,7 @@ class ChipletBuild(FabricBase):
 
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
         dfg, p, st, args, T = self.dfg, self.p, self.st, self.args, self.TAG
-        self.emit_ring_schedules()
+        self._stage_ring_schedules()
         self.report_ring_races()
         if args.data_h:
             st.emit(args.data_h, args.output_dir)
