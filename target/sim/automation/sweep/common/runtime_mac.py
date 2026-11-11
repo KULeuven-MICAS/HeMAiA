@@ -56,9 +56,10 @@ def gemms(task, wl):
             f = dict(re.findall(r"\.(\w+) = \(?(?:uint32_t\))?\s*(-?\d+)", m.group(2)))
             if "M" in f and "K" in f and "N" in f:
                 shape[int(m.group(1))] = int(f["M"]) * int(f["K"]) * int(f["N"])
-    # a gemm_minimal reruns its core's previous GEMM's configuration (params gemm_reuse), so it has that GEMM's shape;
-    # a core runs its tasks in id order. A queued GEMM (params gemm_async: gemm_start, a configure task <name>_cfg,
-    # gemm_wait <name>_w) has its steps done when its wait is: the wait takes the start's shape, the others none
+    # a gemm_minimal reruns its core's previous GEMM's configuration (the compiler's CSR reuse), so it has that GEMM's
+    # shape; a core runs its tasks in id order. A split GEMM (params async_exec: gemm_start, a configure task
+    # <name>_cfg, gemm_wait <name>_w) has its steps done when its wait is: the wait takes the start's shape, the others
+    # none
     out, prev = {}, {}
     by_name = {r["Name"]: int(r["ID"]) for r in rows}
     for r in sorted(rows, key=lambda r: int(r["ID"])):
