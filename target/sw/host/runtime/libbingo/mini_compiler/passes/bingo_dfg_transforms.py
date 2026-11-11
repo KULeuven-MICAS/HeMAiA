@@ -496,6 +496,21 @@ class BingoDFGTransformsMixin:
         (cluster, core) on every other chip) sets ONE tag bit per chip, so two consumers of
         it on one remote core would both wait on that bit and the second would never see it."""
         topo = {n: i for i, n in enumerate(nx.topological_sort(self))}
+        # each core's tasks in that order: the chain the sequencing edges laid, walked by its direct edges before any
+        # search of the whole graph
+        chain, at = {}, {}
+        for n in sorted(topo, key=topo.get):
+            q = chain.setdefault((n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id), [])
+            at[n] = len(q)
+            q.append(n)
+
+        def still_reaches(a, z):
+            """Whether a reaches z (one core's tasks, a first): along the core's direct edges, else any path."""
+            q = chain[(a.assigned_chiplet_id, a.assigned_cluster_id, a.assigned_core_id)]
+            for i in range(at[a], at[z]):
+                if not self.has_edge(q[i], q[i + 1]):
+                    return nx.has_path(self, a, z)
+            return True
         removed = 0
         for b_ in list(self.nodes()):
             groups: dict = {}
@@ -509,7 +524,7 @@ class BingoDFGTransformsMixin:
                 last = as_[-1]
                 for a in as_[:-1]:
                     self.remove_edge(a, b_)
-                    if not nx.has_path(self, a, last):      # the chain must still hold
+                    if not still_reaches(a, last):          # the chain must still hold
                         self.add_edge(a, b_)
                         continue
                     removed += 1
@@ -525,7 +540,7 @@ class BingoDFGTransformsMixin:
                 first = bs[0]
                 for b in bs[1:]:
                     self.remove_edge(p_, b)
-                    if not nx.has_path(self, first, b):     # the chain must still hold
+                    if not still_reaches(first, b):         # the chain must still hold
                         self.add_edge(p_, b)
                         continue
                     removed += 1

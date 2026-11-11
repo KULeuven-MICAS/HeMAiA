@@ -253,8 +253,9 @@ def _sim_one(scenario, seed):
 
 def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
                        h2h_latency=10, h2h_latency_jitter=40,
-                       max_cycles=4_000_000, verbose=True):
-    """Run the compiled DFG on the cycle model. Raises ValueError on a hang.
+                       max_cycles=4_000_000, verbose=True, wait=True):
+    """Run the compiled DFG on the cycle model. Raises ValueError on a hang. wait=False: the runs start and a callable
+    is returned that waits for them and reports (raises) as this would, so the compiler goes on meanwhile.
 
     D2D jitter is ON by default: a cross-die predicate that races its dep-set
     only misbehaves when the two can arrive out of order, so a zero-jitter run
@@ -350,24 +351,37 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
     # a sequential check would.
     runs = [(sc, sd) for sc in scenarios for sd in range(seeds)]
     jobs = min(len(runs), int(os.environ.get("BINGO_SIM_CHECK_JOBS", os.cpu_count() or 1)))
+    def report(results):
+        for err, line in results:
+            if err:
+                raise ValueError(err)
+            if verbose:
+                print(line)
+        return {"model": root, "seeds": seeds, "descriptors": len(order),
+                "real_tasks": n_real, "dep_edges": sum(len(v) for v in preds.values()),
+                "scenarios": scenarios}
+
     if jobs > 1:
         import multiprocessing
         global _SIM_ONE
         _SIM_ONE = one
-        with multiprocessing.get_context("fork").Pool(jobs) as pool:
-            results = pool.starmap(_sim_one, runs)
+        pool = multiprocessing.get_context("fork").Pool(jobs)      # the graph as it is now, in each child
+        pending = pool.starmap_async(_sim_one, runs)
+
+        def collect():
+            try:
+                results = pending.get()
+            finally:
+                pool.close()
+                pool.join()
+            return report(results)
     else:
         results = []
         for run in runs:
             results.append(one(*run))
             if results[-1][0]:
                 break
-    for err, line in results:
-        if err:
-            raise ValueError(err)
-        if verbose:
-            print(line)
 
-    return {"model": root, "seeds": seeds, "descriptors": len(order),
-            "real_tasks": n_real, "dep_edges": sum(len(v) for v in preds.values()),
-            "scenarios": scenarios}
+        def collect():
+            return report(results)
+    return collect() if wait else collect

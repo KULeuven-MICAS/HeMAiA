@@ -380,6 +380,7 @@ class BingoDFG(
         # argument either way.
         _sim_env = os.environ.get("BINGO_SIM_CHECK")
         _do_sim = sim_check if _sim_env is None else (_sim_env == "1")
+        _sim_done = None
         if _do_sim:
             try:
                 from bingo_sim_check import simulate_for_hangs, ModelUnavailable
@@ -387,7 +388,9 @@ class BingoDFG(
                 print(f"Sim hang check SKIPPED: {_exc}")
             else:
                 try:
-                    _sim = simulate_for_hangs(self)
+                    # the runs go on beside the static L1 plan and the emission (each in a process of its own, the
+                    # graph as it is now: neither changes an edge); their result is taken before returning
+                    _sim_done = simulate_for_hangs(self, wait=False)
                 except ModelUnavailable as _exc:
                     print(f"Sim hang check SKIPPED: {_exc}")
                 except ValueError:
@@ -396,14 +399,6 @@ class BingoDFG(
                     # Any other failure is a problem with the bridge or a model
                     # version skew. Report it; do not break firmware generation.
                     print(f"Sim hang check SKIPPED ({type(_exc).__name__}): {_exc}")
-                else:
-                    _sc = _sim.get('scenarios', ['all'])
-                    print(f"Sim hang check passed: {_sim['descriptors']} descriptors, "
-                          f"{_sim['real_tasks']} dispatching tasks, "
-                          f"{_sim['dep_edges']} dependency edges verified over "
-                          f"{_sim['seeds']} seeds x {len(_sc)} routing "
-                          f"scenario(s) {_sc} (model: {_sim['model']})")
-
         # 2b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
         #
         # Runs AFTER every transform, because the dummy set/check nodes those passes
@@ -418,3 +413,17 @@ class BingoDFG(
             extra_include_header_list=extra_include_header_list,
             post_execute_code=post_execute_code,
         )
+        if _sim_done is not None:
+            try:
+                _sim = _sim_done()
+            except ValueError:
+                raise                # a real hang -- this MUST fail the build
+            except Exception as _exc:
+                print(f"Sim hang check SKIPPED ({type(_exc).__name__}): {_exc}")
+            else:
+                _sc = _sim.get('scenarios', ['all'])
+                print(f"Sim hang check passed: {_sim['descriptors']} descriptors, "
+                      f"{_sim['real_tasks']} dispatching tasks, "
+                      f"{_sim['dep_edges']} dependency edges verified over "
+                      f"{_sim['seeds']} seeds x {len(_sc)} routing "
+                      f"scenario(s) {_sc} (model: {_sim['model']})")
