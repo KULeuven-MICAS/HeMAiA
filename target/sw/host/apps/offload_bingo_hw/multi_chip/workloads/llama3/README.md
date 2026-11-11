@@ -29,7 +29,6 @@ Each directory holds its `Makefile`, `main_bingo.py` and `params.hjson`; everyth
 | [`common/llama3_stages_mc.py`](common/llama3_stages_mc.py) | the stage apps of the FA block's Llama variant |
 | [`full_layer_prefill/common/llama3_layer_mc.py`](full_layer_prefill/common/llama3_layer_mc.py) | the whole-layer prefill: both blocks in one graph (the FFN of [`../ffn/common/ffn_prefill_mc.py`](../ffn/common/ffn_prefill_mc.py), passes of 64 rows that stream the weights again), the steps between them, args phases, one L3 ring region |
 | [`common/llama3_decode_mc.py`](common/llama3_decode_mc.py), [`common/llama3_decode_ks_mc.py`](common/llama3_decode_ks_mc.py), [`common/llama3_decode_layer_mc.py`](common/llama3_decode_layer_mc.py) | the decode attention (head-parallel and split by keys) and the whole decode layer with the FFN of [`../ffn/common/ffn_decode_mc.py`](../ffn/common/ffn_decode_mc.py) |
-| [`common/llama3_prefill_mc.py`](common/llama3_prefill_mc.py) | the earlier whole-layer prefill driver over 256 tokens |
 | [`common/llama3.mk`](common/llama3.mk) | the build |
 
 The attention alone is the FA block's Llama variant, `../fa/llama3_prefill` (run with

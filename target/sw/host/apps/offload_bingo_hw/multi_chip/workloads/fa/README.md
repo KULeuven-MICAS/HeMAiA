@@ -11,11 +11,10 @@ or per-chip pushes), **reduce** (xDMA ChainGather folding in transit against the
 fa/
   common/                shared code
     fa_mc.py               the key-split decode (one token, the cache split by key over the clusters): the base
-                           of fa_llama_mc.py and fa_decode_ks_mc.py
-    fa_llama_mc.py         its Llama form (the 32 heads as two halves of the softmax's lanes), the base of
-                           ../llama3/common/llama3_decode_ks_mc.py
-    fa_llama_data.py       its cache, query, scales and golden (synthetic INT4 weights, llama3_data's draw), and
-                           the softmax-statistics junction's arithmetic the decode ladder's golden uses
+                           of fa_decode_ks_mc.py
+    fa_llama_data.py       the Llama decode's cache, query, scales and golden (synthetic INT4 weights, llama3_data's
+                           draw), and the softmax-statistics junction's arithmetic the decode ladder's golden uses
+                           (../llama3/common/llama3_decode_ks_mc.py)
     fa_decode_mc.py,       DSv2-Lite's MLA decode mapped as the prefill (head parallel) or split by key, used by
     fa_decode_ks_mc.py     ../dsv2/layer1/decode/
     fa_prefill_mc.py       driver and generator of the prefill workloads (the mapping below); its docstring

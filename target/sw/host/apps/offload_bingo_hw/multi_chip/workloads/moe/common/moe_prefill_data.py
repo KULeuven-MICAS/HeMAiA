@@ -98,7 +98,7 @@ class MoePrefillData:
         self.k_dn_e = fp.d_shift_for_depth(self.I_e)
         self.k_dn_sh = fp.d_shift_for_depth(self.I_sh)
         # ---- the tokens and the input scale ------------------------------------------------
-        # rows (a whole layer, dsv2_prefill_mc.py): the prompt's rows x16 (FP16 [T, H], the residual stream
+        # rows (a whole layer, dsv2_layer_prefill_mc.py): the prompt's rows x16 (FP16 [T, H], the residual stream
         # after the attention), the rows the input scale is calibrated on (cal) and those the activation
         # scales are (cal_act), instead of the seeded draws
         if rows is None:

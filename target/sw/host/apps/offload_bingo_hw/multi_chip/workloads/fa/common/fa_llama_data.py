@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""Data of the Llama-3-8B decode attention (workloads/fa/llama3_decode, driver fa_llama_mc.py): the grouped-query
+"""Data of the Llama-3-8B decode attention (workloads/fa/llama3_decode_full, driver llama3_decode_ks_mc.py): the grouped-query
 attention of one decode token over a KV cache of `keys` positions, with SYNTHETIC INT4 weights.
 
 THE WEIGHTS AND THE PROMPT are llama3_data's (workloads/llama3/common): the same seeded draw of W_q, W_k, W_v (and W_o,
@@ -29,13 +29,13 @@ key / value groups 4 h .. 4 h + 3; lane i is head 16 h + i of group 4 h + i // 4
               those: [128, 16] a half, lane i head 16 h + i
 The block-diagonal operands spend four times the multiplies a group needs; at one decode token the array is idle anyway.
 
-THE GOLDEN is the device's arithmetic (util/sim/common/hwmodel.py) for the key split fa_llama_mc.py builds, half by half, as
+THE GOLDEN is the device's arithmetic (util/sim/common/hwmodel.py) for the key split, half by half, as
 fa_data.FaData.golden: every cluster's shard of key tiles; pass 1 the shard's row maximum; m* the lanewise maximum
 (exact in any order); pass 2 the softmax seeded at m* and PV, O^T leaving the D port as FP16 at k_o; a cluster's partial
 [O_0 | O_1 | l_0 | l_1] (the compacted halves, then the two row-sum beats) added in FP16 in the reduce's order; per half
 o~ = O * rsqrt(l a_n)^2; xt [32, 128] one head a row.
 
-golden_v covers the other mappings fa_llama_mc.py builds (params passes, stats): the softmax statistics (m, l) of
+golden_v covers the other mappings of the key-split decode (params passes, stats): the softmax statistics (m, l) of
 every cluster folded by the softmax-statistics junction (ssj_hop, SoftmaxStatsJunction's arithmetic bit for bit, as
 host_kernel_lib.h repeats it) into (m*, l*), the root normalising with l*; and the one-pass split, every cluster's
 online softmax and PV over its own tiles, its O re-based onto m* by one more softmax step whose only scores are m*
@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "llama3", "common"))
 import llama3_data  # noqa: E402  (puts util/sim/llm, util/sim/gemm and ffn/common on sys.path)
 import model_data  # noqa: E402
 
-# BC keys a tile; BR query lanes (one SIMD beat of FP16, fa_llama_mc.py checks it against the cluster); HD a head's
+# BC keys a tile; BR query lanes (one SIMD beat of FP16); HD a head's
 # dimensions; GPH key/value groups a half; D a half's K / V row: its groups' columns side by side
 BC, BR = 64, 16
 CFG = llama3_data.LLAMA3_8B

@@ -4,16 +4,17 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# The build of a whole-layer prefill workload (workloads/dsv2/layer1/<app>/). Its Makefile sets
+# The build of a whole-layer workload (workloads/dsv2/layer{0,1}/{prefill,decode}/<app>/). Its Makefile sets
 # MK_DIR and WORKLOAD, then includes this file:
 #
 #     MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-#     WORKLOAD  = dsv2/layer1/t512_poc
-#     include $(MK_DIR)../../common/dsv2_prefill.mk
+#     WORKLOAD  = dsv2/layer1/prefill/full
+#     include $(MK_DIR)../../../common/dsv2_prefill.mk
 #
 # WORKLOAD is the directory's path under workloads/, so the roots are found from it rather than by counting
-# ../ levels. Built and run on hemaia_16c4m_8MBL3_2cluster.hjson; the driver is dsv2_prefill_mc.py, which
-# builds the attention (workloads/fa) and the MoE (workloads/moe) blocks into one graph. The cache is
+# ../ levels. Built and run on hemaia_16c4m_8MBL3_2cluster.hjson; the drivers are dsv2_layer_prefill_mc.py (prefill) and
+# dsv2_decode_mc.py (decode), which build the attention (workloads/fa) and the MoE (workloads/moe) or FFN
+# (workloads/ffn) blocks into one graph. The cache is
 # sweep/llm_blocks/fa/real_kv_cache.py's, the weights sweep/common/weights' cache (the checkpoint's layer 1).
 
 HOST_APP_TYPE = offload_bingo_hw

@@ -49,5 +49,5 @@ D2D links.
   `../../common/gen_check.sh moe/<variant> <out dir> <log>`.
 - **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/moe/`: `common/moe_prefill_mc.py` (the
   prefill driver, on `util/sim/multichip/chiplet_mc.py`), `common/moe_stages_mc.py` (params `stage`), `common/moe_prefill_data.py`
-  (weights, route, golden), `common/moe.mk`, `dsv2_l1_prefill_ablation/<rung>/params.hjson`; `common/moe_mc.py` and
-  `common/moe_data.py` serve the decode block (`common/moe_decode_mc.py`).
+  (weights, route, golden), `common/moe.mk`, `dsv2_l1_prefill_ablation/<rung>/params.hjson`; `common/moe_decode_mc.py` is the decode
+  block, on the prefill driver.

@@ -80,12 +80,44 @@ class ClusterNodes:
         return self.fb.node(self.chiplet, self.cluster, core, name, kernel, args, after)
 
 
+class AliasStaging:
+    """The layer's DataStaging, with names that are one region: put_zeros of an aliased name stages nothing and
+    returns its symbol; finish() stages the region at the largest extent asked and lines() are the defines that make
+    each name the region. An alias is a region's name, or (region, offset): the name that many bytes into it."""
+
+    def __init__(self, st, aliases):
+        self._st, self.asked = st, {}
+        self.aliases = {n: (a if isinstance(a, tuple) else (a, 0)) for n, a in aliases.items()}
+
+    def __getattr__(self, name):
+        return getattr(self._st, name)
+
+    def put_zeros(self, name, ctype, count, mem_chip=None, preload=False):
+        if name not in self.aliases:
+            return self._st.put_zeros(name, ctype, count, mem_chip=mem_chip, preload=preload)
+        width = {"uint8_t": 1, "int8_t": 1, "uint16_t": 2, "int16_t": 2, "uint32_t": 4, "int32_t": 4}[ctype]
+        self.asked[name] = count * width
+        return BingoMemSymbol(name)
+
+    def finish(self):
+        for region in sorted({r for r, _ in self.aliases.values()}):
+            ext = [o + self.asked[n] for n, (r, o) in self.aliases.items() if r == region and n in self.asked]
+            if ext:
+                self._st.put_zeros(region, "uint8_t", max(ext), preload=True)
+
+    def lines(self):
+        out = ["// one L3 region, several names (chiplet_mc.py AliasStaging)"]
+        out += [f"#define {n} {r}" if not o else f"#define {n} ((uint8_t *){r} + {o})"
+                for n, (r, o) in sorted(self.aliases.items()) if n in self.asked]
+        return out
+
+
 class ChipletBuild(FabricBase):
     TAG = "l2"                          # the prefix of every staged symbol and printed line
 
     def __init__(self, args, p, plat, hw, shared=None):
         """`shared`: another build whose graph, staging, stamps and node helpers this one adds to (a block
-        of a whole layer, dsv2_prefill_mc.py); None makes its own."""
+        of a whole layer, dsv2_layer_prefill_mc.py); None makes its own."""
         self.args, self.p, self.plat, self.hw = args, p, plat, hw
         self.T = int(p.get("tokens", 1))
         if self.T < 1:
