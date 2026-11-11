@@ -37,3 +37,6 @@ hw/hemaia/tech_cells_tsmc16/
 hw/hemaia/hemaia_clk_rst_controller/
 target/tapeout/HeMAiAv2_tapeout/
 .hsweep_build.lock
+
+# A file's copy from before one experiment's edit (<name>.before_<change>), kept beside it
+*.before_*
