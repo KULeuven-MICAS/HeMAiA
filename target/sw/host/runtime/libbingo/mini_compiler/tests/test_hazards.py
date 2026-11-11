@@ -140,9 +140,8 @@ task(d, DM, "hd", _HalfDecl(l1("s", 64), l1("b", 64)))
 ok, msg = raises(d.bingo_check_hazards, "dst_addr")
 check("a buffer field left out of accesses() is an error", ok, msg)
 
-print("\na generator that orders its cores itself is reported on, not refused")
+print("\na graph whose cores the compiler does not order is reported on, not refused")
 d = new_dfg(enforce=False)
-d.program_ordered = True
 slab = l1("slab", 8192)
 l0 = task(d, DM, "L0", SnaxBingoKernelIdma1dCopyArgs(l1("w0", 8192), slab, 8192))
 task(d, GEMM, "G1", gemm_reading(slab, l1("y1", 8192), 0), [l0])
