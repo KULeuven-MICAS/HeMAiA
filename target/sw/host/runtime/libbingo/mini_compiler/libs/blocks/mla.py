@@ -56,7 +56,6 @@ from bingo_kernel_args import (
 
 from ..comm import Block, BlockResult, Ctx, DType, Layout, MemLevel, Port, PortSpec
 from ..comm.ports import at_offset
-from .gemm_async import GemmQueue
 from .linear import LoadStream
 
 BEAT = 64
@@ -421,10 +420,6 @@ class MlaAttnCfg:
     # (hwmodel.mla_attention `masked`). A key row is one 64-B beat, lane l at 2 l.
     masks: tuple = ()
     mask_src: object = field(default=None, compare=False, repr=False)
-    # Every matmul a start / wait pair (blocks/gemm_async.py): the next dispatch is programmed while
-    # the array runs this one. The matmuls' consumers and the slabs they free follow their waits; the
-    # application orders the cores with GemmQueue.of(dfg).program_order(...) before compiling.
-    gemm_async: bool = False
 
     @property
     def nt(self) -> int:
@@ -535,13 +530,9 @@ class MlaAttention(Block):
         fresh = {(c.keys - 1) // c.bc} if kv_after else set()
         kbytes, vbytes = c.bc * c.d_qk, c.d_v * c.bc
         nodes, qk, sm, pv, slab_of = [], {}, {}, {}, {}
-        gq = GemmQueue.of(ctx.dfg, True) if c.gemm_async else None
 
         def matmul(name, kernel, args, deps):
-            # the blocking task, or a queued dispatch's wait: what the matmul's consumers follow
-            if gq is None:
-                return g.node(name, ctx.gemm, kernel, args, deps)
-            return (gq.qk if kernel.endswith("_qk") else gq.pv)(g, name, args, deps, "mla")
+            return g.node(name, ctx.gemm, kernel, args, deps)
 
         split = c.vstream is not None
         k_slab, v_slab = {}, {}          # tile -> (slab index, slab handle) when split

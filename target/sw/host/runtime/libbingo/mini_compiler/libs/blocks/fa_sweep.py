@@ -35,13 +35,12 @@ SM(j, q), so a masked score's P is exactly 0 (a causal prefill's keys after its 
 its C, so the score leaves the D port masked, RNE(S * 2^-k_s - 65504), and no SIMD task sits
 between the matmul and the softmax.
 
-THE GEMM CORE'S PROGRAM is QK(j, *) then PV(j - 1, *), so a tile's softmax runs under the next
-tile's score matmuls. With `gemm_async` every matmul is a start / wait pair (blocks/gemm_async.py): a
-matmul's consumers depend on its wait, a slab or buffer it reads is free after its wait, and the
-caller orders the cores with GemmQueue.program_order before compiling.
+THE MATMULS are made in the order QK(j, *) then PV(j - 1, *), so a tile's softmax can run under the next
+tile's score matmuls; the compiler orders each core's program (passes/bingo_dfg_schedule.py) and, with
+the DFG's async_exec, splits the matmuls and the softmax into configure / start / wait parts.
 
 THE TILE SOURCE. `src.fetch(kind, j)` -> (ready task, slab handle, token) for K ('K') or V ('V') tile j
-and `src.release(token, task)` once `task` is the last reader of the slab. fetch is called in the
+and `src.release(token, tasks)` once `tasks` (every reader of the slab) are made. fetch is called in the
 ring's order, K0 V0 K1 V1 ..., and a slab's next fetch is created right after the tasks that free
 it, so the caller's loads stay in the DM core's program order and their reuse edges exist when they
 are made.
@@ -56,14 +55,12 @@ from bingo_kernel_args import (
     SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelSimdFaSoftmaxNArgs,
     SnaxBingoKernelFaBuildShapesArgs,
-    SnaxBingoKernelSimdFaWaitArgs,
     SnaxBingoKernelSimdMlaNormaliseArgs,
     SnaxBingoKernelSimdMlaNormaliseQ8Args,
     SnaxBingoKernelXdmaTranspose2dArgs,
 )
 
 from ..comm.ports import at_offset
-from .gemm_async import GemmQueue
 
 FA = SnaxBingoKernelSimdFaSoftmaxArgs
 PV = SnaxBingoKernelGemmFaPvArgs
@@ -81,8 +78,6 @@ class FaSweepCfg:
     br: int = 16               # query rows a tile: the SIMD's FP16 lanes
     d_qk: int = 576
     d_v: int = 512
-    gemm_async: bool = True
-    phase: str = "fa"          # the GemmQueue phase of the sweep's matmuls
 
     def __post_init__(self):
         if self.bc % 16 or self.bc % 4 or self.d_qk % 4 or self.d_v % 16 or self.br % 16:
@@ -133,7 +128,7 @@ def fa_sweep_alloc(l1, cfg: FaSweepCfg) -> FaSweepBufs:
 
 def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None, oacc_free=None,
              name="s", early=2, mask=None, mask_c=False, ot8=None, sm_batch=False, prologue=False,
-             geom_core=None, sm_async=False):
+             geom_core=None):
     """Build one sweep on the cluster `g` names. g: an object with node(name, core, kernel, args,
     after), dfg, gemm, chiplet, cluster (a Ctx, or the chiplet driver's adapter). q8: {q: (handle, ready
     tasks)}, the query tiles in the A layout. roles: {"gemm", "simd", "xdma"} core ids.
@@ -143,10 +138,7 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
     has fewer than four slabs). Returns a dict: qk, sm, pv (per [q][j], the tasks consumers depend on),
     norm, tr ([q]), xt ([q] handles). geom_core: the role (in roles) whose core builds each arena's geometry
     (fa_build_shapes) at the sweep's head instead of the SIMD core; each arena's first softmax then runs GEOM_PRIMED
-    behind it (prologue is then not used). sm_async: each softmax fires its SIMD tasks and returns (NO_DRAIN), and a
-    wait task on its arena retires them: the consumers depend on the wait, and the program order puts the wait behind
-    the next softmax's fire, so the SIMD core sets up one softmax while the block runs the one before."""
-    gq = GemmQueue.of(g.dfg, cfg.gemm_async)
+    behind it (prologue is then not used)."""
     gm, simd, xdma = roles["gemm"], roles["simd"], roles["xdma"]
     nq, nt, beat = cfg.nq, cfg.nt, cfg.beat
     corr = FA.corr_offset(cfg.bc, cfg.br)
@@ -159,8 +151,6 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
     kt, vt = {}, {}                            # tile -> (ready, slab, token)
 
     def matmul(kind, nm, args, after):
-        if gq.enabled:
-            return (gq.qk if kind == "qk" else gq.pv)(g, nm, args, after, cfg.phase)
         kernel = ("__snax_bingo_kernel_gemm_fa_qk" if kind == "qk"
                   else "__snax_bingo_kernel_gemm_fa_pv")
         return g.node(nm, gm, kernel, args, after)
@@ -212,7 +202,7 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
                 N=cfg.br // 16, d_shift=cfg.k_s), deps)
         # the slab frees when every query tile's score matmul is done: the last one in the core's
         # program, whose wait follows the earlier waits
-        src.release(kt[j][2], qk[nq - 1][j])
+        src.release(kt[j][2], [qk[q][j] for q in range(nq)])
 
     def make_sm(j):
         if sm_batch:
@@ -261,19 +251,10 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
             first_primed = j == 0 and q in geom
             if first_primed:
                 deps.append(geom[q])
-            fire = g.node(f"{name}sm{j}q{q}", simd, "__snax_bingo_kernel_simd_fa_softmax",
-                          FA(at_offset(s16, beat), p8, bufs.arena[q], cfg.bc, 1, tile_idx=j,
-                             seed_state=1, geom_mode=FA.GEOM_PRIMED if first_primed else FA.GEOM_SELF,
-                             score_scale=cfg.a_exp, p_mode=FA.EXACT | (FA.NO_DRAIN if sm_async else 0),
-                             p8_pitch=0), deps)
-            if sm_async:
-                wt = g.node(f"{name}sm{j}q{q}_w", simd, "__snax_bingo_kernel_simd_fa_wait",
-                            SnaxBingoKernelSimdFaWaitArgs(bufs.arena[q]), [fire])
-                # the block reads and writes the softmax's buffers until the wait (bingo_liveness RULE 1)
-                fire.operands_held_by = wt
-                gq.start_phase[fire] = gq.wait_phase[wt] = f"{cfg.phase}_sm"
-                fire = wt
-            sm[q][j] = fire
+            sm[q][j] = g.node(f"{name}sm{j}q{q}", simd, "__snax_bingo_kernel_simd_fa_softmax",
+                              FA(at_offset(s16, beat), p8, bufs.arena[q], cfg.bc, 1, tile_idx=j,
+                                 seed_state=1, geom_mode=FA.GEOM_PRIMED if first_primed else FA.GEOM_SELF,
+                                 score_scale=cfg.a_exp, p_mode=FA.EXACT, p8_pitch=0), deps)
 
     def make_pv(j):
         v_ready, v_slab, _ = vt[j]
@@ -292,7 +273,7 @@ def fa_sweep(g, cfg: FaSweepCfg, bufs: FaSweepBufs, src, q8, roles, *, prev=None
                 v_slab, p8, 0 if first else oacc, at_offset(part, beat) if last else oacc,
                 M=cfg.d_v // 16, K=cfg.bc // 4, N=cfg.br // 16, flags=flags,
                 corr_addr=0 if first else at_offset(p8, corr), d_shift=cfg.k_o if last else 0), deps)
-        src.release(vt[j][2], pv[nq - 1][j])
+        src.release(vt[j][2], [pv[q][j] for q in range(nq)])
 
     for j in range(nt):
         make_qk(j)
