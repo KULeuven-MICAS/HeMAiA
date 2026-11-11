@@ -526,6 +526,11 @@ class BingoDFGEmitMixin:
         num_nodes = len(all_nodes)
         # Sort the nodes by node id
         all_nodes.sort(key=lambda x: x.node_id)
+        # a global task id is a node's position here and its node_id in the descriptors: the two must agree
+        bad = next((i for i, n in enumerate(all_nodes) if n.node_id != i), None)
+        if bad is not None:
+            raise ValueError(f"node ids are not their positions from {all_nodes[bad].node_name} on (id "
+                             f"{all_nodes[bad].node_id}, position {bad}): a pass removed nodes without renumbering")
         
         mapping_str = ""
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids

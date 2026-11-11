@@ -17,7 +17,9 @@ sets it with `set_simd_beat_bytes` before building a SIMD task.
 | `test_static_l1.py` | The liveness rule and the packer: which buffers may share, and that the placement the packer returns is provably safe. |
 | `test_conditional_fork.py` | The conditional fork/branch/combine API: CERF group assignment, invert, the refusals, and the one-group-per-core rule. |
 | `test_tag_budget.py` | The dependency-tag budget: a gather that needs 16 tags lowers and tags at 4 once the pass has added ordering edges, a graph that fits is left alone, a fan-in no ordering can fit is fitted through a relay, and broadcast dep-sets are counted, and split, per cell. |
-| `test_gemm_async.py` | The queued GEMM dispatch: the start kernels' descriptors, `GemmQueue` numbering and start/wait pairs, the core program order, and the `fa_sweep` built on them. |
+| `test_schedule.py` | The compiler's core programs (`passes/bingo_dfg_schedule.py`): the list schedule, ring loads behind their prefetcher, and with `async_exec` the configure / start / wait splits of every accelerator (numbering, depth, exclusive kernels, the shape table, the CSR reuse and the fold of an address-only configure into its start), the edges that let the static L1 plan reuse space where the schedule overflows it, and the made order of the fallback (no passing a task that waits, except to break a cycle). |
+| `test_hazards.py` | The memory-hazard check (`passes/bingo_dfg_hazards.py`): unordered overlapping accesses refused with the edge to add, the declarations (`accesses()`, strided and nested runs), and every kernel class's declaration. |
+| `test_xdma_chain_split.py` | A ChainGather's parts as the compiler makes them: the crossing check between two collectors and the CSR clean-up rule. |
 
 ## What these do not cover
 

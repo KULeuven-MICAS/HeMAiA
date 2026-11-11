@@ -161,12 +161,14 @@ class BingoDFG(
         self._gating_to_targets: dict = {}     # gating node → its conditional targets
         # Ordering-only edges (producer, consumer), see bingo_add_order_edge.
         self.order_edges: list = []
-        # schedule_cores: the compiler orders every device core's program (bingo_dfg_schedule.py); a graph
-        # whose generator orders them itself sets program_ordered instead. async_exec: each VersaCore
-        # dispatch runs as configure / start / wait parts the schedule places (the same module).
+        # schedule_cores: the compiler orders every device core's program (bingo_dfg_schedule.py). async_exec:
+        # each VersaCore, SIMD and xDMA dispatch runs as configure / start / wait parts the schedule places (the
+        # same module).
         self.schedule_cores = False
-        self.program_ordered = False
         self.async_exec = False
+        # args_phases: the keyword arguments of bingo_args_phases (passes/bingo_args_phases.py), which cuts each
+        # cluster's args into ping-pong phases along the programs: run once they are fixed
+        self.args_phases = None
 
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
@@ -274,6 +276,7 @@ class BingoDFG(
         """
         self.desc_list_in_narrow_spm = desc_list_in_narrow_spm
         self.desc_list_in_image = desc_list_in_image
+        self.static_l1_opts = static_l1         # the schedule keeps to what the static L1 plan can place
         # 0. The per-block pictures, of the graph exactly as the application built it:
         #    every pass below adds entry, exit or dummy nodes a block never stated.
         self.bingo_visualize_blocks(output_dir, app_name)
@@ -283,11 +286,13 @@ class BingoDFG(
         #    split where that gains, numbered; the CSR reuse along each GEMM core's program. Before any pass
         #    that adds tasks: the schedule is of the tasks the application made.
         self.bingo_check_hazards()
-        if self.schedule_cores and not self.program_ordered:
+        if self.schedule_cores:
             self.bingo_schedule_programs()
         elif self.async_exec:
-            raise ValueError("async_exec: the compiler orders the cores (schedule_cores), and this graph's "
-                             "generator ordered them itself (program_ordered)")
+            raise ValueError("async_exec: the compiler splits dispatches where it orders the cores (schedule_cores)")
+        if self.args_phases:
+            from bingo_args_phases import bingo_args_phases
+            bingo_args_phases(self, **self.args_phases)
         # 2. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()

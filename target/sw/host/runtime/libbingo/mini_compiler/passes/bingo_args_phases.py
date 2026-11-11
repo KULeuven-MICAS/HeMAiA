@@ -10,8 +10,9 @@ each cluster's device tasks, in the order they run, into phases of at most `budg
 another, phase 0's arrive at host init, and each later phase's by a DM task of the cluster (PhaseArgsLoadArgs), here
 put in the DM core's program right before the phase's first DM task. Its dependencies: the last task of phase p - 2 on
 every core of the cluster (the region it overwrites), unless the DM core's own program already orders it; every core's
-first task of phase p depends on it, unless the DM core's program already does. Call after the generator's program
-order (the per-core chains are edges of the graph by then) and before the compile.
+first task of phase p depends on it, unless the DM core's program already does. It cuts along the programs, so it runs
+once each core's program is fixed (the per-core chains are edges of the graph): bingo_compile_dfg runs it after the
+schedule when the DFG's args_phases is set (ChipletBuild.finish sets it from params args_phase_bytes).
 """
 import os
 import re
@@ -55,13 +56,19 @@ def _args_bytes(t):
 
 
 def split_args_phases(S, budget, dev_cores):
-    """S: the generator (dfg, roles, node()); budget: bytes of args a phase and cluster (estimate); dev_cores: the
-    device core ids. Returns the number of phase loads made."""
-    dfg = S.dfg
+    """The same cut on a generator S (dfg, roles, node()) whose generator ordered the cores itself."""
     dm = S.roles["dm"]
+    return bingo_args_phases(S.dfg, budget, dev_cores, dm,
+                             lambda k, c, name, kernel, args, deps: S.node(k, c, dm, name, kernel, args, deps))
+
+
+def bingo_args_phases(dfg, budget, dev_cores, dm, node):
+    """budget: bytes of args a phase and cluster (estimate); dev_cores: the device core ids; dm: the DM core's id;
+    node(chip, cluster, name, kernel, args, deps): makes a task on that cluster's DM core. Returns the number of phase
+    loads made."""
     g = nx.DiGraph(dfg)
     g.add_edges_from(dfg.order_edges)
-    order = nx.lexicographical_topological_sort(g, key=lambda t: (getattr(t, "order_key", t.node_id), t.node_id))
+    order = nx.lexicographical_topological_sort(g, key=lambda t: t.node_id)
     pos = {t: i for i, t in enumerate(order)}
     dev = set(dev_cores)
     per_cl = {}
@@ -112,13 +119,11 @@ def split_args_phases(S, budget, dev_cores):
             if lists:
                 # the DFG's list_phases: the phase's list entries come first, into the window of its parity, which
                 # the same tasks as the args region free; the args load then depends on it alone
-                lld = S.node(k, c, dm, f"lists_p{p}", "__snax_bingo_kernel_idma_1d_copy", PhaseListLoadArgs(k, c, p),
-                             deps)
+                lld = node(k, c, f"lists_p{p}", "__snax_bingo_kernel_idma_1d_copy", PhaseListLoadArgs(k, c, p), deps)
                 lld.args_resident = True
                 n_lists += 1
                 deps = [lld]
-            ld = S.node(k, c, dm, f"args_p{p}", "__snax_bingo_kernel_idma_1d_copy", PhaseArgsLoadArgs(k, c, p),
-                        deps)
+            ld = node(k, c, f"args_p{p}", "__snax_bingo_kernel_idma_1d_copy", PhaseArgsLoadArgs(k, c, p), deps)
             ld.args_resident = True
             n_loads += 1
             n_edges += len(set(deps))
