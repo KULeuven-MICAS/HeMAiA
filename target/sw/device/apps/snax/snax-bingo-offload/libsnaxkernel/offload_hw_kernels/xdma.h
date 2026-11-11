@@ -303,15 +303,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
     BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_6d", "xDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t *a = (uint32_t *)arg;
-    // num_temporal_dims bits 9:8: the stage of a task split in two (the host's xdma cfg-ahead):
-    // 1 CONFIGURE writes every register and starts nothing, 2 START starts what CONFIGURE left
-    // and waits. The registers hold until the start, and the host orders CONFIGURE right
-    // before its START with no dependency, so it runs while START still waits for its operands.
+    // num_temporal_dims bits 9:8: the stage of a task split in parts (the compiler's asynchronous
+    // execution): 1 CONFIGURE writes every register and starts nothing, 2 START starts what
+    // CONFIGURE left and waits. The registers are latched at the start, so the next task's
+    // CONFIGURE may run while this transfer is in flight. Bit 10 NO_WAIT: the whole task or the
+    // START returns once the transfer has started; __snax_bingo_kernel_xdma_wait_all retires it.
     const uint32_t stage = (a[6] >> 8) & 3u;
+    const uint32_t no_wait = (a[6] >> 10) & 1u;
     if (stage == 2u) {
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         xdma_task_t _task = xdma_start();
-        xdma_wait_task(_task);
+        if (!no_wait) xdma_wait_task(_task);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_6d_args_t), a[3]);
     }
@@ -327,14 +329,28 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_6d_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    if (stage == 1u) {
+    if (stage == 1u || no_wait) {
         BINGO_XDMA_ND_CFG("xdma_6d", src_addr, dst_addr, spatial_stride_src, spatial_stride_dst,
                           num_dims, t_strides_src, t_bounds_src, t_strides_dst, t_bounds_dst);
+        if (no_wait) (void)xdma_start();
         BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
     }
     BINGO_XDMA_ND_RUN("xdma_6d", src_addr, dst_addr, spatial_stride_src, spatial_stride_dst,
                       num_dims, t_strides_src, t_bounds_src, t_strides_dst, t_bounds_dst);
     BINGO_RETURN_SUCC(sp, (uint32_t)dst_addr);
+}
+
+// The other half of a transfer started with NO_WAIT: every transfer this xDMA started, local and remote, finished.
+// On the xDMA core, after the start in its program.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_wait_all(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_wait_all_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_wait_all", "xDMA");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_local_wait(snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR));
+    xdma_remote_wait(snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR));
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_wait_all_args_t), 0);
 }
 
 // ==========================================================================

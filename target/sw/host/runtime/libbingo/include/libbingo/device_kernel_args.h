@@ -1525,6 +1525,20 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_wait_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_wait_args_t;
 
+// The wait of a SIMD task launched with SIMD_STAGE_FIRE / SIMD_STAGE_CONFIGURE_FIRE (simd.h): every task the SIMD was
+// given retired. On the SIMD core. No field of its own.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_wait_all_args {
+  uint32_t unused;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_wait_all_args_t;
+
+// The wait of an xDMA transfer started with NO_WAIT (xdma.h xdma_6d): every transfer the xDMA started finished. On the
+// xDMA core. No field of its own.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_wait_all_args {
+  uint32_t unused;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_wait_all_args_t;
+
 
 // ONE LAYOUT CONVERTER, dispatching on the pair it is given.
 //

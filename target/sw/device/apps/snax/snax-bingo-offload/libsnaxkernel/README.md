@@ -31,7 +31,8 @@ libsnaxkernel/
     ├── basic.h             — dummy / stamp / chip_barrier / exit
     ├── idma.h              — iDMA 1d/2d copies, broadcast, flagged put/fetch with
     │                          wait_flags, pairwise swap, slot copy, ring load
-    ├── xdma.h              — xDMA data movement: 1d/6d copies, memset
+    ├── xdma.h              — xDMA data movement: 1d/6d copies (6d also as configure /
+    │                          start with NO_WAIT, retired by xdma_wait_all), memset
     │                          expand, multicast, chain_gather, pack_fa_partial,
     │                          the layout converter (layout_convert: row-major
     │                          ↔ A/B/D), 2d helpers (transpose, submatrix, expand,
@@ -39,7 +40,8 @@ libsnaxkernel/
     │                          ElementwiseAdd accumulate (elementwise_add /
     │                          elementwise_add_ab)
     ├── simd.h              — SIMD-core (hart 1) kernels: the FP16 stream
-    │                          operators and the fused whole-ops (softmax,
+    │                          operators (staged: configure / fire, retired by
+    │                          simd_wait_all) and the fused whole-ops (softmax,
     │                          rmsnorm, silu, swiglu, rope, moe_combine,
     │                          fa_softmax)
     ├── gemm.h              — GEMM full / start / wait / shape_init / minimal and

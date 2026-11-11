@@ -317,14 +317,18 @@ static inline uint32_t simd_run_shapes(const snax_simd_shape_t *in,
     return simd_fire_drain();
 }
 
-// A SIMD task in two stages (the args' csr_mode; the host's simd cfg-ahead): CONFIGURE programs
-// every register and launches nothing, START launches what CONFIGURE left and drains. The
-// registers are sticky and the previous task on this core drained before it returned, so the
-// two stages need only to be adjacent on the core: the host orders CONFIGURE right before its
-// START and gives it no dependency, so it runs while START still waits for its operands.
+// A SIMD task in stages (the args' csr_mode; the compiler's asynchronous execution, passes/
+// bingo_dfg_schedule.py): CONFIGURE programs every register and launches nothing, START launches
+// what CONFIGURE left and drains. FIRE launches what CONFIGURE left and returns, CONFIGURE_FIRE
+// programs and launches and returns: __snax_bingo_kernel_simd_wait_all retires them. The task
+// queue takes the launch with its configuration, so the next task's CONFIGURE may run while this
+// one's work is still in flight; no other task programs the registers between a CONFIGURE and
+// its start.
 #define SIMD_STAGE_FULL 0u
 #define SIMD_STAGE_CONFIGURE 1u
 #define SIMD_STAGE_START 2u
+#define SIMD_STAGE_FIRE 3u
+#define SIMD_STAGE_CONFIGURE_FIRE 4u
 
 static inline uint32_t simd_run_staged(const snax_simd_shape_t *in,
                                        const snax_simd_shape_t *out, uint32_t stage) {
@@ -332,12 +336,23 @@ static inline uint32_t simd_run_staged(const snax_simd_shape_t *in,
         snax_simd_program_fast(in, out);
         return BINGO_RET_SUCC;
     }
+    if (stage == SIMD_STAGE_CONFIGURE_FIRE) {
+        snax_simd_program_fast(in, out);
+        snax_simd_launch();
+        return BINGO_RET_SUCC;
+    }
     return simd_run_shapes(in, out);
 }
 
 // Launch the armed task and drain it.
+static inline uint32_t simd_drain_checked(void);
 static inline uint32_t simd_fire_drain(void) {
     snax_simd_fire();
+    return simd_drain_checked();
+}
+
+// Every task the SIMD was given retired, bounded, then the refused-task bit.
+static inline uint32_t simd_drain_checked(void) {
     const uint32_t drain = snax_simd_drain();
     if (drain == SNAX_SIMD_DRAIN_TIMEOUT) {
         printf_safe("[Cluster %d Core %d]: SIMD task drain timeout (status %08x)\r\n",
@@ -755,6 +770,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fp16_to_int8(void *arg) {
         if (simd_fire_drain() != BINGO_RET_SUCC) return BINGO_RET_FAIL;
         BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fp16_to_int8_args_t), a[3]);
     }
+    if (stage == SIMD_STAGE_FIRE) {
+        snax_simd_launch();
+        BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fp16_to_int8_args_t), a[3]);
+    }
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t beats = a[4];
@@ -805,6 +824,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_stream_elementwise(void *arg) 
     const uint32_t stage = a[9];               // csr_mode: SIMD_STAGE_*
     if (stage == SIMD_STAGE_START) {
         if (simd_fire_drain() != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+        BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_stream_elementwise_args_t),
+                          a[3]);
+    }
+    if (stage == SIMD_STAGE_FIRE) {
+        snax_simd_launch();
         BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_stream_elementwise_args_t),
                           a[3]);
     }
@@ -3182,6 +3206,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_fa_build_shapes(void *arg) {
     __asm__ volatile("fence" ::: "memory");
     BINGO_RETURN_SUCC(sp, arena);
 #endif
+}
+
+// The other half of a task launched with SIMD_STAGE_FIRE or SIMD_STAGE_CONFIGURE_FIRE: every task the SIMD was given
+// retired (bounded), then the refused-task bit. On the SIMD core, after the launch in its program.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_wait_all(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_wait_all_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_wait_all", "SIMD");
+    if (simd_drain_checked() != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+    BINGO_RETURN_SUCC(BINGO_GET_SP(arg, __snax_bingo_kernel_simd_wait_all_args_t), 0);
 }
 
 // The other half of a SIMD_FA_P_NO_DRAIN softmax: wait until the SIMD has retired every task that softmax fired (the

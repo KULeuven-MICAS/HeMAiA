@@ -144,6 +144,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_cfg),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_start),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_wait),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_wait_all),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
     /// Core-level SIMD Kernels  (offload_hw_kernels/simd.h)          ///
@@ -195,6 +196,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fa_softmax_n),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_fa_build_shapes),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fa_wait),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_wait_all),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_row),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_row_ext),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_a_row),
