@@ -167,14 +167,19 @@ class ChipletBuild(FabricBase):
                                   is_host_as_acc=True, chiplet_ids=chips,
                                   dep_tag_width=plat["dep_tag_width"])
         dfg.idle_chiplet_ids = list(self.idle_chips)
-        dfg.l1_capacity_bytes = int(p.get("l1_capacity", L1_CAPACITY))
+        # the static L1 plan's capacity a cluster: what the cluster's L1 heap leaves beside everything else it keeps
+        # there once the schedule has fixed its tasks (passes/bingo_dfg_schedule.py _l1_cap); params l1_capacity: a
+        # fixed one instead
+        dfg.l1_capacity_auto = p.get("l1_capacity", "auto") == "auto"
+        dfg.l1_capacity_bytes = L1_CAPACITY if dfg.l1_capacity_auto else int(p["l1_capacity"])
+        dfg.l1_tcdm_bytes = int(hw["cluster"]["tcdm"]["size"]) * 1024     # the L1 heap's TCDM (bingo_l1_heap.py)
         dfg.waiting_queue_depth = plat.get("waiting_queue_depth", 8)
         dfg.compact_task_tables = bool(p.get("compact_tables", True))
         # each chiplet's id maps hold its own entries only (bingo_g2l16_build, bingo_hw_scheduler_sparse)
-        dfg.compact_id_maps = bool(p.get("compact_id_maps", False))
+        dfg.compact_id_maps = bool(p.get("compact_id_maps", True))
         # each cluster's L1 holds its own tasks' global ids instead of a table of every task's
         # (bingo_hw_scheduler_init_gid_lists): its L1 cost does not grow with the whole graph
-        dfg.gid_lists = bool(p.get("gid_lists", False))
+        dfg.gid_lists = bool(p.get("gid_lists", True))
         # each cluster's per-task list entries follow its args phases through two L1 windows (bingo_dfg_emit.py,
         # PAGED TASK LISTS), so they too stop growing with the whole graph; needs gid_lists and args phases (the device
         # runtime reads them: bingo.h, bingo_hw_offload_manager_paged)
@@ -669,13 +674,14 @@ class ChipletBuild(FabricBase):
             from bingo_l1_packer import StaticL1Options
             static_l1 = StaticL1Options(enable=True, pin_last=tuple(p.get("l1_pin_last", ())),
                                         order=p.get("l1_order", "name"))
-        # params args_phase_bytes: each cluster's device args in phases of at most this many bytes, two alternating L1
-        # regions (passes/bingo_args_phases.py), for a cluster whose args do not fit beside its static buffers; the
-        # compiler cuts them once it has fixed each core's program
-        if p.get("args_phase_bytes") and not getattr(dfg, "args_pingpong", False):
+        # each cluster's device args in phases, two alternating L1 regions (passes/bingo_args_phases.py), where they do
+        # not fit beside everything else the cluster keeps in L1: the compiler sizes each cluster's phases once it has
+        # fixed each core's program (params args_phase_bytes: one size for every cluster instead)
+        if static_l1 and not getattr(dfg, "args_pingpong", False):
             dm = self.roles["dm"]
+            phase = p.get("args_phase_bytes", "auto")
             dfg.args_phases = dict(
-                budget=int(p["args_phase_bytes"]), dm=dm,
+                budget=None if phase == "auto" else int(phase), dm=dm,
                 dev_cores=[self.roles[r] for r in ("gemm", "simd", "xdma", "dm")],
                 node=lambda k, c, name, kernel, kargs, deps: self.node(k, c, dm, name, kernel, kargs, deps))
         dfg.bingo_compile_dfg(

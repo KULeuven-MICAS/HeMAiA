@@ -5,6 +5,12 @@ import re
 
 from bingo_mem_handle import BingoMemAlloc
 from bingo_mem_handle import BingoMemAllocView
+from bingo_args_phases import _struct_sizes
+import bingo_l1_heap
+
+
+def _align64(n):
+    return (int(n) + 63) // 64 * 64
 
 
 # ======================================================================================
@@ -92,14 +98,25 @@ _ARGS_MAX = ("#ifndef BINGO_ARGS_MAX\n"
 
 def _args_group(node, phased=False):
     """The args region of a device task: "r" (resident: a load of a later phase's args) or its
-    args phase. phased (the chip's graph has args phases): the compiler's exit tasks are resident
-    too, since they run after every phase has taken the shared region; added after the
-    application assigned the phases, they carry none."""
+    args phase. phased (the chip's graph has args phases): a task the phases were cut without is
+    resident too -- the compiler's exit tasks, which run after every phase has taken the shared
+    region, and a relay the dependency-tag budget adds (bingo_dfg_transforms.py), which runs
+    wherever its edge lands; added after the phases were assigned, they carry none."""
     if getattr(node, "args_resident", False):
         return "r"
-    if phased and (node.kernel_name or "").endswith("_kernel_exit"):
+    if phased and ((node.kernel_name or "").endswith("_kernel_exit") or not hasattr(node, "args_phase")):
         return "r"
     return int(getattr(node, "args_phase", 0) or 0)
+
+
+class _Reach:
+    """`n in r`: whether the test holds for n (a reach-label query in place of a set of nodes)."""
+
+    def __init__(self, test):
+        self.test = test
+
+    def __contains__(self, n):
+        return self.test(n)
 
 
 def _args_phased(nodes):
@@ -738,6 +755,45 @@ class BingoDFGEmitMixin:
     # allocation is made with bingo_l1_alloc_at, which aborts the run if it lands anywhere else.
     # The host then writes only what depends on the program image or the device symbol table.
 
+    def _l1_record(self, chiplet_id, cl, what, nbytes):
+        """One L1 allocation of cluster (chiplet_id, cl) the host's init makes: the L1 ledger (_l1_heap_check)."""
+        self.__dict__.setdefault("_l1_ledger", {}).setdefault((chiplet_id, cl), []).append((what, int(nbytes)))
+
+    def _l1_ledger_runtime(self, chiplet_id, local_nodes):
+        """The L1 allocations the runtime makes for this chiplet's clusters beside the emitted ones: the scheduler's
+        lists at host init, and the SIMD scratch pool a cluster's first SIMD task takes."""
+        _dev_ids, bases = self._dev_task_numbering(chiplet_id)
+        mode = ("paged" if _list_phases_on(self) else "gid" if getattr(self, "gid_lists", False)
+                else "compact" if getattr(self, "compact_task_tables", False) else "full")
+        for cl in range(len(bases) - 1):
+            if mode != "paged":         # the paged header is recorded where it is built
+                for i, b in enumerate(bingo_l1_heap.list_allocs(mode, bases[cl + 1] - bases[cl], len(self.node_list),
+                                                                self.num_cores_per_cluster)):
+                    self._l1_record(chiplet_id, cl, f"scheduler list {i}", b)
+            for k, b in bingo_l1_heap.device_pools([n for n in local_nodes if n.assigned_cluster_id == cl]).items():
+                self._l1_record(chiplet_id, cl, k.replace("__snax_bingo_kernel_", "") + " pool", b)
+
+    def _l1_heap_check(self):
+        """Every cluster's L1 allocations (the ledger) against its heap (bingo_l1_heap.py): the fullest reported, and
+        an overflow refused here rather than at host init."""
+        ledger = getattr(self, "_l1_ledger", None)
+        if not ledger:
+            return
+        heap = bingo_l1_heap.heap_bytes(getattr(self, "l1_tcdm_bytes", 1 << 20))
+        used = {k: sum(bingo_l1_heap.frag(b) for _w, b in v) for k, v in ledger.items()}
+        self.l1_heap_used, self.l1_heap_bytes = used, heap
+        worst = max(used, key=used.get)
+        def parts(k):
+            return ", ".join(f"{w} {b:,}" for w, b in sorted(ledger[k], key=lambda wb: -wb[1])[:6])
+        print(f"[l1-heap] fullest cluster: chip 0x{worst[0]:02x} cluster {worst[1]} uses {used[worst]:,} of "
+              f"{heap:,} B ({parts(worst)})")
+        over = sorted((k for k in used if used[k] > heap), key=lambda k: -used[k])
+        if over:
+            for k in over[:8]:
+                print(f"[l1-heap] chip 0x{k[0]:02x} cluster {k[1]}: {used[k]:,} B, {used[k] - heap:,} past its heap "
+                      f"({parts(k)})")
+            raise ValueError(f"L1 heap: {len(over)} cluster(s) allocate more than their {heap:,} B heap at host init")
+
     def _l1_at_reset(self, chiplet_id):
         self._l1_at_on = bool(getattr(self, "static_l1_sp_slots", None)) and \
             getattr(self, "static_args_image", True) and getattr(self, "fast_host_init", False)
@@ -746,9 +802,11 @@ class BingoDFGEmitMixin:
         self._const_handles = {}      # handle -> its address as a constant expression
         self._l1_const_by_name = None  # C variable -> constant expression (_c_static_value)
 
-    def _emit_l1_alloc(self, f, chiplet_id, cl, var, size_expr, comment="", mac=None):
+    def _emit_l1_alloc(self, f, chiplet_id, cl, var, size_expr, comment="", mac=None, nbytes=None):
         """`uint64_t var = <L1 allocation>`; with compile-time L1 addresses also `#define` the
-        macro holding where it lands. Returns the macro's name, or None."""
+        macro holding where it lands. Returns the macro's name, or None. nbytes: the size as a number, where
+        size_expr is a C expression (the L1 ledger, _l1_heap_check)."""
+        self._l1_record(chiplet_id, cl, var, size_expr if nbytes is None else nbytes)
         if not self._l1_at_on:
             f.write(f"        uint64_t {var} = bingo_l1_alloc(0x{chiplet_id:02x}, {cl}, "
                     f"{size_expr});{comment}\n")
@@ -870,7 +928,9 @@ class BingoDFGEmitMixin:
         # The named workload buffers are allocated BEFORE this point, so collapsing these
         # allocations cannot disturb the cross-chip name/offset agreement they rely on.
         sp_align = "ALIGN_UP(sizeof(bingo_kernel_scratchpad_t), 64)"
+        sp_bytes = 64                                   # sizeof(bingo_kernel_scratchpad_t), 64-byte aligned
         l1_terms = {}   # cluster -> list of C size expressions
+        l1_num = {}     # cluster -> their bytes (bingo_args_phases._struct_sizes: the structs' sizeof)
         l3_terms = []
         # With slot packing the DEVICE scratchpad term is (slots x sp_align), added below --
         # one term per cluster, not one per node. Emitting both would make the packed arena
@@ -881,12 +941,14 @@ class BingoDFGEmitMixin:
             if kn and kn.startswith("__snax"):
                 if not sp_packed:
                     l1_terms.setdefault(node.assigned_cluster_id, []).append(sp_align)
+                    l1_num[node.assigned_cluster_id] = l1_num.get(node.assigned_cluster_id, 0) + sp_bytes
             elif kn and kn.startswith("__host"):
                 # host scratchpads live in L3 and are not packed
                 l3_terms.append(sp_align)
         # device arg blocks share the cluster's L1 arena; with args phases (_args_group) the
         # resident args, then one region every phase's args take in turn
         args_terms = {}   # cluster -> {group: [terms]}
+        args_num = {}     # cluster -> {group: [bytes]}
         phased = _args_phased(local_nodes)
         for node in local_nodes:
             kn = node.kernel_name
@@ -900,15 +962,20 @@ class BingoDFGEmitMixin:
                 continue
             args_terms.setdefault(node.assigned_cluster_id, {}).setdefault(
                 _args_group(node, phased), []).append(f"ALIGN_UP(sizeof({t}), 64)")
+            args_num.setdefault(node.assigned_cluster_id, {}).setdefault(_args_group(node, phased), []).append(
+                _align64(_struct_sizes()[t]))
         for cl, groups in args_terms.items():
             if set(groups) == {0}:
                 l1_terms.setdefault(cl, []).extend(groups[0])
+                l1_num[cl] = l1_num.get(cl, 0) + sum(args_num[cl][0])
             else:
                 phases = sorted(g for g in groups if g != "r")
                 sets = ([[p for p in phases if p % 2 == 0], [p for p in phases if p % 2 == 1]]
                         if getattr(self, "args_pingpong", False) else [phases])
                 l1_terms.setdefault(cl, []).extend(
                     groups.get("r", []) + [_c_max(["(" + " + ".join(groups[p]) + ")" for p in ps]) for ps in sets if ps])
+                l1_num[cl] = (l1_num.get(cl, 0) + sum(args_num[cl].get("r", []))
+                              + sum(max(sum(args_num[cl][p]) for p in ps) for ps in sets if ps))
 
         # With slot packing the scratchpad half of the arena is (slots x sp_align) rather than
         # (nodes x sp_align). The ARG half is unchanged and must stay unchanged: arg structs
@@ -921,6 +988,7 @@ class BingoDFGEmitMixin:
                     slots_per_cl.setdefault(nd.assigned_cluster_id, set()).add(sl)
             for cl, sl in slots_per_cl.items():
                 l1_terms.setdefault(cl, []).append(f"{max(sl) + 1} * {sp_align}")
+                l1_num[cl] = l1_num.get(cl, 0) + (max(sl) + 1) * sp_bytes
 
         if any(set(g) != {0} for g in args_terms.values()):
             f.write(_ARGS_MAX)
@@ -934,8 +1002,9 @@ class BingoDFGEmitMixin:
         for cl in sorted(l1_terms):
             base = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{cl}"
             if self._l1_at_on:
-                self._emit_l1_alloc(f, chiplet_id, cl, base, " + ".join(l1_terms[cl]))
+                self._emit_l1_alloc(f, chiplet_id, cl, base, " + ".join(l1_terms[cl]), nbytes=l1_num.get(cl, 0))
             else:
+                self._l1_record(chiplet_id, cl, base, l1_num.get(cl, 0))
                 f.write(f"        uint64_t {base} = bingo_l1_alloc(0x{chiplet_id:02x}, {cl},\n"
                         f"            {' + '.join(l1_terms[cl])});\n")
             # THE SLOT BLOCK SITS AT THE FRONT OF THIS ARENA, so the arg bump pointer has to
@@ -1330,6 +1399,7 @@ class BingoDFGEmitMixin:
                     block += entry(n)
             block += [0] * (len(block) % 2)
             p0_off, p0_bytes = self._lp_offsets[(cl, 0)]
+            self._l1_record(chiplet_id, cl, "paged-list header", len(block) * 4)
             info.append(f"{{{len(hdr)}u, {len(block)}u, {p0_off}u, {p0_bytes // 4}u}}")
             hdr += block
         if len(lists) != self._lp_words:
@@ -1357,17 +1427,24 @@ class BingoDFGEmitMixin:
         so every task with args in phase p (p >= 1) must follow its cluster's phase-p load and
         every one must precede its cluster's phase-(p + 1) load, by a path in the graph. A task
         with no such path reads another phase's bytes as its args."""
-        import networkx as nx
+        from bingo_reach import ChainLabels
         loads = {}
         for n in local_nodes:
             ka = getattr(n, "kernel_args", None)
             if getattr(n, "args_resident", False) and hasattr(ka, "phase") and hasattr(ka, "cluster"):
                 loads[(n.assigned_cluster_id, int(ka.phase))] = n
+        if not loads:
+            return
         bad = []
         # ping-pong: the phase-q load takes the region of q's parity, so only the phases before q of that parity
         pp = getattr(self, "args_pingpong", False)
+        # the graph's reach labels, made once for every chip's check (the graph no longer changes)
+        if getattr(self, "_phase_labels", None) is None:
+            self._phase_labels = ChainLabels(self)
+        labels = self._phase_labels
         for (cl, q), ld in sorted(loads.items(), key=lambda kv: kv[0]):
-            before, after = nx.ancestors(self, ld), nx.descendants(self, ld)
+            before = _Reach(lambda n, ld=ld: labels.reaches(n, ld))
+            after = _Reach(lambda n, ld=ld: labels.reaches(ld, n))
             for n in local_nodes:
                 if n.assigned_cluster_id != cl or not (n.kernel_name or "").startswith("__snax"):
                     continue
@@ -1607,6 +1684,8 @@ class BingoDFGEmitMixin:
         # 1. Collect Handles
         sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
+        self._l1_ledger = {}
+        self._phase_labels = None
         self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
         # Before the file is opened: a check that raises mid-write leaves a truncated
@@ -1681,6 +1760,7 @@ class BingoDFGEmitMixin:
 
                 # E. Emit Scheduler Launch
                 self._emit_scheduler_launch(f, chiplet_id)
+                self._l1_ledger_runtime(chiplet_id, [n for n in sorted_nodes if n.assigned_chiplet_id == chiplet_id])
 
                 # F. Emit Post-Execute Code (runs after scheduler completes)
                 if post_execute_code:
@@ -1730,6 +1810,9 @@ class BingoDFGEmitMixin:
                 idf.write(" ".join(f"0x{c:02x}" for c in self.chiplet_ids) + "\n")
         elif os.path.exists(ids_path):
             os.remove(ids_path)
+
+        # every cluster's L1 allocations against its heap, now that the header is whole
+        self._l1_heap_check()
 
         # AUDIT WHAT WAS ACTUALLY WRITTEN. The one failure this catches -- the device-argument
         # bump pointer starting inside the scratchpad slot block -- builds cleanly, passes
