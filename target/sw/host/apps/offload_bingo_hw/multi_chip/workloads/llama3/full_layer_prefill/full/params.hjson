@@ -10,24 +10,16 @@
 {
   num_chiplets: 16
   num_clusters: 2
-  seed: 1
   tokens: 1024
   wbits: 4
-  static_l1: true
-  compact_id_maps: true
-  gid_lists: true
   per_chip_image: true
   desc_in_image: true
   fast_host_init: true
-  l1_capacity: 990000
-  d2d_ddr: true
   d2d_rx_yield: [255, 0]
   remote_broadcast: false
   bcast: bcast_l1
   reduce: chain
   sync: edge
-  // each cluster's task args of both blocks in phases of at most this many bytes (two alternating L1 regions)
-  args_phase_bytes: 16000
   // each cluster's per-task list entries paged with its args phases (two L1 windows); runs on snax-bingo-offload-paged
   list_phases: true
   attn:
@@ -38,34 +30,24 @@
     w4_paired: true
     w_chunk_bytes: 65536
     w_buffers: 2
-    load_ahead: true
     wo_cols: true
     wo_slice: 128
     rope_pairs: chunks
     restream: true
     l3_overlay: false
     kv_split: true
-    weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+    weight_ring: { slots: 8, head: 4, batch_head: 1 }
     checks: y
-    cfg_reuse: true
-    gemm_shape_l1: true
-    gemm_reuse: true
-    gemm_cfg_ahead: true
-    fa_cfg_ahead: true
     mask_c: true
     x_bcast: "memchip"
     x_pf_split: true
     ot8_fused: true
     sm_geom_xdma: true
-    wo_load_ahead: true
     y_scatter: true
     wo_early: true
     o_get_xdma: true
     wo_under_proj: true
-    o_mc_first: true
     x_early: true
-    o_get_ahead: true
-    trade_ahead: true
     front_first: "x"
     x_after_sm: true
     x_row_tiles: true
@@ -82,22 +64,14 @@
     w_chunk_bytes: 98304
     w_buffers: 2
     restream: true
-    weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+    weight_ring: { slots: 8, head: 4, batch_head: 1 }
     l3_overlay: false
     y_scatter: true
     deq_per_row: true
     x_blocks: 4
-    // GEMMs (ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
-    // ahead of its operands and of the waits before its start, a start that repeats its cluster's previous
-    // configuration writing only addresses
-    gemm_async: true
-    gemm_shape_l1: true
-    gemm_cfg_ahead: true
-    gemm_cfg_hoist: true
     post_blocks: 4
     split_last: true
     split_first_dn: true
-    dn_load_early: true
     out_slots: 8
     start_per_chip: true
     gather_relay_only: true
@@ -115,18 +89,13 @@
     final_cluster: 1
     // a norm piece an iteration, the tile's last four iterations before pass p - 1
     norm_lead: 5
-    glue_lag: 1
-    final_lag: 1
     // the final's pieces at down slices 6, 8, 10, 12 of the next FFN pass, each write a slice later
     final_slice: 6
-    final_step: 2
     // the root's final in pieces of two rows, a slice apart: its FFN leaves less L1 free than the other chips'
     final_root_rows: 2
     // the x landing ring and the L3 aliases, the RoPE tables in HBM
     x_slots: 3
     alias_l3: true
     rope_hbm: true
-    // the root's FFN prefetcher part before X_i ends at pass i - 1's ninth chunk
-    ffn_part_chunk: 8
   }
 }

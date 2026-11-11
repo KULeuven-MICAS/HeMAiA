@@ -10,18 +10,11 @@
 {
   num_chiplets: 16
   num_clusters: 2
-  static_l1: true
-  l1_capacity: 960000
   l1_order: search
-  compact_id_maps: true
-  gid_lists: true
   per_chip_image: true
   desc_in_image: true
   fast_host_init: true
-  d2d_ddr: true
   d2d_rx_yield: [255, 0]
-  // every cluster's device args in phases of at most this many bytes, two alternating L1 regions, over the whole layer
-  args_phase_bytes: 24000
   // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
   list_phases: true
   layer:
@@ -56,7 +49,6 @@
     kv_split_clusters: true
     kv_vals_other: true
     kv_vals_own: true
-    kv_cfg_ahead: true
     x_hbm: true
     x_bcast: memchip
     kv_balance_ways: 4
@@ -71,31 +63,22 @@
     weight_ring:
     {
       slots: 6
-      batch: 4
-      policy: 1
     }
     bcast: bcast_l1
     reduce: chain
     sync: edge
-    gemm_async: true
     l3_overlay: true
     x_puts_first: true
-    y_halves: false
     y_store_halves: true
     y_windows: 4
     kv_slabs: split_kb
     prefetch_after_x: false
     chain_concurrent: false
     checks: y
-    cfg_reuse: true
-    gemm_shape_l1: true
     rope_fused: true
     rope_perm: true
     dq_fused: true
-    gemm_reuse: true
     mask_c: true
-    gemm_cfg_ahead: true
-    fa_cfg_ahead: true
     x_put_cluster: 1
     q_tiles: true
     o_tiles: true
@@ -111,14 +94,12 @@
     y_roots: ["11", "31", "13", "33"]
     relay_prefer: {xdma: ["dm"]}
     s4_q8_pairs: 2
-    gemm_cfg_hoist: true
     yr_store_tile: 2
     post_tiles: true
     wo_split_rows: true
     wo_row_pipe: true
     kc_xs_late: true
     kx_mid_double: true
-    kx_ahead: true
     yr_rel1: true
     x_rest_early: true
     kx_per_chunk: true
@@ -127,7 +108,6 @@
   moe:
   {
     stage: full
-    seed: 1
     tokens: 512
     wbits: 4
     blocks: 3
@@ -139,8 +119,6 @@
     weight_ring:
     {
       slots: 18
-      batch: 4
-      policy: 1
       head: 4
       batch_head: 1
       queued: true
@@ -148,14 +126,10 @@
     bcast: bcast_l1
     reduce: chain
     sync: edge
-    gemm_async: true
     b_parity: true
-    gemm_shape_l1: true
     topk_shared: true
     warm_root: true
     dispatch_blocks: true
-    down_half_slabs: false
-    dtmp_bufs: 2
     route: dist
     chain_concurrent: false
     l3_overlay: true
@@ -164,10 +138,8 @@
     x_in_xe: true
     route_tile_buf: true
     route_early: true
-    fetch_lag: 2
     sh_quant_blocks: true
     slot_order: [1, 2, 3, 0]
-    store_lag: 1
     scale_out: true
     chain_first_alt: true
     chain_tail: 1
