@@ -19,7 +19,6 @@ not a produced tensor -- so declaring it as a port would promise something the p
 cannot honour.
 """
 
-from . import collective
 from .fa_sweep import FaSweepBufs, FaSweepCfg, fa_sweep, fa_sweep_alloc
 from .flash_attention import FaCfg, FlashAttention
 from .linear import Linear, LinearCfg, record_spec
@@ -38,7 +37,7 @@ from .simd import (AddRow, AddRowCfg, ARowPack, ARowPackCfg, NormCfg, NormRowCfg
                    ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                    SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
-__all__ = ["chain_gather", "collective", "FaCfg", "FlashAttention", "fa_gather",
+__all__ = ["chain_gather", "FaCfg", "FlashAttention", "fa_gather",
            "FaSweepBufs", "FaSweepCfg", "fa_sweep", "fa_sweep_alloc", "Gather", "Linear",
            "LinearCfg", "LoadStream", "WeightRings", "record_spec",
            "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",

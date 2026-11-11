@@ -10,5 +10,3 @@ __pycache__/
 # Intermediate experiments are not tracked: a numbered variant (v<N>) is one iteration of a
 # workload; the named ones (base, all, ...) are the variants that stay.
 */v[0-9]*/
-# the reduce testbench's variants (driver: common/gather_tb_mc.py)
-gather_tb/

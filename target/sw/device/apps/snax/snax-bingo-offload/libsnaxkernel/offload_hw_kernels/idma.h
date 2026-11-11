@@ -136,40 +136,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
     return _bingo_idma_1d(arg, false);
 }
 
-// A broadcast collective's producer (libs/blocks/collective.py, impl "bcast"): its part into
-// this chip's copy of the hand-off array and to the same address on every other compute chip
-// (a store to chip 0xFF; the router never delivers a broadcast back to its source, so this
-// chip's copy is written locally), then the landed flag the same two ways. All four go out on
-// this one iDMA, in order, so a flag that has landed says the part before it has. The flag's
-// source is this task's own `value` argument.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
-{
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
-    BINGO_REQUIRE_CORE(snax_is_idma_core(), "idma_bcast_put", "iDMA");
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    __snax_bingo_kernel_idma_bcast_put_args_t *a = (__snax_bingo_kernel_idma_bcast_put_args_t *)arg;
-    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
-    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
-    const uint64_t flag = make_u64(a->flag_addr_hi, a->flag_addr_lo);
-    // this chip's prefix: a DMA address whose high word is 0 names chip 0x00
-    const uint64_t val = chiplet_addr_transform((uint64_t)(uint32_t)(uintptr_t)&a->value);
-    const uint32_t size = a->size;
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-    bingo_dma_drain();
-    snrt_dma_start_1d_wideptr(dst, src, size);
-    snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, dst), src, size);
-    snrt_dma_start_1d_wideptr(flag, val, 4);
-    snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, flag), val, 4);
-    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
-    snrt_dma_wait_all();
-    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    BINGO_RETURN_SUCC(sp, (uint32_t)dst);
-}
-
-// A broadcast collective's destination: spin until each producer's landed flag (64 B apart,
+// A flagged broadcast's destination: spin until each producer's landed flag (64 B apart,
 // in this chip's memory) holds `value` -- the producers are ordering-only edges, not
 // dependencies, so the flags are the proof their parts are here -- then copy the gathered
 // array from this chip's memory into L1. No read crosses a link.
@@ -229,8 +196,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
 // data. bcast bit 0 clear: dst and flag are full addresses (any one chip, its L1 included).
 // Bit 0 set: they are this chip's local addresses and the D2D 0xFF multicast writes both into
 // every other chip at the same addresses; bit 1 also writes them here, since the multicast does
-// not deliver to its sender. Unlike bcast_put, nothing is staged and nothing is copied on
-// arrival: the data lands where it is used, and the destination waits on its own flag with
+// not deliver to its sender. Nothing is staged and nothing is copied on arrival:
+// the data lands where it is used, and the destination waits on its own flag with
 // __snax_bingo_kernel_wait_flags.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_put_flagged(void *arg)
 {
