@@ -13,18 +13,11 @@
   weight_ring:
   {
     slots: 8
-    batch: 4
-    policy: 1
     head: 4
     batch_head: 1
   }
-  static_l1: true
-  compact_id_maps: true
-  gid_lists: true
   per_chip_image: true
   desc_in_image: true
-  l1_capacity: 990000
-  d2d_ddr: true
   d2d_rx_yield: [255, 0]
   start_per_chip: true
   gather_relay_only: true

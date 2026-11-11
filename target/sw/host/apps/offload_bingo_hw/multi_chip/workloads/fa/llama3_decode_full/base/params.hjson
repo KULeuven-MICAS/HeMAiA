@@ -8,7 +8,6 @@
 {
   num_chiplets: 16
   num_clusters: 2
-  seed: 1
   tokens: 1
   // the cached positions (128 key tiles of 64, 8 a chip) and the prefill's passes of 64 queries the golden runs over
   // them for the prompt's static scales
@@ -20,19 +19,14 @@
   w_chunk_bytes: 65536
   // the 4 W_O chunks of a cluster wait in its slabs for o (wo_push before_chains)
   w_buffers: 4
-  weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+  weight_ring: { slots: 8, head: 4, batch_head: 1 }
   bcast: pull
   reduce: root
   sync: barrier
   barrier_mode: sw
   x_cast: unicast
-  static_l1: true
-  compact_id_maps: true
-  gid_lists: true
   per_chip_image: true
   desc_in_image: true
-  l1_capacity: 990000
-  d2d_ddr: true
   d2d_rx_yield: [255, 0]
   remote_broadcast: false
   fast_host_init: true

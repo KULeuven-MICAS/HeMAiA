@@ -7,21 +7,17 @@
   stage: "full"
   num_chiplets: 16
   num_clusters: 2
-  seed: 1
   tokens: 512
   wbits: 4
   blocks: 3
   slice: 64
   x_blocks: 16
   expert_rows: 32
-  gid_lists: true
   w_chunk_bytes: 100352
   w_buffers: 2
   weight_ring:
   {
     slots: 18
-    batch: 4
-    policy: 1
     head: 4
     batch_head: 1
     queued: true
@@ -29,17 +25,10 @@
   bcast: bcast_l1
   reduce: root
   sync: barrier
-  static_l1: true
-  compact_id_maps: true
-  l1_capacity: 1000000
-  d2d_ddr: true
-  relay_per_gather: true
   b_parity: true
   topk_shared: true
   warm_root: true
   dispatch_blocks: true
-  down_half_slabs: false
-  dtmp_bufs: 2
   route: dist
   d2d_rx_yield: [255, 0]
   chain_concurrent: false
@@ -49,13 +38,11 @@
   x_in_xe: true
   route_tile_buf: true
   route_early: true
-  fetch_lag: 2
   sh_quant_blocks: true
   fast_host_init: true
   desc_in_image: true
   args_phases: true
   slot_order: [1, 2, 3, 0]
-  store_lag: 1
   scale_out: true
   chain_first_alt: true
   chain_tail: 1

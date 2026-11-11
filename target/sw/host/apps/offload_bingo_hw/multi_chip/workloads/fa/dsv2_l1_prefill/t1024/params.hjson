@@ -23,18 +23,12 @@
   "num_chiplets": 16,
   "num_clusters": 2,
   "tokens": 1024,
-  "static_l1": true,
-  "l1_capacity": 960000,
-  "compact_id_maps": true,
-  "gid_lists": true,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_ddr": true,
   "d2d_rx_yield": [
     255,
     0
   ],
-  "relay_per_gather": true,
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -45,15 +39,11 @@
   "w_buffers": 3,
   "weight_ring": {
     "slots": 6,
-    "batch": 4,
-    "policy": 1
   },
   "bcast": "bcast_l1",
   "reduce": "chain",
   "sync": "edge",
   "l3_overlay": true,
-  "x_puts_first": true,
-  "y_halves": false,
   "y_store_halves": true,
   "y_windows": 4,
   "kv_slabs": "split_kb",
@@ -109,7 +99,6 @@
   // (snax replays rd_r2all / rd_r2all_11)
   "kc_xs_late": true,
   "kx_mid_double": true,
-  "kx_ahead": true,
   "yr_rel1": true,
   // x_rest_early: the rest of x (chunks 2 on) behind chunk 0's key multicast and ahead of the root's prefetcher, not
   // behind it (behind it, a full block's chunk 2 never gets its x)
@@ -120,7 +109,4 @@
   // kx_after_chains: every cluster's key loop of chunk h behind its chunk h - 1 tile-2 value load and the last chain
   // of chunk h - 2, so no key transfer runs beside a reduce chain (stg_dsv2poc_t1024_c3 hung with them together)
   "kx_after_chains": true,
-  // args phases (workloads/common/args_phases.py): eight chunks' device args (about 236 KB a cluster) do not fit L1
-  // beside the static buffers; phases of at most 24,000 bytes in two alternating regions (room about 53 KB a cluster)
-  "args_phase_bytes": 24000
 }

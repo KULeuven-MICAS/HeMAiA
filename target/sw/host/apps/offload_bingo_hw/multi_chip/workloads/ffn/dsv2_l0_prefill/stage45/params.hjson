@@ -13,15 +13,9 @@
   weight_ring:
   {
     slots: 16
-    batch: 4
-    policy: 1
     head: 4
     batch_head: 1
   }
-  static_l1: true
-  compact_id_maps: true
-  l1_capacity: 990000
-  d2d_ddr: true
   dn_balance: true
   root_cols: [320, 304]
   chain_alt: true
