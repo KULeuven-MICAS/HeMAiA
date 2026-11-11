@@ -87,14 +87,31 @@ def check_handle_identity(handle_users: Dict[int, Tuple[BingoMemAlloc, Set]]) ->
     return problems
 
 
+def with_spin_order(g, order_edges, successors):
+    """`g` with what an ordering-only edge (BingoDFG.bingo_add_order_edge) orders: its consumer spins until the
+    producer's flag lands, so everything after the consumer -- its successors, `successors(c)` -- comes after the
+    producer, but the consumer itself, which runs while it spins, does not. A copy where there are such edges."""
+    if not order_edges:
+        return g
+    h = nx.DiGraph(g)
+    for p, c in order_edges:
+        for s_ in list(successors(c)):
+            if s_ is not p:
+                h.add_edge(p, s_)
+    return h
+
+
 def reachability(dfg, nodes) -> Dict[object, Set]:
     """node -> every node reachable from it, as a set to test membership in.
 
     A conditional edge still orders its endpoints, so it counts; there is no edge type that
-    does not. One bitset a node (bingo_reach): a Python set of every node's descendants grows
-    with the square of the graph.
+    does not. An ordering-only edge orders its producer before the consumer's successors
+    (with_spin_order). One bitset a node (bingo_reach): a Python set of every node's
+    descendants grows with the square of the graph.
     """
-    desc = reach_sets(dfg)          # a ReachMap: the slot packer also asks it for concurrent nodes
+    order = list(getattr(dfg, "order_edges", None) or ())
+    g = with_spin_order(dfg, order, dfg.successors)
+    desc = reach_sets(g)            # a ReachMap: the slot packer also asks it for concurrent nodes
     for n in nodes:
         desc.setdefault(n, frozenset())
     return desc

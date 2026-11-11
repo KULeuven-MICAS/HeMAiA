@@ -414,6 +414,15 @@ check("no buffers means no plot",
       write_layout_plot(_png, {}, {}, _dc, _rank, StaticL1Options(enable=True)) is None)
 
 # ---------------------------------------------------------------------------------------
+print("an ordering-only edge orders its producer before the consumer's successors, not the consumer")
+from bingo_liveness import with_spin_order  # noqa: E402
+_g = nx.DiGraph([("a", "p"), ("c", "s")])
+_h = with_spin_order(_g, [("p", "c")], _g.successors)
+check("what precedes the producer precedes what follows the consumer", nx.has_path(_h, "a", "s"))
+check("the producer does not precede the spinning consumer itself", not nx.has_path(_h, "p", "c"))
+check("the graph given is left as it was", not _g.has_edge("p", "s"))
+
+# ---------------------------------------------------------------------------------------
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILURE(S): {', '.join(FAILED)}")

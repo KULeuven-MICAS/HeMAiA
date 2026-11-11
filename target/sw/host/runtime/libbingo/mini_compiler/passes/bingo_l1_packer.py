@@ -121,8 +121,12 @@ def _order_with_constraints(preference, preds, items):
 
 
 def pack(handle_users, desc, level: str = "L1", constraints=None,
-         opts: Optional["StaticL1Options"] = None, capacity: Optional[int] = None):
+         opts: Optional["StaticL1Options"] = None, capacity: Optional[int] = None,
+         fixed: Optional[Dict[int, int]] = None):
     """Assign every buffer an offset within its own (chip, cluster) address space.
+
+    `fixed` (id(handle) -> offset): buffers that keep a placement made before (the schedule's, bingo_dfg_schedule.py);
+    the others are placed around them.
 
     With a `capacity` and order="search", a cluster the orders tried overflow by no more than 1/32 of it, and whose
     lower bound fits, is searched further (opts.search_more), each size scaled by a factor in [0.5, 1.5]: first-fit's
@@ -239,11 +243,16 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             cands = [sorted(o, key=sym) for o in cands] + [jittered() for _ in range(opts.search_tries)]
 
         fp = {i: _footprint(items[i][0].size, alignment, guard) for i in idxs}
+        pinned = {i: fixed[id(items[i][0])] for i in idxs if fixed and id(items[i][0]) in fixed}
+        if pinned:
+            cands, searching = [order], False      # only the buffers made since are placed
 
         def first_fit(order):
-            local: Dict[int, int] = {}
-            peak = 0
+            local: Dict[int, int] = dict(pinned)
+            peak = max((off + fp[i] for i, off in pinned.items()), default=0)
             for i in order:
+                if i in pinned:
+                    continue
                 size = fp[i]
                 blockers = sorted((local[j], local[j] + fp[j]) for j in interference[i] if j in local)
                 # start above every declared predecessor: one alignment unit past its base is the
@@ -293,6 +302,19 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
     return placement, stats
 
 
+def _sharing_pairs(spans):
+    """The pairs (i, j), i < j, of `spans` [(start, end), ...] that share bytes: a sweep in start order, each span
+    against the ones still open where it starts."""
+    order = sorted(range(len(spans)), key=lambda i: spans[i][0])
+    open_, out = [], []
+    for i in order:
+        s0 = spans[i][0]
+        open_ = [j for j in open_ if spans[j][1] > s0]
+        out.extend((min(i, j), max(i, j)) for j in open_)
+        open_.append(i)
+    return out
+
+
 def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1",
            opts: Optional["StaticL1Options"] = None) -> List[str]:
     """Re-derive safety from the placement. Returns a list of problems; empty means sound.
@@ -316,10 +338,11 @@ def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1
             by_cluster.setdefault((h.chip_id, h.cluster_id), []).append((h, u))
 
     for key, group in sorted(by_cluster.items()):
-        for a in range(len(group)):
-            ha, ua = group[a]
+        spans = []
+        for ha, _ua in group:
             oa = placement[id(ha)][1]
             ea = oa + _footprint(ha.size, _al, _gu)
+            spans.append((oa, ea))
 
             # 2. alignment and capacity
             if oa % _al:
@@ -329,18 +352,16 @@ def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1
                     f"{ha.name}: ends at {ea:,} B, past the {capacity:,} B capacity "
                     f"of chip {key[0]:#04x} cluster {key[1]}")
 
-            # 3. THE ONE THAT MATTERS: anything sharing bytes must be provably disjoint in time
-            for b in range(a + 1, len(group)):
-                hb, ub = group[b]
-                ob = placement[id(hb)][1]
-                eb = ob + _footprint(hb.size, _al, _gu)
-                overlaps = oa < eb and ob < ea
-                if overlaps and not can_share(ua, ub, desc):
-                    problems.append(
-                        f"UNSAFE OVERLAP on chip {key[0]:#04x} cluster {key[1]}: "
-                        f"{ha.name} [{oa:,},{ea:,}) and {hb.name} [{ob:,},{eb:,}) share bytes "
-                        f"but are not ordered in the task graph -- a missing dependence edge, "
-                        f"or a liveness bug")
+        # 3. THE ONE THAT MATTERS: anything sharing bytes must be provably disjoint in time
+        for a, b in sorted(_sharing_pairs(spans)):
+            (ha, ua), (hb, ub) = group[a], group[b]
+            if not can_share(ua, ub, desc):
+                (oa, ea), (ob, eb) = spans[a], spans[b]
+                problems.append(
+                    f"UNSAFE OVERLAP on chip {key[0]:#04x} cluster {key[1]}: "
+                    f"{ha.name} [{oa:,},{ea:,}) and {hb.name} [{ob:,},{eb:,}) share bytes "
+                    f"but are not ordered in the task graph -- a missing dependence edge, "
+                    f"or a liveness bug")
     return problems
 
 
@@ -433,11 +454,18 @@ def pack_scratchpad_slots(nodes, desc):
         conflict = {n: set() for n in order}
         if _singletons(order, users, desc):
             # every scratchpad touched by its own node only: two conflict exactly when their nodes are unordered,
-            # which the chain form lists without testing every pair (bingo_reach.ReachMap.concurrent)
+            # which the chain form lists without testing every pair (bingo_reach.ReachMap.concurrent) for the nodes on
+            # its columns; a node off them (a chain of its own) is asked against each of the others
             here = set(order)
-            cols = sorted({desc.where[n][0] for n in order})       # the columns holding this arena's nodes
-            for a in order:
+            on = [n for n in order if desc.on_column(n)]
+            cols = sorted({desc.where[n][0] for n in on})          # the columns holding this arena's nodes
+            for a in on:
                 conflict[a].update(b for b in desc.concurrent(a, cols) if b in here)
+            for a in (n for n in order if not desc.on_column(n)):
+                for b in order:
+                    if b is not a and a not in desc[b] and b not in desc[a]:
+                        conflict[a].add(b)
+                        conflict[b].add(a)
         else:
             for i, a in enumerate(order):
                 for b in order[i + 1:]:
@@ -454,9 +482,10 @@ def pack_scratchpad_slots(nodes, desc):
 
 
 def _singletons(nodes, users, desc):
-    """Every node's scratchpad touched by the node alone, and desc in the chain form with every node in its graph."""
+    """Every node's scratchpad touched by the node alone, and desc in the chain form with every node in its graph (on a
+    column of its chain cover or not)."""
     return (getattr(desc, "chain_form", False) and all(users[n] == {n} for n in nodes)
-            and all(desc.on_column(n) for n in nodes))
+            and all(n in desc.where for n in nodes))
 
 
 def verify_scratchpad_slots(slots, users, desc):
@@ -597,25 +626,32 @@ def write_layout_csv(path, placement, handle_users, desc, topo_rank, opts, level
         return getattr(n, "node_name", None) or f"node{getattr(n, 'node_id', '?')}"
 
     al, gu = opts.alignment, opts.guard_bytes
+    span = {id(h): (placement[id(h)][1], placement[id(h)][1] + _footprint(h.size, al, gu)) for h, _u in items}
+    users_of = {id(h): ordered(u) for h, u in items}
+    at = {id(h): i for i, (h, _u) in enumerate(items)}
+    sharing = {id(h): [] for h, _u in items}            # the buffers of its cluster that share its bytes
+    by_cl = {}
+    for h, _u in items:
+        by_cl.setdefault((h.chip_id, h.cluster_id), []).append(h)
+    for hs in by_cl.values():
+        for a, b in _sharing_pairs([span[id(h)] for h in hs]):
+            sharing[id(hs[a])].append(hs[b])
+            sharing[id(hs[b])].append(hs[a])
     rows = []
     for h, users in items:
-        off = placement[id(h)][1]
-        end = off + _footprint(h.size, al, gu)
-        us = ordered(users)
+        off, end = span[id(h)]
+        us = users_of[id(h)]
 
         # who else lives in these bytes, and which of them takes over next
         shares, successor = [], None
-        for h2, u2 in items:
-            if h2 is h or (h2.chip_id, h2.cluster_id) != (h.chip_id, h.cluster_id):
-                continue
-            o2 = placement[id(h2)][1]
-            if off < o2 + _footprint(h2.size, al, gu) and o2 < end:
-                shares.append(h2.name)
-                # the next occupant is the one whose users all come AFTER this buffer's
-                if u2 and us and rank(ordered(u2)[0]) > rank(us[-1]):
-                    first2 = ordered(u2)[0]
-                    if successor is None or rank(first2) < rank(successor[1]):
-                        successor = (h2.name, first2)
+        for h2 in sorted(sharing[id(h)], key=lambda x: at[id(x)]):
+            shares.append(h2.name)
+            u2 = users_of[id(h2)]
+            # the next occupant is the one whose users all come AFTER this buffer's
+            if u2 and us and rank(u2[0]) > rank(us[-1]):
+                first2 = u2[0]
+                if successor is None or rank(first2) < rank(successor[1]):
+                    successor = (h2.name, first2)
 
         rows.append({
             "chip": f"0x{h.chip_id:02x}",
@@ -642,9 +678,12 @@ def write_layout_csv(path, placement, handle_users, desc, topo_rank, opts, level
     return len(rows)
 
 
+PLOT_CLUSTERS = 8
+
+
 def write_layout_plot(path, placement, handle_users, desc, topo_rank, opts,
                       level="L1", capacity=None):
-    """Address against time: one rectangle per buffer, one panel per cluster.
+    """Address against time: one rectangle per buffer, one panel per cluster (the PLOT_CLUSTERS fullest).
 
     x is the buffer's live range, y the bytes it occupies. Two rectangles at the same height
     with no horizontal overlap are two buffers sharing those bytes; two overlapping in both
@@ -673,6 +712,9 @@ def write_layout_plot(path, placement, handle_users, desc, topo_rank, opts,
         groups.setdefault((h.chip_id, h.cluster_id), []).append((h, u))
 
     keys = sorted(groups)
+    if len(keys) > PLOT_CLUSTERS:                   # the fullest ones: a panel each is unreadable past a few
+        top = lambda k: max(placement[id(h)][1] + _footprint(h.size, al, gu) for h, _u in groups[k])
+        keys = sorted(sorted(keys, key=lambda k: -top(k))[:PLOT_CLUSTERS])
     fig, axes = plt.subplots(1, len(keys), figsize=(7 * len(keys), 9), squeeze=False)
     span = max(topo_rank.values()) + 1 if topo_rank else 1
 

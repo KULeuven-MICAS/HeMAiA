@@ -3,6 +3,31 @@
 import networkx as nx
 
 
+def _place_around(handle_users, hint, opts):
+    """The placement `hint` (id(handle) -> offset, the schedule's stats) with every L1 buffer it does not place (made
+    since: a shared setup's table) above the cluster's others, back to back -- no interference to work out, the checker
+    then proves the whole. Returns (placement, stats) as bingo_l1_packer.pack does."""
+    from bingo_l1_packer import _footprint
+    fixed, old = hint
+    placement, top, total, count = {}, {}, {}, {}
+    items = [(hid, h) for hid, (h, _u) in handle_users.items() if h.mem_level == "L1"]
+    for hid, h in items:
+        key, fp = (h.chip_id, h.cluster_id), _footprint(h.size, opts.alignment, opts.guard_bytes)
+        total[key] = total.get(key, 0) + fp
+        count[key] = count.get(key, 0) + 1
+        if hid in fixed:
+            placement[hid] = (h, fixed[hid])
+            top[key] = max(top.get(key, 0), fixed[hid] + fp)
+    for hid, h in sorted(items, key=lambda it: it[1].name):
+        if hid not in fixed:
+            key = (h.chip_id, h.cluster_id)
+            placement[hid] = (h, top.get(key, 0))
+            top[key] = top.get(key, 0) + _footprint(h.size, opts.alignment, opts.guard_bytes)
+    stats = {k: {"peak": top.get(k, 0), "sum": total[k], "count": count[k],
+                 "lower_bound": min(old.get(k, {}).get("lower_bound", top.get(k, 0)), top.get(k, 0))} for k in total}
+    return placement, stats
+
+
 class BingoDFGStaticL1Mixin:
     """Static L1 placement: deciding where each buffer lives before the run starts.
 
@@ -58,14 +83,35 @@ class BingoDFGStaticL1Mixin:
             handle_users = extend_users_for_engine_drain(handle_users, self)
             print("[static-l1] DRAIN_GUARD: same-core successors counted as users")
 
-        print("[static-l1] " + liveness_report(handle_users, desc, "L1").lstrip())
+        if not want_pack:
+            # report only: what packing would save (when it packs, its report below has the same numbers)
+            print("[static-l1] " + liveness_report(handle_users, desc, "L1").lstrip())
 
         # An input to placement, not only a check afterwards. The check still runs: packer
         # and oracle would both have to be wrong to let a bad layout through.
         order_constraints = collect_placement_order(nodes)
         cap = getattr(self, "l1_capacity_bytes", None)
-        placement, stats = pack(handle_users, desc, "L1",
-                                constraints=order_constraints, opts=opts, capacity=cap)
+        # the schedule's placement (bingo_dfg_schedule.py, l1_plan_hint), every buffer made since placed around it: the
+        # final graph orders at least what the schedule's did, so it holds; where the checker finds it does not, a
+        # fresh packing
+        hint = getattr(self, "l1_plan_hint", None) if want_pack else None
+        placement = None
+        if hint is not None:
+            placement, stats = _place_around(handle_users, hint, opts)
+            if cap and any(st["peak"] > cap for st in stats.values()):     # no room above: into the gaps
+                placement, stats = pack(handle_users, desc, "L1", constraints=order_constraints, opts=opts,
+                                        capacity=cap, fixed=hint[0])
+            problems = verify(placement, handle_users, desc, cap, "L1") + check_placement_order(placement,
+                                                                                                order_constraints)
+            if problems:
+                print(f"[static-l1] the schedule's placement does not hold on the final graph ({len(problems)} "
+                      f"problem(s), e.g. {problems[0]}): packed again")
+                placement = None
+            else:
+                print("[static-l1] the schedule's placement, every buffer made since placed above it")
+        if placement is None:
+            placement, stats = pack(handle_users, desc, "L1",
+                                    constraints=order_constraints, opts=opts, capacity=cap)
         print("[static-l1] placement if enabled:")
         print(report(stats, cap))
 
