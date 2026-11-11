@@ -159,9 +159,6 @@ class ABuild(cm.ChipletBuild):
         # wait for them, so the array runs them while the o8 are gathered and multicast; pass i's gather of every head's
         # o8 then lands in pass i + 1's x buffer, once those projections are done with it (no L1 beside)
         self.wo_under_proj = bool(p.get("wo_under_proj", False))
-        # params wo_load_ahead (wo_cols): each W_O chunk is loaded right after the GEMM before it, ahead of that GEMM's y
-        # store on the DM core, so the next GEMM's weights do not wait behind the store
-        self.wo_load_ahead = bool(p.get("wo_load_ahead", False))
         # params o_get_xdma (wo_cols): each cluster's gather of every head's o8 into L1 on its xDMA core instead of its DM
         # core, so the DM core's multicast (on the root) and weight loads run beside it
         self.o_get_xdma = bool(p.get("o_get_xdma", False))
@@ -197,36 +194,21 @@ class ABuild(cm.ChipletBuild):
             raise ValueError("params kv_push: needs kv_split, and replaces kv_fence")
         if self.x_early and not self.wo_under_proj:
             raise ValueError("params x_early: needs wo_under_proj")
-        # params o_mc_first (wo_under_proj, wo_early): the root's wait for a pass's o8 and its multicast go before the
-        # next pass's front in the root's DM core's program (stage_wo_cols)
-        self.o_mc_first = bool(p.get("o_mc_first", False))
-        if self.o_mc_first and not (self.wo_under_proj and self.wo_early):
-            raise ValueError("params o_mc_first: needs wo_under_proj and wo_early")
         # params x_after_sm (x_early): pass i + 1's x fetch waits for pass i's last softmax on the cluster and follows the
         # sweep's tasks on the DM core, so its copy into L1 runs beside the sweep's tail, not beside its softmaxes
         self.x_after_sm = bool(p.get("x_after_sm", False))
         if self.x_after_sm and not self.x_early:
             raise ValueError("params x_after_sm: needs x_early")
-        # params o_get_ahead (wo_under_proj, o_get_xdma): pass i's gather of every head's o8 goes right behind pass i + 1's
-        # last projection GEMM in the xDMA core's program, ahead of that pass's layout conversions made after it
-        self.o_get_ahead = bool(p.get("o_get_ahead", False))
-        if self.o_get_ahead and not (self.wo_under_proj and self.o_get_xdma):
-            raise ValueError("params o_get_ahead: needs wo_under_proj and o_get_xdma")
-        # params trade_ahead (wo_under_proj): pass i + 1's K/V trade goes ahead of pass i's y stores in each DM core's
-        # program, so a cluster's keys and values leave once they are made, not once its W_O GEMMs are done
-        self.trade_ahead = bool(p.get("trade_ahead", False))
-        if self.trade_ahead and not (self.wo_under_proj and self.y_scatter):
-            raise ValueError("params trade_ahead: needs wo_under_proj and y_scatter")
         # params front_first (wo_under_proj): pass i + 1's RoPE table and first two weight chunks go ahead of the root's
-        # wait for pass i's o8 and its multicast ("root", needs o_mc_first), or ahead of pass i's o8 put on every DM core
+        # wait for pass i's o8 and its multicast ("root"), or ahead of pass i's o8 put on every DM core
         # ("all"), or around pass i + 1's x fetch on every DM core ("x", with x_early: the first chunk right ahead of the
         # fetch, the RoPE table and the second chunk right behind it, so the first GEMM's operands come first),
         # so no cluster's next projections wait behind the o8 round trip
         self.front_first = p.get("front_first", False)
         if self.front_first not in (False, "root", "all", "x"):
             raise ValueError(f"params front_first: false, \"root\", \"all\" or \"x\", not {self.front_first!r}")
-        if self.front_first and not (self.wo_under_proj and (self.o_mc_first or self.front_first != "root")):
-            raise ValueError("params front_first: needs wo_under_proj (\"root\": and o_mc_first)")
+        if self.front_first and not self.wo_under_proj:
+            raise ValueError("params front_first: needs wo_under_proj")
         if self.front_first == "x" and not self.x_early:
             raise ValueError("params front_first \"x\": needs x_early (the next pass's x fetch is made before the front)")
         # params front_after_sm (front_first "x", x_after_sm): the next pass's first weight chunk waits for this pass's
@@ -288,9 +270,6 @@ class ABuild(cm.ChipletBuild):
         # params restream: every pass streams its weight chunks from the memory chip again instead of copying them from the
         # L3 slots the first pass filled (the ring then need not hold all of a cluster's chunks)
         self.restream = bool(p.get("restream", False))
-        # params load_ahead: a projection chunk's weights are loaded right after the GEMM before it is made, ahead of that
-        # GEMM's RoPE swap on the DM core, so the load runs under the GEMM instead of between two
-        self.load_ahead = bool(p.get("load_ahead", False))
         # params l3_overlay: a pass's y is stored over that pass's x source and landing area in L3 ([x src | x land], as
         # long as y), so the image holds y beside neither; pass i's stores follow every reader of x_i (the multicast and
         # the fetches, through the pass's GEMMs)
@@ -313,7 +292,7 @@ class ABuild(cm.ChipletBuild):
         if self.per_kernel:
             if p.get("barrier_at", "kernel") != "kernel":
                 raise ValueError("params barrier_at: kernel only (a barrier after every kernel of a pass)")
-            overlap = [n for n in ("x_early", "wo_under_proj", "o_mc_first", "o_get_ahead", "trade_ahead", "front_first",
+            overlap = [n for n in ("x_early", "wo_under_proj", "front_first",
                                    "x_after_sm", "front_after_sm", "x_tiles_xdma", "x_xdma_free", "wo_early", "o_row_tiles",
                                    "o_overlap", "x_ahead") if p.get(n, False)]
             if overlap:
@@ -852,8 +831,6 @@ class ABuild(cm.ChipletBuild):
                               [ld] + self._dl(x))
                 self.ls[g].release(si, gm)
                 x_readers.append(gm)
-            if self.load_ahead and n + 1 < len(items):
-                load(n + 1)
             dq = self.mul(g, f"dq{side}{cc}_i{i}", dd, cst.view(wi * self.SC_B), dd, R * QC, self._dl(gm))
             if side == "q" or self.kind[g] == "K":
                 dst = b["a16q"] if side == "q" else b["a16k"]
@@ -1136,11 +1113,6 @@ class ABuild(cm.ChipletBuild):
                                                                           BingoMemSymbol(f"{T}_omflag", offset=i * 64),
                                                                           value=1, bcast=True), deps + xl + prev_mc)
             return self._o_mc_last
-        # o_mc_first: the root's wait for every head's o8 and its multicast go before the next pass's front in its DM
-        # core's program, not behind that front's weight loads (which follow the root's own projection GEMMs)
-        early = self.o_mc_first and between is not None
-        w = nwait() if early else None
-        mc = mc_of([w]) if early else None
         nxt = between() if between is not None else None
         if self.front_first == "x" and self.front_after_sm and nxt is not None:
             # front_after_sm: the next pass's first weight chunk behind this pass's last softmax
@@ -1149,8 +1121,7 @@ class ABuild(cm.ChipletBuild):
         obuf = (lambda g: self.pb(g, i + 1)["x"]) if nxt is not None else (lambda g: self.pb(g, i)["ofull"])
         # wo_early: the first W_O chunk of each cluster, loaded right behind its put
         first_ld = {g: self._load(g, i, self.WO0) for g in range(G)} if self.wo_early and nxt is None else {}
-        if w is None:
-            w = nwait()
+        w = nwait()
         # the gather into L1, A layout [R, H]: head h's [R, 128] (row tiles of 16) to columns 128 h .. of every row tile
         def gather(g, src, deps):
             deps = list(deps) + ([] if self.o_overlap else self._ofull_war.get(g, [])) + (list(nxt[g]) if nxt else [])
@@ -1187,9 +1158,7 @@ class ABuild(cm.ChipletBuild):
             return self.nd(g, "dm", f"o_get_i{i}", "__snax_bingo_kernel_idma_2d_copy",
                            SnaxBingoKernelIdma2dCopyArgs(src, obuf(g), run, run, self.H // 4 * 64, self.R // 16,
                                                          outer=NH, src_outer=OB, dst_outer=run), deps)
-        if mc is not None:
-            gets = {g: gather(g, self.xland(base), [w]) for g in rg}
-        elif self.wo_early:
+        if self.wo_early:
             mc = mc_of([w])
             gets = {g: gather(g, self.xland(base), [w]) for g in rg}
         else:
@@ -1234,8 +1203,6 @@ class ABuild(cm.ChipletBuild):
                                   [ld] + self._dl(gets[g]) + self._ywo_war.get(self._ywk(g, s, i), []))
                     rt = [gm]
                 self.ls[g].release(si, rt)                  # every row tile's GEMM reads the slab
-                if self.wo_load_ahead and s + 1 < self.NWS:
-                    wo_load(s + 1)
                 gms.append(gm)
                 after = [gm] + ([mc] if k == R else [])
                 if self.SLC == 32:

@@ -221,7 +221,7 @@ class PBuild(cm.ChipletBuild):
             # kernel by kernel, no task of one kernel runs inside another: the down slices all wait in their output slots
             # until the reduce kernel, slot j for slice j, the symmetric buffer's two slots then the X buffer's (dead
             # until the next pass's X), so the X buffer sits right behind the symmetric buffer on every cluster
-            bad = [k for k in ("split_last", "split_first_dn", "dn_load_early", "x_early", "y_scatter") if p.get(k, False)]
+            bad = [k for k in ("split_last", "split_first_dn", "y_scatter") if p.get(k, False)]
             if bad or "out_slots" in p:
                 raise ValueError(f"params sync barrier: no {bad or 'out_slots'} (a kernel's tasks never run inside "
                                  f"another kernel)")
@@ -467,9 +467,10 @@ class PBuild(cm.ChipletBuild):
             xws = [x[g]]
             for j, (b0, nb_) in enumerate(self.chunks[g]):
                 ld, si, slab = self._load(g, i, j, [x[g]] if j == 0 else ())
-                if self.dn_load_early and j == len(self.chunks[g]) - 1:
-                    # params dn_load_early: the first down chunk's load right behind the last gate|up chunk's, ahead
-                    # of the A8 copies in the DM core's program (those wait for the quantise)
+                if not self.per_kernel and j == len(self.chunks[g]) - 1:
+                    # the first down chunk's load right behind the last gate|up chunk's, ahead of the A8 copies in the
+                    # DM core's program (those wait for the quantise): where each core's tasks keep the order they were
+                    # made in (the schedule's fallback), it is not held behind them
                     self.dn_first_load[g] = self._load(g, i, j + 1)
                 if xblk and j == 0:
                     # the other X blocks behind the first weight load in the DM core's program
@@ -661,7 +662,6 @@ class PBuild(cm.ChipletBuild):
         self.ex_push = {}                       # {(g, i): its A8 runs copied to the other cluster}
         self.push_war = {}                      # {g: what its first A8 copy of the pass follows}
         self.q_tile = {}                        # {g: {row tile: its quantise}}
-        self.dn_load_early = bool(self.p.get("dn_load_early", False))
         # dep-tag relays of xDMA tasks (the gathers) go to the SIMD cores first, idle in the down phase, not behind the DM
         # cores' blocking ring loads or the GEMM cores' long GEMMs; each serves that one task, so a gather waits for its
         # own slice's GEMMs only, not for the next gather's too (one relay would hold both)
@@ -671,7 +671,7 @@ class PBuild(cm.ChipletBuild):
         # leftover edges instead of ordering them, so no down GEMM waits for an earlier gather
         if self.p.get("gather_relay_only", False):
             self.dfg.relay_not_order_cores = [self.roles["xdma"]]
-        self.dn_first_load = {}                 # dn_load_early: {g: the first down chunk's load}
+        self.dn_first_load = {}                 # {g: the first down chunk's load, made with the gate|up loads}
         # the symmetric buffers are not zeroed before the start: every slot is written whole by its down GEMMs before it
         # is read, and an unzeroed buffer is live only from then on, so the static L1 plan can lay it over X
         self.sym_zero = False
@@ -793,10 +793,6 @@ class PBuild(cm.ChipletBuild):
             last_st[c] = sts
             p1_reader[(c, s)] = sts
 
-        # params x_early: X_{i+1} fetched behind pass i's second down chunk load in the DM core's program (the down
-        # GEMMs leave the DM core idle), not at the top of pass i + 1 behind every down load and store of pass i
-        x_early = bool(self.p.get("x_early", False))
-        xpre = {}
         last_red, last_gu, last_dn = None, {}, {}
 
         def fetch_x(i):
@@ -805,7 +801,7 @@ class PBuild(cm.ChipletBuild):
         for i in range(self.NI):
             if i:
                 self.pass_start(i)
-                x = xpre.pop(i) if i in xpre else fetch_x(i)
+                x = fetch_x(i)
                 self.push_war = {g: last_dn[self.gs(self.chip(g))[1 - self.c(g)]] + [last_red] for g in range(self.G)}
             next_put = None
             sw, last_gu[i] = self.stage_gu(i, x)
@@ -863,8 +859,6 @@ class PBuild(cm.ChipletBuild):
                     prev_dn[g] = dn[g]
                 if jl + 1 < h:
                     lds = load(i, jl + 1)
-                if x_early and jl == 0 and i + 1 < self.NI:
-                    xpre[i + 1] = fetch_x(i + 1)
                 while len(pending) > lag * self.NC:
                     store(*pending.pop(0))
                 if (jl + 1) % GS:

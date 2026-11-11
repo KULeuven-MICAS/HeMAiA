@@ -66,7 +66,7 @@ bcast, reduce, sync, barrier_mode, barrier_fence, async_exec, static_l1, l1_capa
 n_calib (calibration tokens), kv_cache and weights (paths under the repository), root_slice (the
 root's pull slice), compact_id_maps, gid_lists, relay_per_gather (each dependency-tag relay of
 an xDMA task serves that one task; default true). The orders and buffers (each explained where it is read):
-x_puts_first, prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
+prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
 wo_split_rows, o_land; fresh (a fresh prompt: keys = tokens, a multiple of 256, kv_slabs split), kv_clusters
 (fresh: a chip's n-th tile makes its keys on cluster n mod 2 instead of cluster 0), kv_cols (fresh: W_KVA by columns
 over the chips, the rows traded, stage_kv_cols).
@@ -371,9 +371,6 @@ class FaBuild(cm.ChipletBuild):
         # hold y beside both x buffers, the ring and the task tables. A chunk's y is stored after its reduce,
         # which follows every use of that chunk's x.
         self.l3_overlay = bool(p.get("l3_overlay", False))
-        # x_puts_first: the root multicasts every chunk's x before any chunk's loads, so no chip waits for
-        # the root's DM core to work through a chunk before the next chunk's x is sent
-        self.x_puts_first = bool(p.get("x_puts_first", False))
         # y_halves: a cluster's partial y goes through a symmetric buffer of half its size, one W_O block
         # at a time: W_O block 0, its ChainGather, W_O block 1 behind that gather, its ChainGather
         self.y_halves = bool(p.get("y_halves", False))
@@ -414,7 +411,7 @@ class FaBuild(cm.ChipletBuild):
         if self.wo_row_pipe and not (self.post_tiles and self.wo_split_rows):
             raise ValueError("params wo_row_pipe: needs post_tiles and wo_split_rows")
         self._o8_tiles = {}
-        # prefetch_after_x: the memory chips' pushes start after the root's x multicasts (x_puts_first)
+        # prefetch_after_x: the memory chips' pushes start after the multicast of x (fa_stages_mc)
         self.prefetch_after_x = bool(p.get("prefetch_after_x", False))
         # y_block_chains: a ChainGather per W_O block (the whole partial y in the symmetric buffer)
         self.y_block_chains = bool(p.get("y_block_chains", False))
@@ -452,9 +449,6 @@ class FaBuild(cm.ChipletBuild):
         # chain_gate_prefetch: every reduce chain waits for every chip's prefetcher (all its pushes done), so with
         # chain_concurrent no memory-chip push can transit a hop chip while two chains run
         self.chain_gate_prefetch = bool(p.get("chain_gate_prefetch", False))
-        # store_late (y_store_halves, y_block_chains): a chunk's y stores (but the last chunk's) are made after the next
-        # chunk's W_O tasks, so the root's in-order DM core loads the next chunk's weights before it stores
-        self.store_late = bool(p.get("store_late", False))
         # y_dst_shared (y_block_chains, y_store_halves): a chunk's two W_O blocks' chains (but the last chunk's) land in
         # one half-size buffer on each root cluster, block 1's chain behind block 0's store, so a root cluster's sweep keeps
         # its L1 while the previous chunk's chains run. With chains_after_sweep the root clusters' chains of a chunk are
@@ -464,9 +458,8 @@ class FaBuild(cm.ChipletBuild):
         self.dst_store_tile = int(p.get("dst_store_tile", 2))
         if self.y_dst_shared and not (self.y_block_chains and self.y_store_halves):
             raise ValueError("y_dst_shared: needs y_block_chains and y_store_halves")
-        if self.y_dst_shared and (self.y_chain_l3 or self.store_late):
-            raise ValueError("y_dst_shared: not with y_chain_l3 or store_late (its block-0 store frees the buffer)")
-        self._late_stores = []
+        if self.y_dst_shared and self.y_chain_l3:
+            raise ValueError("y_dst_shared: not with y_chain_l3 (its block-0 store frees the buffer)")
         self._pair_prev = None
         self.checks_kind = str(p.get("checks", "y"))
         # head h(k): a memory chip's row holds four consecutive heads, nearest the memory chip last
@@ -1628,14 +1621,6 @@ class FaBuild(cm.ChipletBuild):
         red, stores = {}, {}
         sym_free = {}
         pend = None
-        if self.bcast_impl == "bcast_l1" and self.x_puts_first and not self.owner_bcast and not self.x_resident:
-            for i in range(self.NCH):
-                puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
-            # prefetch_after_x: the memory chips start pushing once the root's x multicasts are done, so no
-            # push meets a multicast on the D2D links
-            if self.prefetch_after_x:
-                for k in self.chips:
-                    self.edge(puts[-1], self.prefetch[k])
         if self.fresh:
             if self.kv_cols:
                 self.stage_kv_cols(go)
@@ -1648,7 +1633,7 @@ class FaBuild(cm.ChipletBuild):
         for i in range(self.NCH):
             if i:
                 self.chunk_start(i)
-            if self.bcast_impl == "bcast_l1" and not self.x_puts_first and not self.owner_bcast and not self.x_resident:
+            if self.bcast_impl == "bcast_l1" and not self.owner_bcast and not self.x_resident:
                 puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
             sweeps = {}
             for g in range(self.G):
@@ -1804,7 +1789,6 @@ class FaBuild(cm.ChipletBuild):
         cs = list(cs)
         half = self.YB // 2
         rh, st, st0 = [], {}, {}
-        late = self.store_late and self.y_store_halves and i < self.NCH - 1 and not self.y_chain_l3
         shared = self.dst_shared(i)
         for r in range(2):
             parts = {(k, c): list(self._wo_blk[(k, c, i, r)]) for k in self.chips for c in cs}
@@ -1813,8 +1797,6 @@ class FaBuild(cm.ChipletBuild):
             if self.y_chain_l3:
                 # the chain wrote the block into L3 itself: it stands for the store
                 st = {c: rh[r][c] for c in cs}
-            elif late:
-                self._late_stores.append((i, r, rh[r], cs))
             elif self.y_store_halves:
                 st = self.stage_store(i, rh[r], half=r, clusters=cs)
                 if r == 0:
@@ -1829,25 +1811,10 @@ class FaBuild(cm.ChipletBuild):
             st = self.stage_store(i, {c: [rh[0][c], rh[1][c]] for c in cs}, clusters=cs)
         for c in cs:
             red[(i, c)] = rh[1][c]
-            if not late:
-                stores[(i, c)] = st[c]
+            stores[(i, c)] = st[c]
             for k in self.chips:
                 sym_free[(k, c)] = [rh[0][c], rh[1][c]]
                 self._sym_blk[(k, c)] = {0: [rh[0][c]], 1: [rh[1][c]]}
-
-    def flush_late_stores(self, stores):
-        """store_late: the held stores, in the order their chains were made."""
-        h0 = {}
-        for i, r, rh_r, cs in self._late_stores:
-            st = self.stage_store(i, rh_r, half=r, clusters=cs)
-            if r == 0:
-                h0[i] = st
-            else:
-                for c in cs:
-                    if i in h0:
-                        self.edge(h0[i][c], st[c])      # the second half's store stands for the chunk's
-                    stores[(i, c)] = st[c]
-        self._late_stores = []
 
     def chunk_start(self, i):
         """Where the tasks of chunk i (i >= 1) begin, in the order they are made: nothing here; a layer

@@ -302,13 +302,6 @@ class MBuild(cm.ChipletBuild):
                 raise ValueError(f"params chain_halves={ch}: disjoint paths over every chip, west ending at the root,"
                                  " without chain_path")
             self.halves = (west, east)
-        # params store_lag (0, 1 or 2; default 0): the root's store of slice j's reduced output (p1c -> L3) is
-        # emitted after slice j + store_lag's weight loads in its DM core's program, so the root's next slices'
-        # loads do not queue behind chain j. p1c is double-buffered: chain j + 2 waits for the store of slice j,
-        # which bounds the lag at 2.
-        self.store_lag = int(p.get("store_lag", 0))
-        if self.store_lag not in (0, 1, 2):
-            raise ValueError(f"params store_lag={self.store_lag}: 0, 1 or 2 (p1c holds two slices)")
         # params down_half_slabs: the down projection's weight chunks load into half slabs (HalfSlabs), so
         # w_buffers slabs keep 2 * w_buffers of them in flight
         self.down_half = bool(p.get("down_half_slabs", False))
@@ -480,13 +473,6 @@ class MBuild(cm.ChipletBuild):
         # multicasts, and every cluster's fetches of the table, follow the cluster's upload on its DM core, ahead
         # of the row blocks the shared GEMMs have not freed a buffer for
         self.route_early = bool(p.get("route_early", False))
-        # params fetch_lag (route_early): table block b's root wait and multicast and every cluster's fetch and dispatch
-        # of it follow the copy of row block b + fetch_lag on the DM cores, instead of all blocks' after row block 1's:
-        # each fetch waits for the root's block, which waits for every top 6 of its tiles, ahead of the X copies
-        fl = p.get("fetch_lag")
-        self.fetch_lag = None if fl is None else int(fl)
-        if self.fetch_lag is not None and (not self.route_early or self.fetch_lag < 1):
-            raise ValueError("params fetch_lag: needs route_early, at least 1")
         # params slot_order: the order of a chip's expert slots. "rows" (default): most padded rows first, as the
         # placement holds them. "alternate": smallest, largest, second smallest, second largest, ...: the first
         # slot drains the rings the shared MLP's first pass filled, and every array-bound slot (many rows a weight
@@ -1261,8 +1247,8 @@ class MBuild(cm.ChipletBuild):
 
         rc_xdone = []
 
-        def root_collect(blocks=None):
-            """route dist: per row block (blocks: these, in order), the root waits for the block's tile flags and sends
+        def root_collect():
+            """route dist: per row block, the root waits for the block's tile flags and sends
             the block's table on to every chip (and its own flag)"""
             xdone = rc_xdone
             if self.x_hbm and not xdone:
@@ -1271,7 +1257,7 @@ class MBuild(cm.ChipletBuild):
                                        SnaxBingoKernelWaitFlagsArgs(
                                            BingoMemSymbol(f"{Tg}_xtflag", offset=64 * (self.NXT - 1)), 1, 1), [go[R]]))
                 self.dfg.bingo_add_order_edge(self.x_bcast, xdone[0])
-            for b in (range(self.XB) if blocks is None else blocks):
+            for b in range(self.XB):
                 tl = [i for i in range(T // 8) if 8 * i // XR == b]
                 local = [rt_ups[i] for i in tl if i in rt_ups and self.chip(rt_tile[i][0]) == R]
                 w = self.node(R, 0, dm, f"rt_wait_b{b}", "__snax_bingo_kernel_wait_flags",
@@ -1306,15 +1292,15 @@ class MBuild(cm.ChipletBuild):
         fd_prev = {}
         rput_to = {}                                        # params x_cast unicast: (block, chip) -> its put
 
-        def fetch_dispatch(g, blocks=None):
-            """dispatch_blocks: cluster g fetches each block's table (blocks: these, in order) as the root sends it and
+        def fetch_dispatch(g):
+            """dispatch_blocks: cluster g fetches each block's table as the root sends it and
             turns it into its chip's row lists"""
             k, c = self.chip(g), self.c(g)
             bg = self.B[g]
             caps = [md.pad8(d.cnt[e]) for e in self.held[k]]
             cnts = [int(d.cnt[e]) for e in self.held[k]]
             prev = fd_prev.get(g, [])
-            for b in (range(self.XB) if blocks is None else blocks):
+            for b in range(self.XB):
                 o = b * XR * ROUTE_B
                 f = self.node(k, c, dm, f"rt_fetch_b{b}_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
                               SnaxBingoKernelIdmaFetchFlaggedArgs(
@@ -1465,17 +1451,10 @@ class MBuild(cm.ChipletBuild):
                     if b == b1:                             # the cluster's upload, behind its first row blocks' copies
                         for i in self.rt_tiles[g]:
                             route_up(i)
-                        if self.route_early and self.fetch_lag is None:
+                        if self.route_early:
                             if g == 0:
                                 root_collect()
                             fetch_dispatch(g)
-                    if self.route_early and self.fetch_lag is not None:
-                        # params fetch_lag: the table blocks due after this row block's copy
-                        tbs = [tb for tb in range(self.XB) if min(max(tb + self.fetch_lag, b1), self.XB - 1) == b]
-                        if tbs:
-                            if g == 0:
-                                root_collect(tbs)
-                            fetch_dispatch(g, tbs)
                 for i in (self.rt_tiles[g][:1] if self.route_dist and not self.route_tile_buf else ()):
                     if 8 * i // XR != b:
                         continue
@@ -1888,7 +1867,6 @@ class MBuild(cm.ChipletBuild):
             jbase[g] = len(self.chunks(sn)) + sum(len(self.chunks(ex[x][1])) for x in self.held[k])
         stores, last_red, last_any = [], {c: None for c in range(self.NC)}, None
         copies_in = {c: [ex_copy[(g, key)] for (g, key) in ex_copy if self.c(g) != c] for c in range(self.NC)}
-        pend_st = []                                        # params store_lag: (c, slice, its chain) not yet stored
         last_ld = {}                                        # params chain_tail: every cluster's last weight load
 
         GS = self.chain_group
@@ -2042,11 +2020,6 @@ class MBuild(cm.ChipletBuild):
             last_add = {}
             for g in range(G):
                 down_g(g, jl, so, last_add)
-            # params store_lag: the stores of slice jl - store_lag follow this slice's loads in the root's DM
-            # core's program, and come before chain jl, which waits for the store of slice jl - 2 (in groups of
-            # chain_group slices)
-            while pend_st and pend_st[0][1] <= jl - self.store_lag * GS:
-                store(*pend_st.pop(0))
             if (jl + 1) % GS:
                 continue
             j0 = jl + 1 - GS                                # the group's first slice
@@ -2127,12 +2100,7 @@ class MBuild(cm.ChipletBuild):
                                 else:
                                     sym_reader[g][o] = red
                 last_red[c] = last_any = red
-                if self.store_lag:
-                    pend_st.append((c, j0, red))
-                else:
-                    store(c, j0, red)
-        for item in pend_st:
-            store(*item)
+                store(c, j0, red)
         if self.chain_tail:                                 # every push has landed before a last-slice chain
             for g in range(G):
                 for o in self.gs(self.chip(g)):

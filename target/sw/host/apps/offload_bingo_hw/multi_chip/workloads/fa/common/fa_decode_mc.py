@@ -199,8 +199,8 @@ class FaDecode(fs.FaStages):
                   reduce="chain", sync="edge", y_block_chains=True, stop="full")
     # switches of a multi-chunk prefill (or of an x / key / output path the decode does not take)
     UNSUPPORTED = ("y_halves", "chunk_pipeline", "wo_cols", "o_land", "wo_prefetch", "wo_split_rows", "wo_row_pipe",
-                   "y_chain_l3", "y_dst_shared", "store_late", "sym_per_block", "keys_by_chunk", "kx_per_chunk",
-                   "kx_after_chains", "kx_mid_double", "kc_xs_late", "kx_ahead", "chains_after_sweep", "x_rest_early",
+                   "y_chain_l3", "y_dst_shared", "sym_per_block", "keys_by_chunk", "kx_per_chunk",
+                   "kx_after_chains", "kx_mid_double", "kc_xs_late", "chains_after_sweep", "x_rest_early",
                    "x_resident", "x_device", "owner_bcast", "kv_balance", "kv_clusters", "kv_wkva_first", "x_pf_split",
                    "x_bcast_after_prefetch", "prefetch_after_x", "s4_early", "s4_split_x", "split_loads", "chunks",
                    "yr_store_tile", "yr_rel1", "post_root_first", "s4_warm_ring")

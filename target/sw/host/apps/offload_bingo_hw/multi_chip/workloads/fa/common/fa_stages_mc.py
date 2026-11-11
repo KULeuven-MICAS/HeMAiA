@@ -162,10 +162,6 @@ class FaStages(fa.FaBuild):
         # chunk i + 1's key tile t's values in its DM core's program. The chains and stores are made while the root's
         # tasks are, so on a collector they would sit ahead of its chunk i + 1 front, which would wait for the chain
         self.yr_store_tile = p.get("yr_store_tile")
-        # params kx_ahead (stage 2's key loop): tile n + 1's x load is made right behind tile n's GEMM, ahead of tile n's
-        # put, so the in-order DM core loads it while GEMM n runs (it needs only GEMM n - 1's buffer) instead of after
-        # GEMM n's put
-        self.kx_ahead = bool(p.get("kx_ahead", False))
         # params kx_mid_double (keys_by_chunk): the key tiles of the later chunks made inside the window take two x and two
         # output buffers in turn, like chunk 0's, so a tile's load and GEMM wait for the tile two before, not the one before
         self.kx_mid_double = bool(p.get("kx_mid_double", False))
@@ -216,7 +212,6 @@ class FaStages(fa.FaBuild):
         # params s4_tile_absorb (stage 4, with s4_reorder): the absorb GEMM a query tile at a time, each tile's q~
         # relayout and quantisation behind its own GEMM (they overlap the next tiles' GEMMs)
         self.s4_tile_absorb = bool(p.get("s4_tile_absorb", False))
-        self.s4_q8a_first = bool(p.get("s4_q8a_first", False))
         # params s4_early (stage "full"): the cluster that runs stage 3 (s3_root's x_put_cluster) releases its chip's
         # W_q / W_UK ring slots, so the other cluster there does not wait for its reads
         self.s4_early = bool(p.get("s4_early", False))
@@ -584,7 +579,10 @@ class FaStages(fa.FaBuild):
                     own = [put[pmid(n)]] if mid(n) and pmid(n) is not None else []
                     gm[n] = self.gmm(g, f"gkvc_q{q}", XB(n), wb, OB(n), 1, HIDDEN // 4, ng, d.k_x,
                                      [wld] + ld_x[n] + ([put[n - 2]] if n >= 2 else []) + own)
-                    if self.kx_ahead and n + 1 < len(tiles) and n + 1 not in ld_x:
+                    # tile n + 1's x load made right behind tile n's GEMM, ahead of tile n's put: where each core's tasks
+                    # keep the order they were made in (the schedule's fallback), the DM core loads it while GEMM n runs
+                    # (it needs only GEMM n - 1's buffer) instead of after GEMM n's put
+                    if n + 1 < len(tiles) and n + 1 not in ld_x:
                         ld_x[n + 1] = kx(n + 1)
                     put[n] = self.node(k, c, dm, f"kvc_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
                                        SnaxBingoKernelIdmaPutFlaggedArgs(
@@ -970,10 +968,9 @@ class FaStages(fa.FaBuild):
                       [ad])
         # ---- Q8 per query tile ---------------------------------------------------------------------
         q8, qps, qas = {}, {}, {}
-        # s4_q8a_first: q~'s quantisations ahead of q_pe's on the in-order SIMD core (with s4_tile_absorb each q~ tile
-        # is out of the xDMA before q_pe's relayout, which the xDMA runs after them); s4_q8_pairs: tile by tile
+        # q_pe's quantisations, then q~'s; s4_q8_pairs: tile by tile
         order = ([(q, kd) for q in range(self.NQ) for kd in ("a", "p")] if self.s4_q8_pairs is not None else
-                 [(q, kd) for kd in (("a", "p") if self.s4_q8a_first else ("p", "a")) for q in range(self.NQ)])
+                 [(q, kd) for kd in ("p", "a") for q in range(self.NQ)])
         for q, kind in order:
             if kind == "p":
                 qps[q] = self.quant(g, f"q8p{q}_i{i}", b["a16p"].view(q * 16 * fa.ROPE * 2),
@@ -1378,7 +1375,6 @@ class FaStages(fa.FaBuild):
                 k, c = self.chip(g), self.c(g)
                 post_res[g] = dict(xt_rd=post[g][0])
                 parts_ready[(k, c, i)] = self.stage_post_b(g, i, post[g][1], sym_free.get((k, c), []))
-            self.flush_late_stores(stores)
             if self.stop == "full" and self.sync == "barrier":
                 self._reduce_chunk(i, parts_ready, red, stores, sym_free)
         if self.stop == "q8" and not post_only and not self.p.get("full_kv_all", True):
@@ -1388,7 +1384,6 @@ class FaStages(fa.FaBuild):
                     key = (k, 0, self.NCH - 1)
                     parts_ready[key] = list(parts_ready[key]) + [self.kv_all(k)]
         if self.stop == "full" and self.sync != "barrier" and not self.y_halves and not self.wo_cols:
-            self.flush_late_stores(stores)
             self._reduce_chunk(self.NCH - 1, parts_ready, red, stores, sym_free)
         if pend is not None:
             self._halves(*pend, red, stores, sym_free, blocks=(1,))

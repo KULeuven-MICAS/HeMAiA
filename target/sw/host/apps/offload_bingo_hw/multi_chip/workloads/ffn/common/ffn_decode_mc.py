@@ -96,7 +96,7 @@ the zero rows; gu_gemv: the root's A8 row in a_row, its free bytes zero). The go
 GEMV path's is the tile path's row 0.
 
 PARAMS: ffn_prefill_mc.py's, for one pass of one row tile; tokens 1. The decode refuses what needs more than one pass,
-row tile or post block (l3_overlay, y_scatter, split_last, split_first_dn, x_early, restream, x_blocks) and the
+row tile or post block (l3_overlay, y_scatter, split_last, split_first_dn, restream, x_blocks) and the
 ablation arms (sync barrier, reduce root, x_cast unicast).
 """
 
@@ -132,7 +132,7 @@ class DBuild(fp.PBuild):
     def __init__(self, args, p, plat, hw, shared=None):
         if int(p.get("tokens", 1)) != 1:
             raise ValueError(f"params tokens={p['tokens']}: the decode runs one token")
-        bad = [k for k in ("l3_overlay", "y_scatter", "split_last", "split_first_dn", "x_early", "restream")
+        bad = [k for k in ("l3_overlay", "y_scatter", "split_last", "split_first_dn", "restream")
                if p.get(k, False)]
         bad += [k for k, v in (("rows", ROWS), ("post_blocks", 1), ("x_blocks", 1)) if int(p.get(k, v)) != v]
         bad += [f"{k} {p[k]}" for k, v in (("sync", "edge"), ("reduce", "chain"), ("x_cast", "multicast"))
@@ -333,8 +333,7 @@ class DBuild(fp.PBuild):
     # ---- gu_gemv: gate|up and the A8 as rows ------------------------------------------------
     def stage_gu(self, i, x):
         """gu_gemv: every cluster's gate|up chunks, each a GEMV of the X row into the chunk's FP16 row as it lands, the
-        row dequantised and its gate half through SwiGLU with its up half into the chunk's columns of the A16 row; with
-        params dn_load_early the first down chunk's load right behind the last gate|up chunk's (as the prefill's).
+        row dequantised and its gate half through SwiGLU with its up half into the chunk's columns of the A16 row.
         Without gu_gemv the prefill's. Returns {g: the last SwiGLU}, {g: the last GEMV}."""
         if not self.gu_gemv:
             return super().stage_gu(i, x)
@@ -342,11 +341,9 @@ class DBuild(fp.PBuild):
         last_sw, last_gemm = {}, {}
         for g in self.cols:
             k, c = self.chip(g), self.c(g)
-            nG, sw = len(self.chunks[g]), None
+            sw = None
             for j, (b0, nb_) in enumerate(self.chunks[g]):
                 ld, si, slab = self._load(g, i, j, [x[g]] if j == 0 else ())
-                if self.dn_load_early and j == nG - 1:
-                    self.dn_first_load[g] = self._load(g, i, j + 1)
                 N, off = 2 * nb_ * BLK, 4 * BLK * b0    # its gate columns then its up columns; 64 B a gate block
                 row = self.grow[g].view(off)
                 gm = self.node(k, c, gemm, f"gu_c{j}_i{i}_g{g}", "__snax_bingo_kernel_gemv",
@@ -430,8 +427,6 @@ class DBuild(fp.PBuild):
                              f"cluster (no output slot is read by a gather before the last down GEMM)")
 
         def load(jl):
-            if jl == 0 and self.dn_first_load:
-                return dict(self.dn_first_load)
             return {g: self._load(g, 0, len(self.chunks[g]) + jl) for g in range(self.G)}
 
         def store(c, j, red, s):
