@@ -34,9 +34,7 @@
   l1_capacity: 1000000
   d2d_ddr: true
   relay_per_gather: true
-  gemm_async: true
   b_parity: true
-  gemm_shape_l1: true
   topk_shared: true
   warm_root: true
   dispatch_blocks: true

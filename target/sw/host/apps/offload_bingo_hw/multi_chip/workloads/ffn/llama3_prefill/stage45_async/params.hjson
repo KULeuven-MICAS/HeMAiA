@@ -29,5 +29,4 @@
   out_slots: 8
   gather_relay_only: true
   chain_group: 4
-  async_exec: true
 }

@@ -1,0 +1,31 @@
+// stage123: stages 1-3 of one pass alone (main_bingo.py): X in L1 before the window; gate|up over the weight
+// stream, dequantise and SwiGLU, the reshape, the quantise and the A8 exchange. The mapping is the whole block's
+// (../full) for one pass (tokens = rows).
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: llama3-8b-synthetic
+  tokens: 64
+  rows: 64
+  blocks: 1
+  w_chunk_bytes: 98304
+  w_buffers: 2
+  weight_ring:
+  {
+    slots: 8
+    batch: 4
+    policy: 1
+    head: 4
+    batch_head: 1
+  }
+  static_l1: true
+  compact_id_maps: true
+  gid_lists: true
+  per_chip_image: true
+  desc_in_image: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  d2d_rx_yield: [255, 0]
+  start_per_chip: true
+  gather_relay_only: true
+}

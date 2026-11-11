@@ -42,16 +42,11 @@
   dn_load_early: true
   // the ablation's switches (../../common/ffn_prefill_mc.py, THE ABLATION)
   x_cast: multicast
-  // every cluster's args in phases of 10,000 B, two alternating L1 regions (workloads/common/args_phases.py): at
+  // every cluster's args in phases of 10,000 B, two alternating L1 regions (mini_compiler passes/bingo_args_phases.py): at
   // T = 256 the root's args, beside its static buffers, leave no room for the SIMD kernels' scratch pools
   args_phase_bytes: 10000
-  // GEMMs (../../common/ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each
-  // configured ahead of its operands, a start that repeats its cluster's previous configuration writing only
-  // addresses, the configure ahead of the waits before its start (gemm_cfg_hoist)
-  gemm_async: true
-  gemm_shape_l1: true
-  gemm_cfg_ahead: true
-  gemm_cfg_hoist: true
+  // the compiler splits each GEMM, SIMD and xDMA task into configure / start / wait parts where its
+  // schedule of the cores gains from it (mini_compiler passes/bingo_dfg_schedule.py)
   // one ChainGather a cluster: chain_group = out_slots = every slice
   chain_group: 8
   out_slots: 8

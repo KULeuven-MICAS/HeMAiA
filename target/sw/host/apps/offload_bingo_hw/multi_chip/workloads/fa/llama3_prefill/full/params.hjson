@@ -46,11 +46,6 @@
   // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
   // then every pass's y at its head, middle and tail
   checks: stages
-  cfg_reuse: true
-  gemm_shape_l1: true
-  gemm_reuse: true
-  gemm_cfg_ahead: true
-  fa_cfg_ahead: true
   mask_c: true,
   // the confirmed stage levers (28 Oct): X from HBM with the root's prefetch split around it (stage1234_xp), the
   // sweep's o~ straight into o8 and its geometry on the xDMA (stage5_og), W_O by columns with the weights loaded
