@@ -40,6 +40,15 @@ uses the declarations to check that the graph orders every two tasks of which on
 the other touches (`passes/bingo_dfg_hazards.py`), and refuses a task whose class declares
 none or leaves an address field out.
 
+A kernel driven through a CSR manager and a streamer may also declare how it runs in parts:
+`split()` returns a `Split` (`kernel_base.py`) with its configure, start and wait tasks, a start
+that drains itself, how completion is tracked (a retired counter the compiler numbers, or the
+part's own state), how many works may be in flight and whether another kernel may run
+meanwhile. `dispatch_accel()` names the accelerator whose counter counts a whole task,
+`config_key()` the configuration a task leaves in the CSRs and `config_reuse()` its cheaper form
+when the CSRs hold it already. The compiler's asynchronous execution (`dfg.async_exec`) and CSR
+reuse work from these declarations alone (`passes/bingo_dfg_schedule.py`).
+
 ## Three things these classes exist to catch
 
 - **The typed GEMM classes are spelled out, not generated.** A generated name

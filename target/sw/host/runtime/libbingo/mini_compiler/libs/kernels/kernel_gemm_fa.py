@@ -12,7 +12,8 @@ which."""
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs, KEEPS, Split
+from kernel_gemm import SnaxBingoKernelGemmWaitArgs
 
 
 class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
@@ -46,12 +47,12 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
     D_FP16 = 4
     #   REUSE       start kernels only, QK or PV: the cluster's previous VersaCore dispatch was
     #               the same kernel with the same shape, flags, d_shift, b_pitch and kind of C,
-    #               so only the operand addresses (and PV's corr factors) are written. Set by
-    #               passes/bingo_cfg_reuse.py, which knows the GEMM core's program.
+    #               so only the operand addresses (and PV's corr factors) are written. Set by the
+    #               compiler's CSR reuse, which knows the GEMM core's program (passes/bingo_dfg_schedule.py).
     REUSE = 8
     #   CONFIGURE / START   start kernels only: one dispatch as two tasks of the GEMM core's program,
     #               a configure task (every CSR, or REUSE's addresses; no start) and the start task
-    #               right after it (PV's column factors and the start; blocks/gemm_async.py cfg_ahead)
+    #               after it (PV's column factors and the start; the split of passes/bingo_dfg_schedule.py)
     CONFIGURE = 16
     START = 32
     # The widest output the C-path scaler covers, in meshCol blocks (its maxColBlocks).
@@ -130,8 +131,35 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
         self.perf_addr = perf_addr
 
     def accesses(self):
-        return [Read("input_A_addr"), Read("input_B_addr"), Read("input_C_addr"), Write("output_D_addr"),
-                Read("corr_addr"), Write("perf_addr")]
+        # in array blocks of the (16, 4, 16) shape: A [M x 16, K x 4] INT8, B [K x 4, N x 16] INT8 (PV's P^T blocks
+        # b_pitch apart), C [M x 16, N x 16] INT32, D the same in FP16 (QK's, or PV's D_FP16) or INT32; 32 FP16 factors
+        mr, ts, mc = 16, 4, 16
+        M, K, N = int(self.M), int(self.K), int(self.N)
+        is_pv = "_pv" in (self.KERNEL_NAME or "")
+        b = (K * N - 1) * self.b_pitch + self.B_TILE if self.b_pitch else K * N * ts * mc
+        d = M * N * mr * mc * (4 if is_pv and not self.flags & self.D_FP16 else 2)
+        return [Read("input_A_addr", M * mr * K * ts), Read("input_B_addr", b), Read("input_C_addr", M * N * mr * mc * 4),
+                Write("output_D_addr", d), Read("corr_addr", 2 * N * mc), Write("perf_addr")]
+
+    def split(self):
+        """A configure, a start and a wait on the GEMM core (the array's retired counter), as gemm_full's. Not with
+        perf_addr: the array's counters reset on every configuration write."""
+        if self.perf_addr:
+            return None
+        cls = SnaxBingoKernelGemmFaQkStartArgs if isinstance(self, SnaxBingoKernelGemmFaQkArgs) \
+            else SnaxBingoKernelGemmFaPvStartArgs
+
+        def part(stage):
+            return cls.KERNEL_NAME, cls(self.input_A_addr, self.input_B_addr, self.input_C_addr, self.output_D_addr,
+                                        M=self.M, K=self.K, N=self.N, flags=self.flags | stage,
+                                        corr_addr=self.corr_addr, d_shift=self.d_shift, b_pitch=self.b_pitch, seq=1)
+        return Split("gemm", configure=part(self.CONFIGURE),
+                     start=lambda configured: part(self.START if configured else 0),
+                     wait=(SnaxBingoKernelGemmWaitArgs.KERNEL_NAME, SnaxBingoKernelGemmWaitArgs(1)),
+                     counter=True, depth=2)
+
+    def dispatch_accel(self):
+        return "gemm"
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_fa_args_t"
@@ -208,6 +236,20 @@ class _SnaxBingoKernelGemmFaStartArgs(_SnaxBingoKernelGemmFaArgs):
     The operands are read when this task runs (PV's corr factors included), so their producers
     precede the START, not the wait. No perf_addr: the array's counters reset on every
     configuration write, so a queued dispatch cannot account its own."""
+
+    def split(self):
+        return None                         # a part already
+
+    def config_key(self):
+        if self.flags & self.START:
+            return KEEPS
+        stages = self.REUSE | self.CONFIGURE | self.START
+        return ("gemm_fa", self.KERNEL_NAME, self.M, self.K, self.N, self.flags & ~stages, self.d_shift, self.b_pitch,
+                bool(self.input_C_addr))
+
+    def config_reuse(self):
+        self.flags |= self.REUSE
+        return self.KERNEL_NAME, self
 
     def __init__(self, *args, seq: int, **kwargs):
         if int(seq) < 1:

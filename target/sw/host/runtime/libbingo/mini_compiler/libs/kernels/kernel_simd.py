@@ -9,12 +9,13 @@ Softmax, rmsnorm, silu, swiglu, rope, the quantiser, the MoE combine and FlashAt
 softmax epilogue -- each ONE kernel rather than a chain of primitives, because every task
 carries a fixed dispatch and configuration cost, which a decomposed chain pays per primitive."""
 
+import copy
 from typing import Union, Dict, Optional
 
 import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import Read, Write, ReadWrite, Sync, Hold, LAYOUT_CODE, BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, LAYOUT_CODE, BingoKernelArgs, KEEPS, Split
 from blocked_nest import blocked_nest
 
 
@@ -112,6 +113,24 @@ class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
         b = simd_beat_bytes()
         return [Read("src_addr", self.rows * self.beats * b), Write("dst_addr", self.rows * self.beats * b // 2),
                 Read("inv_scale_addr", 4)]
+
+
+    def split(self):
+        """A configure (every register, nothing launched), a start that launches and returns, and a wait that retires
+        it (csr_mode; offload_hw_kernels/simd.h SIMD_STAGE_*): the configure runs while the start still waits for its
+        operands or the SIMD still runs the task before; a start the wait would follow at once drains itself."""
+        if getattr(self, "csr_mode", 0):
+            return None
+
+        def staged(mode):
+            if not mode:
+                return None, self
+            a = copy.copy(self)
+            a.csr_mode = mode
+            return None, a
+        return Split("simd", configure=staged(1), start=lambda configured: staged(3 if configured else 4),
+                     wait=(SnaxBingoKernelSimdWaitAllArgs.KERNEL_NAME, SnaxBingoKernelSimdWaitAllArgs()),
+                     drain=lambda configured: staged(2 if configured else 0))
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fp16_to_int8_args_t"
@@ -282,6 +301,24 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
     def accesses(self):
         n = 2 * self.rows * self.cols
         return [Read("a_addr", n), Read("b_addr", n), Write("out_addr", n)]
+
+
+    def split(self):
+        """A configure (every register, nothing launched), a start that launches and returns, and a wait that retires
+        it (csr_mode; offload_hw_kernels/simd.h SIMD_STAGE_*): the configure runs while the start still waits for its
+        operands or the SIMD still runs the task before; a start the wait would follow at once drains itself."""
+        if getattr(self, "csr_mode", 0):
+            return None
+
+        def staged(mode):
+            if not mode:
+                return None, self
+            a = copy.copy(self)
+            a.csr_mode = mode
+            return None, a
+        return Split("simd", configure=staged(1), start=lambda configured: staged(3 if configured else 4),
+                     wait=(SnaxBingoKernelSimdWaitAllArgs.KERNEL_NAME, SnaxBingoKernelSimdWaitAllArgs()),
+                     drain=lambda configured: staged(2 if configured else 0))
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_stream_elementwise_args_t"
@@ -918,7 +955,23 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         self.p_mode = int(p_mode)
 
     def accesses(self):
-        return [Read("s16_src"), Write("p8_dst"), ReadWrite("arena")]
+        # the score tile (one beat a key) and the latch beat before it (m_new); P with its row-sum (and corr) beats;
+        # the arena
+        beat = self.beat()
+        return [ReadWrite("s16_src", (self.bc + 1) * beat, offset=-beat),
+                Write("p8_dst", self.p8_bytes(self.bc, beat // 2, self.p_mode, self.p8_pitch)),
+                ReadWrite("arena", self.arena_bytes(self.bc, self.dhead))]
+
+    def split(self):
+        """A fire (NO_DRAIN: its SIMD tasks launched, the kernel returns) and a wait on the arena that retires them; no
+        other kernel runs on the SIMD core meanwhile."""
+        if self.p_mode & self.NO_DRAIN:
+            return None
+        fire = copy.copy(self)
+        fire.p_mode = self.p_mode | self.NO_DRAIN
+        return Split("simd", start=lambda configured: (None, fire),
+                     wait=("__snax_bingo_kernel_simd_fa_wait", SnaxBingoKernelSimdFaWaitArgs(self.arena)),
+                     depth=2, exclusive=True)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_softmax_args_t"
@@ -994,6 +1047,24 @@ class SnaxBingoKernelSimdFaSoftmaxNArgs(BingoKernelArgs):
 
 
 
+class SnaxBingoKernelSimdWaitAllArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_simd_wait_all: every task the SIMD was given retired (the wait of a SIMD_STAGE_FIRE or
+    SIMD_STAGE_CONFIGURE_FIRE launch). On the SIMD core."""
+    KERNEL_NAME = "__snax_bingo_kernel_simd_wait_all"
+
+    def accesses(self):
+        return []
+
+    def config_key(self):
+        return KEEPS
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_wait_all_args_t"
+
+    def get_c_field_assignments(self, handle_name_map) -> Dict[str, str]:
+        return {"unused": "0"}
+
+
 class SnaxBingoKernelSimdFaWaitArgs(BingoKernelArgs):
     """The wait of a softmax run with SnaxBingoKernelSimdFaSoftmaxArgs.NO_DRAIN: returns once the SIMD has retired
     every task that softmax fired (the count it left in the arena's memo). On the SIMD core; the arena is its L1."""
@@ -1005,6 +1076,9 @@ class SnaxBingoKernelSimdFaWaitArgs(BingoKernelArgs):
 
     def accesses(self):
         return [Hold("arena")]              # the softmax's task holds its buffers until here
+
+    def config_key(self):
+        return KEEPS
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_wait_args_t"

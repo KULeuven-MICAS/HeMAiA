@@ -21,12 +21,6 @@ from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
 # -------------------------------------------------------------
 
 # Dummy kernel args
-def _span(size, reps, outer, stride, outer_stride):
-    """Bytes from the first byte of a 2D/3D run pattern to its last: `outer` blocks `outer_stride` apart of `reps` runs
-    `stride` apart, each `size` bytes."""
-    return max(0, outer - 1) * outer_stride + max(0, reps - 1) * stride + size
-
-
 class SnaxBingoKernelDummyArgs(BingoKernelArgs):
     def __init__(self, dummy_input: int):
         self.dummy_input = dummy_input
@@ -273,8 +267,9 @@ class SnaxBingoKernelIdma2dCopyArgs(BingoKernelArgs):
         self.src_outer, self.dst_outer = int(src_outer), int(dst_outer)
 
     def accesses(self):
-        return [Read("src_addr", _span(self.size, self.reps, self.outer, self.src_stride, self.src_outer)),
-                Write("dst_addr", _span(self.size, self.reps, self.outer, self.dst_stride, self.dst_outer))]
+        # `outer` blocks of `reps` runs of `size` bytes
+        return [Read("src_addr", self.size, dims=((self.outer, self.src_outer), (self.reps, self.src_stride))),
+                Write("dst_addr", self.size, dims=((self.outer, self.dst_outer), (self.reps, self.dst_stride)))]
 
     @property
     def nbytes(self) -> int:
@@ -528,6 +523,10 @@ class SnaxBingoKernelIdmaPutFlaggedArgs(BingoKernelArgs):
         self.bcast = (1 if bcast else 0) | (2 if (bcast and also_here) else 0)
 
     def accesses(self):
+        # a multicast lands on the other chips behind their flags (their readers wait for it): a write here only with
+        # also_here
+        if self.bcast & 1 and not self.bcast & 2:
+            return [Read("src_addr", self.size), Sync("dst_addr"), Sync("flag_addr")]
         return [Read("src_addr", self.size), Write("dst_addr", self.size), Sync("flag_addr")]
 
     def get_struct_name(self) -> str:

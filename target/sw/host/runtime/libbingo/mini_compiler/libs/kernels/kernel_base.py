@@ -16,43 +16,57 @@ LAYOUT_CODE = {
 }
 
 
-# ---- ACCESSES: what a kernel does to the memory its address fields name ------------------------------------------------
+# ---- ACCESSES: what a kernel does to the memory its address fields name ----------------------------------------------
 READ, WRITE, READWRITE, SYNC, HOLD = "read", "write", "readwrite", "sync", "hold"
 
 
 class Access:
     """One address field of a kernel's args and what the kernel does there:
 
-        READ / WRITE / READWRITE   `nbytes` from the address (None: to the end of the buffer)
+        READ / WRITE / READWRITE   `nbytes` from `offset` bytes past the address (negative: before it; None: to the
+                                   end of the buffer);
+                                   with `rows`, that many runs of `nbytes`, `pitch` bytes apart (a strided access:
+                                   the columns of a row-major block, which another task's columns sit between); with
+                                   `dims`, a nest of runs: ((count, stride), ...) from the outermost dimension in
         SYNC                       memory a runtime protocol orders, not the graph: a flag polled or set, a stamp, a
                                    weight ring the prefetcher fills behind its flags
         HOLD                       a buffer the task keeps live without touching it
 
     A field that holds a list (or tuple) applies to every address in it."""
-    __slots__ = ("field", "mode", "nbytes")
+    __slots__ = ("field", "mode", "nbytes", "offset", "dims")
 
-    def __init__(self, field: str, mode: str, nbytes: Optional[int] = None):
+    def __init__(self, field: str, mode: str, nbytes: Optional[int] = None, offset: int = 0, rows: int = 1,
+                 pitch: int = 0, dims=()):
         if mode not in (READ, WRITE, READWRITE, SYNC, HOLD):
             raise ValueError(f"access mode {mode!r}")
         if nbytes is not None and int(nbytes) < 0:
             raise ValueError(f"{field}: {nbytes} bytes")
+        dims = tuple((int(c), int(s)) for c, s in dims if int(c) > 1)
+        if int(rows) > 1:
+            dims = ((int(rows), int(pitch)),) + dims
+        if any(c < 1 for c, _ in dims) or (dims and nbytes is None):
+            raise ValueError(f"{field}: runs of {nbytes} bytes in the nest {dims}")
         self.field, self.mode = field, mode
         self.nbytes = None if nbytes is None else int(nbytes)
+        self.offset = int(offset)
+        self.dims = dims
 
     def __repr__(self):
-        return f"{self.mode}({self.field}, {self.nbytes})"
+        return (f"{self.mode}({self.field}, {self.nbytes}" + (f", +{self.offset}" if self.offset else "")
+                + (f", {self.dims}" if self.dims else "") + ")")
 
 
-def Read(field: str, nbytes: Optional[int] = None) -> Access:
-    return Access(field, READ, nbytes)
+def Read(field: str, nbytes: Optional[int] = None, offset: int = 0, rows: int = 1, pitch: int = 0, dims=()) -> Access:
+    return Access(field, READ, nbytes, offset, rows, pitch, dims)
 
 
-def Write(field: str, nbytes: Optional[int] = None) -> Access:
-    return Access(field, WRITE, nbytes)
+def Write(field: str, nbytes: Optional[int] = None, offset: int = 0, rows: int = 1, pitch: int = 0, dims=()) -> Access:
+    return Access(field, WRITE, nbytes, offset, rows, pitch, dims)
 
 
-def ReadWrite(field: str, nbytes: Optional[int] = None) -> Access:
-    return Access(field, READWRITE, nbytes)
+def ReadWrite(field: str, nbytes: Optional[int] = None, offset: int = 0, rows: int = 1, pitch: int = 0,
+              dims=()) -> Access:
+    return Access(field, READWRITE, nbytes, offset, rows, pitch, dims)
 
 
 def Sync(field: str) -> Access:
@@ -63,6 +77,40 @@ def Hold(field: str) -> Access:
     return Access(field, HOLD)
 
 
+# ---- SPLIT: a task as parts on its accelerator ----------------------------------------------------------------------
+KEEPS = "keeps"                             # config_key(): the task leaves its accelerator's configuration as it was
+
+
+class Split:
+    """How a task of this kernel runs as parts on its cluster's accelerator, a CSR manager and a streamer (the graph's
+    async_exec; passes/bingo_dfg_schedule.py ASYNCHRONOUS EXECUTION):
+
+        accel       the core role whose accelerator the kernel programs: "gemm", "simd", "xdma"
+        configure   (kernel, args) of a task that writes the configuration and starts nothing, or None
+        start       start(configured) -> (kernel, args) of the task that starts the work: configured, after the
+                    configure task; otherwise it configures too (None: there is no such kernel, the configure stays)
+        wait        (kernel, args) of the task that returns once the work is done, or None: the start drains itself
+        counter     the wait compares the accelerator's retired count with the dispatch's number (an args field
+                    `seq` of every part): the compiler numbers each accelerator's dispatches in its core's program,
+                    every one its counter counts (dispatch_accel()), a blocking one too
+        depth       works started and not yet waited for, at most
+        exclusive   no task of another kernel runs on the accelerator while one of these is in flight
+        drain       drain(configured) -> (kernel, args) of a start that waits for its own work, used where the
+                    schedule leaves the wait right behind the start, or None
+        names       suffixes of the configure, start and wait tasks' names (the start keeps the task)
+        prologue    (key, nbytes, init(dst) -> (kernel, args), field) or None: a task the accelerator's configuring
+                    parts share, one a cluster and key, writing `nbytes` of its L1 at dst, which they read at `field`
+    """
+    __slots__ = ("accel", "configure", "start", "wait", "drain", "counter", "depth", "exclusive", "names",
+                 "prologue")
+
+    def __init__(self, accel: str, *, start, configure=None, wait=None, drain=None, counter: bool = False,
+                 depth: int = 1, exclusive: bool = False, names=("_cfg", "", "_w"), prologue=None):
+        self.accel, self.configure, self.start, self.wait, self.drain = accel, configure, start, wait, drain
+        self.counter, self.depth, self.exclusive = bool(counter), int(depth), bool(exclusive)
+        self.names, self.prologue = tuple(names), prologue
+
+
 class BingoKernelArgs(ABC):
     """
     Abstract base class for Kernel Arguments.
@@ -70,7 +118,29 @@ class BingoKernelArgs(ABC):
 
     Every kernel declares accesses(): each address field and what the kernel does there. The compiler checks with it
     that the graph orders every pair of tasks of which one writes bytes the other touches (passes/bingo_dfg_hazards.py).
+
+    A kernel driven through a CSR manager and a streamer may also declare how it runs in parts (split()), whether its
+    accelerator's retired counter counts it (dispatch_accel()), and the configuration it leaves in the CSRs
+    (config_key()) with the cheaper task that reuses it (config_reuse()): the compiler's asynchronous execution and
+    CSR reuse work from these alone (passes/bingo_dfg_schedule.py).
     """
+
+    def split(self) -> Optional["Split"]:
+        """This task as parts on its accelerator (Split), or None: it runs as one task."""
+        return None
+
+    def dispatch_accel(self) -> Optional[str]:
+        """The accelerator whose retired counter counts this task's work ("gemm"), or None."""
+        return None
+
+    def config_key(self):
+        """The configuration this task leaves in its accelerator's CSRs (hashable), KEEPS when it writes none, None
+        when it changes them in a way not described (the next task cannot reuse them)."""
+        return None
+
+    def config_reuse(self):
+        """(kernel, args) of the task that does this one's work when the CSRs already hold its config_key(), or None."""
+        return None
 
     def accesses(self) -> List[Access]:
         """Every address field of these args and what the kernel does there (Read, Write, ReadWrite with the bytes from

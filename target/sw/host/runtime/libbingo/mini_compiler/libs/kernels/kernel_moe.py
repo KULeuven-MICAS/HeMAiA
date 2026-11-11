@@ -40,7 +40,10 @@ class SnaxBingoKernelMoeTopkRowsArgs(BingoKernelArgs):
         self.ctr_addr, self.chunk = ctr_addr, int(chunk)
 
     def accesses(self):
-        return [Read("p_addr"), Write("out_addr"), ReadWrite("ctr_addr")]
+        # rows [t0, t1) of the probabilities, their entries of the route table
+        return [Read("p_addr", (self.t1 - self.t0) * self.p_pitch, offset=self.t0 * self.p_pitch),
+                Write("out_addr", (self.t1 - self.t0) * ROUTE_ENTRY_BYTES, offset=self.t0 * ROUTE_ENTRY_BYTES),
+                ReadWrite("ctr_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_moe_topk_rows_args_t"
@@ -86,7 +89,9 @@ class SnaxBingoKernelMoeDispatchArgs(BingoKernelArgs):
         self.list_addr, self.pad_row, self.err_addr = list_addr, int(pad_row), err_addr
 
     def accesses(self):
-        return [Read("table_addr"), Write("list_addr"), Write("err_addr"), ReadWrite("state_addr")]
+        # the table's entries of tokens [t0, t1); every slot's rows and weights
+        return [Read("table_addr", (self.t1 - self.t0) * ROUTE_ENTRY_BYTES, offset=self.t0 * ROUTE_ENTRY_BYTES),
+                Write("list_addr", self.list_bytes(self.caps)), Write("err_addr"), ReadWrite("state_addr")]
 
     @staticmethod
     def list_bytes(caps: Sequence[int]) -> int:
@@ -177,7 +182,10 @@ class SnaxBingoKernelSimdMulTilesArgs(BingoKernelArgs):
         self.dst_pitch = int(dst_pitch)
 
     def accesses(self):
-        return [Read("x_addr"), Read("s_addr"), Write("dst_addr")]
+        # `tiles` row tiles of nt blocks each way; one scale row tile; dst row-major: 8 rows of the pitch a row tile
+        out = 8 * self.tiles * self.dst_pitch if self.dst_pitch else (self.tiles - 1) * self.dst_tile_stride + self.nt * D_BLOCK
+        return [Read("x_addr", (self.tiles - 1) * self.x_tile_stride + self.nt * D_BLOCK), Read("s_addr", self.nt * D_BLOCK),
+                Write("dst_addr", out)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_mul_tiles_args_t"
@@ -246,7 +254,11 @@ class SnaxBingoKernelSimdQuantRowsArgs(BingoKernelArgs):
         self.w_addr = w_addr
 
     def accesses(self):
-        return [Read("src_addr"), Write("dst_addr"), Read("w_addr")]
+        # D-layout row tiles of 8 rows in (one beat past for an odd nb); rows of 16 (nb rounded up to even) INT8 out
+        nbe = self.nb + (self.nb & 1)
+        return [Read("src_addr", -(-self.rows // 8) * self.src_tile_stride + 32),
+                Write("dst_addr", 16 * nbe, rows=self.rows, pitch=self.dst_pitch) if self.rows > 1 else
+                Write("dst_addr", 16 * nbe), Read("w_addr", 2 * self.rows)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_quant_rows_args_t"
@@ -271,22 +283,25 @@ class SnaxBingoKernelSimdScatterAddRowsArgs(BingoKernelArgs):
     """y[ids[i]] += d[i], i < n, FP16 rows of nt column tiles, both D layout (row tiles
     y_tile_stride / d_tile_stride apart; default nt blocks); ids uint16 in this cluster's L1.
     s_addr: a one-row-tile scale tile (nt blocks) d's row tiles are multiplied by in place
-    first, as SnaxBingoKernelSimdMulTilesArgs does. SIMD core."""
+    first, as SnaxBingoKernelSimdMulTilesArgs does. SIMD core. y_bytes: the destination's extent from y_addr (the
+    rows the ids may name; None: to the end of its buffer), for the hazard check only."""
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_scatter_add_rows"
 
     def __init__(self, y_addr, d_addr, nt: int, ids_addr, n: int, y_tile_stride: int = 0,
-                 d_tile_stride: int = 0, s_addr=None):
+                 d_tile_stride: int = 0, s_addr=None, y_bytes=None):
         if nt <= 0 or n < 0:
             raise ValueError(f"nt={nt}, n={n}")
         self.y_addr, self.d_addr, self.nt, self.ids_addr, self.n = y_addr, d_addr, int(nt), ids_addr, int(n)
         self.s_addr = s_addr
         self.y_tile_stride = int(y_tile_stride) or nt * D_BLOCK
         self.d_tile_stride = int(d_tile_stride) or nt * D_BLOCK
+        self._y_bytes = y_bytes
 
     def accesses(self):
-        # the rows the ids name are chosen at run time: the whole destination
-        return [ReadWrite("y_addr"), Read("d_addr"), Read("ids_addr", 4 * self.n), Read("s_addr")]
+        # the rows the ids name are chosen at run time: the whole destination (y_bytes); d's n rows
+        return [ReadWrite("y_addr", self._y_bytes), Read("d_addr", -(-self.n // 8) * self.d_tile_stride),
+                Read("ids_addr", 4 * self.n), Read("s_addr")]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_scatter_add_rows_args_t"

@@ -13,7 +13,9 @@ that does not exist there links fine and dispatches to nothing."""
 from typing import Union, Dict
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
+import inspect
+
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs, KEEPS, Split
 
 # int4_b_enable of the general descriptor also names B's layout (offload_hw_kernels/gemm.h,
 # "INT4 B layouts"): the B-layout, nibble-packed, or the paired layout (util/layout.py
@@ -25,6 +27,9 @@ INT4_B_LAYOUT_PAIRED = 2
 # pair's run), so a pass's words sit in banks of one parity, the other parity from A's rows
 # when B starts an odd number of 8-byte words after A. Needs an even K, B not transposed.
 INT4_B_LAYOUT_PARITY = 3
+
+_GEMM_ADDRS = ("input_A_addr", "input_B_addr", "input_C_addr", "output_D_addr")
+_START_NOT_CONFIG = _GEMM_ADDRS + ("seq", "shape_addr", "reuse", "stage")
 
 
 # ---- THE ARRAY SHAPES, from the cluster cfg (bingo_platform.load_cluster_cfg sets them) -----------------------------
@@ -141,6 +146,33 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
     def accesses(self):
         return gemm_accesses(self)
 
+    def split(self):
+        """A configure (every CSR), a start and a wait (the array's retired counter) on the GEMM core; the
+        configuring parts read the shape's parameters from the cluster's L1 copy (gemm_shape_init)."""
+        S = SnaxBingoKernelGemmStartArgs
+
+        def part(stage):
+            return S.KERNEL_NAME, S(**{f: getattr(self, f) for f in _FULL_FIELDS}, seq=1, stage=stage)
+        idx = int(self.array_shape_idx)
+        return Split("gemm", configure=part(S.CONFIGURE_ONLY),
+                     start=lambda configured: part(S.START_ONLY if configured else S.CONFIGURE_AND_START),
+                     wait=(SnaxBingoKernelGemmWaitArgs.KERNEL_NAME, SnaxBingoKernelGemmWaitArgs(1)),
+                     counter=True, depth=2,
+                     prologue=(("gemm_shape", idx), SnaxBingoKernelGemmShapeInitArgs.BYTES,
+                               lambda dst: (SnaxBingoKernelGemmShapeInitArgs.KERNEL_NAME,
+                                            SnaxBingoKernelGemmShapeInitArgs(dst, idx)), "shape_addr"))
+
+    def dispatch_accel(self):
+        return "gemm"
+
+    def config_key(self):
+        return ("gemm_full", tuple(sorted((f, v) for f, v in vars(self).items()
+                                          if f not in _GEMM_ADDRS and not f.startswith("_"))))
+
+    def config_reuse(self):
+        return SnaxBingoKernelGemmMinimalArgs.KERNEL, SnaxBingoKernelGemmMinimalArgs(
+            *(getattr(self, f) for f in _GEMM_ADDRS))
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_full_args_t"
 
@@ -170,6 +202,10 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         return assignments
 
 
+# The fields a gemm_start descriptor takes from gemm_full's: gemm_full's constructor parameters.
+_FULL_FIELDS = tuple(n for n in inspect.signature(SnaxBingoKernelGemmFullArgs.__init__).parameters if n != "self")
+
+
 class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
     """gemm_full's descriptor for __snax_bingo_kernel_gemm_start: configure and start the
     cluster's `seq`-th VersaCore dispatch (from 1, in core 0's issue order) and return; the
@@ -179,7 +215,7 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
 
     # stage: CONFIGURE_AND_START (one task), or the dispatch split in two tasks of the GEMM core's program:
     # CONFIGURE_ONLY writes every CSR and returns, START_ONLY starts the configuration the CONFIGURE_ONLY task
-    # just before it in the program left (blocks/gemm_async.py cfg_ahead)
+    # before it in the program left (the split of passes/bingo_dfg_schedule.py)
     CONFIGURE_AND_START, CONFIGURE_ONLY, START_ONLY = 0, 1, 2
 
     def __init__(self, *args, seq: int, shape_addr=0, reuse: int = 0, stage: int = 0, **kwargs):
@@ -191,11 +227,25 @@ class SnaxBingoKernelGemmStartArgs(SnaxBingoKernelGemmFullArgs):
         # or 0 for the table in L3
         self.shape_addr = shape_addr
         # reuse: the cluster's previous VersaCore dispatch had this one's configuration but its operand
-        # addresses (passes/bingo_cfg_reuse.py reuse_gemm_start_config), so the kernel writes those and starts
+        # addresses (the compiler's CSR reuse, passes/bingo_dfg_schedule.py), so the kernel writes those and starts
         self.reuse = int(bool(reuse))
         if int(stage) not in (0, 1, 2):
             raise ValueError(f"stage={stage}: 0 configure and start, 1 configure only, 2 start only")
         self.stage = int(stage)
+
+    def split(self):
+        return None                         # a part already
+
+    def config_key(self):
+        if self.stage == self.START_ONLY:
+            return KEEPS
+        return ("gemm_start", tuple(sorted((f, v) for f, v in vars(self).items()
+                                           if f not in _START_NOT_CONFIG and not f.startswith("_"))),
+                bool(self.input_C_addr))
+
+    def config_reuse(self):
+        self.reuse = 1
+        return self.KERNEL_NAME, self
 
     def accesses(self):
         if self.stage == self.CONFIGURE_ONLY:
@@ -228,6 +278,9 @@ class SnaxBingoKernelGemmShapeInitArgs(BingoKernelArgs):
     def accesses(self):
         return [Write("dst_addr", self.BYTES)]
 
+    def config_key(self):
+        return KEEPS
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_shape_init_args_t"
 
@@ -250,6 +303,9 @@ class SnaxBingoKernelGemmWaitArgs(BingoKernelArgs):
 
     def accesses(self):
         return []
+
+    def config_key(self):
+        return KEEPS
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_wait_args_t"
@@ -317,7 +373,16 @@ class SnaxBingoKernelGemvArgs(BingoKernelArgs):
                              f"bytes would overlap")
 
     def accesses(self):
-        return [Read("input_A_addr"), Read("input_B_addr"), Write("output_D_addr")]
+        # x: row 0's K / 4 blocks of 4 values, a_blk apart, a group's a_step on; W: K x N (/ 2 with w4) a group,
+        # b_step on; y: 2 N bytes a group, d_step on
+        g = lambda step: ((self.groups, step),) if self.groups > 1 and step else ()   # noqa: E731
+        own_w = self.K * self.N // (2 if self.w4 else 1)
+        return [Read("input_A_addr", 4, dims=g(self.a_step) + ((self.kt, self.a_blk),)),
+                Read("input_B_addr", own_w, dims=g(self.b_step)),
+                Write("output_D_addr", 2 * self.N, dims=g(self.d_step))]
+
+    def dispatch_accel(self):
+        return "gemm"
 
     @staticmethod
     def shift_for_depth(K: int) -> int:
@@ -363,9 +428,17 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
         self.input_C_addr = input_C_addr
         self.output_D_addr = output_D_addr
 
+    KERNEL = "__snax_bingo_kernel_gemm_minimal"
+
     def accesses(self):
         # the shape is the previous dispatch's, held in the CSRs: to the end of each buffer
         return [Read("input_A_addr"), Read("input_B_addr"), Read("input_C_addr"), Write("output_D_addr")]
+
+    def dispatch_accel(self):
+        return "gemm"
+
+    def config_key(self):
+        return KEEPS
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_minimal_args_t"
@@ -426,6 +499,9 @@ class _SnaxBingoKernelGemmPlainArgs(BingoKernelArgs):
         self.transpose_B = transpose_B
         self.accumPrevC = accumPrevC
 
+    def dispatch_accel(self):
+        return "gemm"
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_args_t"
 
@@ -481,6 +557,9 @@ class _SnaxBingoKernelGemmQuantArgs(BingoKernelArgs):
         self.transpose_A = transpose_A
         self.transpose_B = transpose_B
         self.accumPrevC = accumPrevC
+
+    def dispatch_accel(self):
+        return "gemm"
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_quant_args_t"

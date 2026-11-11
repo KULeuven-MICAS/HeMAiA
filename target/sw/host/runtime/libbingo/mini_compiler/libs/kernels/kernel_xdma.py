@@ -10,22 +10,23 @@ Then the junction CSR builders: an xDMA writer can fold data AS IT CROSSES THE F
 what it computes is programmed through one packed CSR word -- which is why those are
 functions that build a number rather than classes."""
 
+import copy
 from typing import Union, Dict
 
 import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 from bingo_helpers import _check_xdma_size_aligned
 
-from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs
+from kernel_base import Read, Write, ReadWrite, Sync, Hold, BingoKernelArgs, KEEPS, Split
 
 
-def _span6(spatial_stride, strides, bounds):
-    """Bytes from the first byte an xDMA nest touches to its last: one 64-B beat a step, `spatial_stride` apart within a
-    step (one beat when 0), every temporal dimension its stride times one less than its bound beyond that."""
-    span = 64
-    for s, b in zip(strides, bounds):
-        span += abs(int(s)) * max(int(b) - 1, 0)
-    return span
+def _nest6(spatial_stride, strides, bounds):
+    """The bytes an xDMA nest touches, as an access's runs: a 64-B beat a temporal step (8 lanes of 8 B, spatial_stride
+    apart, when that is not 8 or 0), every temporal dimension its bound times its stride."""
+    dims = [(int(b), int(s)) for s, b in zip(strides, bounds) if int(b) > 1]
+    if int(spatial_stride) in (0, 8):
+        return dict(nbytes=64, dims=dims)
+    return dict(nbytes=8, dims=dims + [(8, int(spatial_stride))])
 
 
 class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
@@ -159,10 +160,24 @@ class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
         self.temporal_bounds_dst  = list(temporal_bounds_dst)  + [1] * (5 - n)
 
     def accesses(self):
-        return [Read("src_addr", _span6(self.spatial_stride_src, self.temporal_strides_src,
-                                         self.temporal_bounds_src)),
-                Write("dst_addr", _span6(self.spatial_stride_dst, self.temporal_strides_dst,
-                                          self.temporal_bounds_dst))]
+        return [Read("src_addr", **_nest6(self.spatial_stride_src, self.temporal_strides_src, self.temporal_bounds_src)),
+                Write("dst_addr", **_nest6(self.spatial_stride_dst, self.temporal_strides_dst, self.temporal_bounds_dst))]
+
+    def split(self):
+        """A configure (every register, nothing started), a start that returns once the transfer has started
+        (NO_WAIT) and a wait that retires it (xdma_wait_all); a start the wait would follow at once waits itself."""
+        if getattr(self, "stage", 0) or getattr(self, "no_wait", 0):
+            return None
+
+        def part(stage, no_wait):
+            if not stage and not no_wait:
+                return None, self
+            a = copy.copy(self)
+            a.stage, a.no_wait = stage, no_wait
+            return None, a
+        return Split("xdma", configure=part(1, 0), start=lambda configured: part(2 if configured else 0, 1),
+                     wait=(SnaxBingoKernelXdmaWaitAllArgs.KERNEL_NAME, SnaxBingoKernelXdmaWaitAllArgs()),
+                     drain=lambda configured: part(2 if configured else 0, 0))
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_6d_args_t"
@@ -174,7 +189,9 @@ class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
         assignments["spatial_stride_src"] = str(self.spatial_stride_src)
         assignments["spatial_stride_dst"] = str(self.spatial_stride_dst)
         # bits 9:8 the stage of a task split in two (0 whole, 1 configure, 2 start): xdma.h xdma_6d
-        assignments["num_temporal_dims"] = str(self.num_temporal_dims | (getattr(self, "stage", 0) << 8))
+        # bit 10 NO_WAIT: the transfer started, the task returns; an xdma_wait_all task retires it
+        assignments["num_temporal_dims"] = str(self.num_temporal_dims | (getattr(self, "stage", 0) << 8)
+                                               | (getattr(self, "no_wait", 0) << 10))
         for i in range(5):
             assignments[f"temporal_strides_src[{i}]"] = str(self.temporal_strides_src[i])
         for i in range(5):
@@ -186,6 +203,24 @@ class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
         return assignments
 
 # BINGO XDMA Transpose 2D (high-level: user provides shape only)
+class SnaxBingoKernelXdmaWaitAllArgs(BingoKernelArgs):
+    """__snax_bingo_kernel_xdma_wait_all: every transfer the xDMA started, local and remote, finished (the wait of a
+    NO_WAIT transfer). On the xDMA core."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_wait_all"
+
+    def accesses(self):
+        return []
+
+    def config_key(self):
+        return KEEPS
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_wait_all_args_t"
+
+    def get_c_field_assignments(self, handle_name_map) -> Dict[str, str]:
+        return {"unused": "0"}
+
+
 class SnaxBingoKernelXdmaTranspose2dArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
                  M: int, N: int, elem_bytes: int = 1):
@@ -541,6 +576,15 @@ class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
         # the chain's addresses on the other chips are C expressions, not handles
         return [Read("local_src", self.size), ReadWrite("chain", self.size), Hold("holds")]
 
+    def split(self):
+        """A configure (chain_cfg: every destination slot and junction), a start and a wait on the xDMA core, which
+        runs no other kernel meanwhile; the wait takes the gather's name, the start `_st`."""
+        return Split("xdma", configure=("__snax_bingo_kernel_xdma_chain_cfg", self),
+                     start=lambda configured: (SnaxBingoKernelXdmaChainStartArgs.KERNEL_NAME,
+                                               SnaxBingoKernelXdmaChainStartArgs(self)) if configured else None,
+                     wait=(SnaxBingoKernelXdmaChainWaitArgs.KERNEL_NAME, SnaxBingoKernelXdmaChainWaitArgs(self)),
+                     exclusive=True, names=("_cfg", "_st", ""))
+
     @classmethod
     def fold_into(cls, remote, root, cluster, others, src, dst, size, junction, jct_csr0,
                   jct_csr1=0, holds=()):
@@ -595,6 +639,9 @@ class SnaxBingoKernelXdmaChainStartArgs(BingoKernelArgs):
         return [Read("local_src", self.size), ReadWrite("chain", self.size), Write("dst", self.size),
                 Hold("holds")]
 
+    def config_key(self):
+        return KEEPS
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_chain_start_args_t"
 
@@ -606,8 +653,8 @@ class SnaxBingoKernelXdmaChainStartArgs(BingoKernelArgs):
 
 class SnaxBingoKernelXdmaChainWaitArgs(BingoKernelArgs):
     """__snax_bingo_kernel_xdma_chain_wait: return once the gather `gather` has landed. `teardown`
-    leaves the xDMA's CSRs clean; chain_gather_teardown clears it where the core's next task is an
-    xdma_chain_cfg."""
+    leaves the xDMA's CSRs clean; the compiler clears it where the core's next task is an xdma_chain_cfg
+    (passes/bingo_dfg_schedule.py)."""
 
     KERNEL_NAME = "__snax_bingo_kernel_xdma_chain_wait"
 
