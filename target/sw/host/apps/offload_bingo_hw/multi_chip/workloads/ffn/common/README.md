@@ -73,9 +73,9 @@ Each is explained where it is read:
 
 - `util/sim/multichip/chiplet_mc.py`, `ChipletBuild.__init__`: the platform and the emission (`tokens`, `wbits`, `bcast`,
   `reduce`, `sync`, `barrier_mode`, `chip_rows`, `weight_ring`, `w_chunk_bytes`, `w_buffers`, `gid_lists`,
-  `list_phases`, `per_chip_image`, `static_l1`, `l1_capacity`, ...).
+  `list_phases`, `per_chip_image`, `static_l1`, `l1_capacity`, `async_exec`, ...).
 - `ffn_prefill_mc.py`, `PBuild.__init__`: the mapping and the ablation switches (`rows`, `blocks`, `dn_cols`, `x_cast`,
-  `gemm_async`, `chain_group`, `out_slots`, `root_cols`, `restream`, ...).
+  `chain_group`, `out_slots`, `root_cols`, `restream`, ...).
 - `ffn_decode_mc.py`: the decode's own (`x_row`, `dn_gemv`, `gu_gemv`, ...).
 
 ## Generating and building

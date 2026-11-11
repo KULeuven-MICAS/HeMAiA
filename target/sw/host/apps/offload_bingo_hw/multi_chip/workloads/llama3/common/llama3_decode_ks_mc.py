@@ -86,7 +86,8 @@ of the one before; the host's x multicast comes first; the two ChainGathers sit 
 chain -> m* -> pass 2 -> reduce chain -> o). _check_collectives proves every pair ordered by a path of the graph, and
 with wo_push after_reduce or before_chains every push part ordered against every ChainGather.
 
-THE ORDERS. Every device core runs its tasks in creation order (chain_program_order). Each DM core: x, the W_q chunks,
+THE ORDERS. The compiler orders every device core's program (mini_compiler passes/bingo_dfg_schedule.py). Each DM core,
+in the order the tasks are made: x, the W_q chunks,
 the q piece, the q wait, the cache tiles, the k / v chunks, the run put, (the new key's chip) the run wait, the stats
 copies, the m* wait and its copies, the partial copies, the first W_O chunks (the root's cluster 0: after the o
 multicast), the o wait, the rest of W_O, the y put, (the root's cluster 0) the y wait and the HBM write, (the new key's
@@ -94,8 +95,8 @@ chip's cluster 1) the appends. wo_push before_chains loads every W_O chunk right
 
 PARAMETERS (params.hjson): ctx (cached positions, 64 x 16 x NT), rows and bc (the prompt's prefill passes and key tiles
 for the golden's static scales, as llama3_decode_mc.py; bc 64 is also the cached tile), seed, wbits 4, w4_paired true,
-passes (1 | 2), stats (max | merge), wo_push (after_reduce | after_kv | before_chains), new_chip, checks (y | stages), cfg_reuse
-(softmax geometry priming), and the platform's and the graph's switches (w_chunk_bytes = one 32-column chunk, w_buffers,
+passes (1 | 2), stats (max | merge), wo_push (after_reduce | after_kv | before_chains), new_chip, checks (y | stages),
+async_exec, and the platform's and the graph's switches (w_chunk_bytes = one 32-column chunk, w_buffers,
 weight_ring, static_l1, l1_capacity, compact_id_maps, gid_lists, per_chip_image, desc_in_image, d2d_ddr, d2d_rx_yield,
 fast_host_init, args_phase_bytes). bcast bcast_l1, reduce chain and sync edge only.
 
@@ -334,7 +335,6 @@ class KsBuild(lmd.DBuild):
         if not self.w4_paired or self.wbits != 4:
             raise ValueError("params w4_paired, wbits 4: the GEMV reads INT4 weights in the paired layout")
         self.restream, self.kv_split, self.rope_pairs, self.mask_c = False, True, "chunks", True
-        self.cfg_reuse = bool(p.get("cfg_reuse", False))
         self.checks_kind = str(p.get("checks", "y"))
         if self.checks_kind not in ("y", "stages"):
             raise ValueError(f"params checks={self.checks_kind!r}: y or stages")
@@ -588,8 +588,10 @@ class KsBuild(lmd.DBuild):
             self.consts[g] = l1("consts", self.cst[g][1])
             self.xa[g] = l1("x", self.XB)                        # the token's row, a_row
             self.q16[g] = l1("q16", (2 if c == 0 else 1) * 2 * HD)   # q's row (cluster 0: then cluster 1's)
-            self.rt[g] = l1("rt", 2 * HD)                        # RoPE: x cos, chunk by chunk
-            self.rs[g] = l1("rs", 2 * HD)                        # RoPE: the pair's other chunk x sin
+            # RoPE scratch, q's and k's each their own (their RoPE may run in either order): x cos, chunk by chunk;
+            # the pair's other chunk x sin
+            self.rt[g] = {sd: l1(f"rt{sd}", 2 * HD) for sd in ("q", "k")}
+            self.rs[g] = {sd: l1(f"rs{sd}", 2 * HD) for sd in ("q", "k")}
             if c == 0:
                 self.qa16[g] = l1("qa16", 4 * HD)                # the two rows' atoms interleaved, FP16
                 self.qpc[g] = l1("qpc", QPB)                     # the chip's q piece
@@ -958,7 +960,11 @@ class KsBuild(lmd.DBuild):
                                    SnaxBingoKernelIdma2dCopyArgs(at_offset(a, MRUN),
                                                                  self.at_chip(k, k, 0, self.OFF_MLOC + c * BEAT),
                                                                  BEAT, LRUN - MRUN, XFER, reps),
-                                   [self.sm1[g][-1]] + cps[-1:] + wo_last.get(g, [])))
+                                   [self.sm1[g][-1]] + cps[-1:] + wo_last.get(g, [])
+                                   # wo_push after_reduce / before_chains: every cache tile fetched before the
+                                   # statistics' chain
+                                   + ([self.kc_ready[g], self.vc_ready[g]]
+                                      if self.wo_push in ("after_reduce", "before_chains") else [])))
             self.mloc[k] = cps[-1]
             if self.passes == 1 and not self.merge:
                 for c, g in enumerate((g0, g1)):
@@ -1061,7 +1067,7 @@ class KsBuild(lmd.DBuild):
             yput[g] = self.nd(g, "dm", "y_put", "__snax_bingo_kernel_idma_put_flagged",
                               SnaxBingoKernelIdmaPutFlaggedArgs(self.ywo[g], self.l3("yrow", 2 * self.WOC * g, far(k)),
                                                                 2 * self.WOC, self.l3("yflag", g * 64, far(k)), value=1),
-                              [gms[-1]])
+                              list(gms))                    # every W_O GEMM writes its part of ywo
         self.kernel_barrier()                             # sync barrier: W_O and y end
         # ---- the append: the new key's chip's cluster 1 writes both halves' new tiles into the cache's next tile in
         # HBM, behind its y put (the root's cluster 0 keeps its DM core for the y wait and write) -----------------------
@@ -1285,12 +1291,6 @@ class KsBuild(lmd.DBuild):
         self.run_checks(checks)
 
     # ---- emission -------------------------------------------------------------------------------------------------------
-    def chain_program_order(self):
-        # once: finish() orders the cores before its proofs, DBuild.finish asks again
-        if not getattr(self, "_ordered", False):
-            self._ordered = True
-            lmd.DBuild.chain_program_order(self)
-
     def finish(self, app_name, x_prefixes=("x_wait_",)):
         bad = [t.node_name for t in self.dfg.node_list if (t.kernel_name or "") in
                ("__snax_bingo_kernel_gemm_full", "__snax_bingo_kernel_gemm_minimal")]
@@ -1305,7 +1305,6 @@ class KsBuild(lmd.DBuild):
                 raise ValueError(f"sync barrier: {len(cross)} dependency edges cross chips inside the window, e.g. "
                                  + "; ".join(f"{u.node_name} -> {v.node_name}" for u, v in cross[:4]))
             print(f"[{self.TAG}] sync barrier: {self.n_barrier} barriers a chip, no edge crosses chips inside the window")
-        self.chain_program_order()
         self._check_collectives()
         self._args_report()
         lmd.DBuild.finish(self, app_name, x_prefixes)

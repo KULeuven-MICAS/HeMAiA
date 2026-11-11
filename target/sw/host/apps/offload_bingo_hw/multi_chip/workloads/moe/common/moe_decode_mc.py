@@ -136,7 +136,7 @@ CHECKS (gemv): as above, the A8 rows in a_row (both clusters' columns, the free 
 
 params: tokens 1; routed_split (default 8); slice; blocks (column blocks a gate|up chunk; gemv: at most); w_chunk_bytes
 (at least the largest chunk); w_buffers; weight_ring; chain_path; chain_tail (0 or 1, default 1); chain_first_alt;
-warm_root; scale_out; gemv (the GEMV mode; not with b_parity, w4_paired, scale_out, gemm_async, gemm_shape_l1); inter_e
+warm_root; scale_out; gemv (the GEMV mode; not with b_parity, w4_paired, scale_out); inter_e
 / inter_sh (the experts' and the shared MLP's first columns, as the prefill's proof of concept); and the platform and
 graph switches every block shares (moe_prefill_mc.py, chiplet_mc.py).
 """
@@ -258,13 +258,10 @@ class DBuild(mp.MBuild):
                 raise ValueError(f"params {k}: a prefill switch the decode does not take")
         # the switches of the prefill's helpers, at what the decode builds
         self.x_hbm, self.x_device, self.l3_overlay, self.args_phases = True, False, False, False
-        self.down_one_phase, self.plain_trailer = False, bool(p.get("weight_ring", {}).get("trailer", False))
+        self.plain_trailer = bool(p.get("weight_ring", {}).get("trailer", False))
         if self.plain_trailer:
             raise ValueError("params weight_ring.trailer: the decode's rings push flags (queued)")
         self.resid, self.phase_starts, self.phase_names, self.loaders = None, [], [], {}
-        self.gemm_async = bool(p.get("gemm_async", False))
-        self.gemm_shape_l1 = bool(p.get("gemm_shape_l1", False))
-        self.gsh = {}
         self.b_parity = bool(p.get("b_parity", False))
         self.w4_paired = bool(p.get("w4_paired", False))
         if self.b_parity and self.w4_paired:
@@ -285,7 +282,7 @@ class DBuild(mp.MBuild):
         # params gemv: every weight multiply on the one-token GEMV (the module docstring's GEMV MODE)
         self.gemv = bool(p.get("gemv", False))
         if self.gemv:
-            bad = [k for k in ("b_parity", "w4_paired", "scale_out", "gemm_async", "gemm_shape_l1") if p.get(k, False)]
+            bad = [k for k in ("b_parity", "w4_paired", "scale_out") if p.get(k, False)]
             if bad:
                 raise ValueError(f"params gemv with {bad}: the GEMV reads its own paired INT4 layout, its factor rows "
                                  f"from the slab, and is a blocking task (no GEMM to queue)")
@@ -713,13 +710,14 @@ class DBuild(mp.MBuild):
             if self.gemv:                                 # the kernels the GEMV mode runs: a GEMV and a stream multiply
                 warm.append(self.gemv_task(k, c, "warm_gemv", wz, wz.view(256), wz.view(512), 4, 2 * BLK, 0, [wz_init]))
                 warm.append(self.node(k, c, simd, "warm_scale", "__snax_bingo_kernel_simd_stream_elementwise",
-                                      SnaxBingoKernelSimdMulF16Args(wz.view(512), wz.view(640), wz.view(768), 1, 64),
+                                      # reads the zeroed head (the GEMV reads it too), not the GEMV's output
+                                      SnaxBingoKernelSimdMulF16Args(wz, wz.view(128), wz.view(768), 1, 64),
                                       [wz_init]))
             else:
                 warm.append(self.gemm(k, c, "warm_gemm", wz, 32, wz.view(256), wz.view(512), 1, 2, 1, 0, [wz_init],
                                       int4=0 if self.w4_paired else 1))
                 warm.append(self.node(k, c, simd, "warm_scale", "__snax_bingo_kernel_simd_mul_tiles",
-                                      SnaxBingoKernelSimdMulTilesArgs(wz.view(512), wz.view(512), wz.view(768), 1, 1),
+                                      SnaxBingoKernelSimdMulTilesArgs(wz.view(256), wz.view(256), wz.view(768), 1, 1),
                                       [wz_init]))
             if g == 0:
                 warm.append(self.node(k, c, simd, "warm_softmax", "__snax_bingo_kernel_simd_softmax_f16_f16",
@@ -1047,7 +1045,8 @@ class DBuild(mp.MBuild):
                 gm = self.gemv_task(k, c, name, bg["x"], slab, row, self.H, 2 * n, d.k_x, [xc[g], ld])
                 dq = self.node(k, c, simd, (f"sdq_c{j}_g{g}" if pc.e is None else f"edq_p{pi}c{j}_g{g}"),
                                "__snax_bingo_kernel_simd_stream_elementwise",
-                               SnaxBingoKernelSimdMulF16Args(row, sc.addr, row, 1, 2 * n), [gm] + sc.deps)
+                               SnaxBingoKernelSimdMulF16Args(row, sc.addr, row, 1, 2 * n),
+                               [gm] + sc.deps + ([dq] if dq is not None else []))   # in turn: the last stands for all
                 self._scale_read(g, sc, dq)
                 self._release(g, si, gm, dq, sc)
             sl = self.node(k, c, simd, f"silu_p{pi}_g{g}", "__snax_bingo_kernel_simd_silu_f16_f16",
@@ -1169,8 +1168,7 @@ class DBuild(mp.MBuild):
 
     def _check_gemv_only(self, first):
         """gemv: every array task this block made (node ids from `first`) is a GEMV, so no gemm_full follows a GEMV on a
-        GEMM core and a GEMM configuration reuse (bingo_gemm_reuse, which tracks GEMM kernels only) has nothing to turn
-        into a gemm_minimal behind one."""
+        GEMM core."""
         gemm = self.roles["gemm"]
         arr = [t for t in self.dfg.node_list if t.node_id >= first and t.assigned_core_id == gemm
                and (t.kernel_name or "").startswith("__snax")]

@@ -353,7 +353,7 @@ class FaDecode(fs.FaStages):
         self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{T}_sym", self.sym_bytes)
                     for k in self.chips for c in range(self.NC)}
         self.sweep_cfg = fa.FaSweepCfg(bc=self.bc, nt=self.NT, nq=self.NQ, br=BR, k_s=d.k_s, k_o=d.k_o, a_exp=d.a_exp,
-                                       a_n_f32bits=d.a_n_bits, gemm_async=self.gemm_async)
+                                       a_n_f32bits=d.a_n_bits)
         self.consts = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_consts", self.C_BYTES)
                        for g in range(self.G) if self.c(g) == self.qc}
         self.kvc = {(k, c): self.cx_chip(k).at(c).l1(f"{T}_kvc", self.KC_BYTES)
@@ -414,7 +414,7 @@ class FaDecode(fs.FaStages):
             ldx = self.node(k, c, dm, f"kx_ld_q{q}", "__snax_bingo_kernel_idma_1d_copy",
                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc"), xb, self.XB), [w])
             ld, _, _ = self.load(g, 0, "Ld_wkvc", dst=wb)
-            gm = self.gmm(g, f"gkvc_q{q}", xb, wb, ob, 1, HIDDEN // 4, g1 - g0, d.k_x, [ld, ldx], "proj")
+            gm = self.gmm(g, f"gkvc_q{q}", xb, wb, ob, 1, HIDDEN // 4, g1 - g0, d.k_x, [ld, ldx])
             on = lambda name, off, k=k: BingoMemSymbol(name, offset=off, chip_id=None if o == k else o)   # noqa: E731
             self.kvc_put[(q, k)] = self.node(k, c, dm, f"kvc_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
                                              SnaxBingoKernelIdmaPutFlaggedArgs(
@@ -436,9 +436,7 @@ class FaDecode(fs.FaStages):
         and its multicast of the piece from its L3 into every other chip's."""
         T, dm, o, c, q = self.TAG, self.roles["dm"], self.owner, self.kc, self.NEW
         self.kv_put, self.kvp_put, self._chained = {}, {}, True
-        self._ahead = self.kv_cfg_ahead
         self.stage_kv_split(o)
-        self._ahead = False
         prev = []
         flags = [("kvnflag", self.kv_put[q])] + ([("kvpflag", self.kvp_put[q])] if q in self.kvp_put else [])
         for flag, put in flags:
@@ -621,10 +619,9 @@ class FaDecode(fs.FaStages):
             checks.insert(1, ("xt", self.stash("xt", far, self.qc, self.sw_of[g]["xt"][0], nb, []), ot, nb))
         self.run_checks(checks)
 
-    def chain_program_order(self):
-        n = super().chain_program_order()
+    def finish(self, app_name, **kw):
         self._check_collectives()
-        return n
+        super().finish(app_name, **kw)
 
     def _check_collectives(self):
         """Every two multicasts (x's and the cache's from the memory chip, the owner's of the new piece), every

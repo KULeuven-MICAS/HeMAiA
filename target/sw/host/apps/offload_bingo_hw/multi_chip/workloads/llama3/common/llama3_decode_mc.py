@@ -54,18 +54,16 @@ Per pair link: one half each way; per memory link: the halves of the chips it fe
 own L3, and no multicast meets a chain (there is none): the two multicasts (x at the start, o after every sweep) are
 ordered.
 
-THE ORDERS. Every device core runs its tasks in creation order (chain_program_order), except the token's k / v
-projection, made before the sweep (the sweep's last tile needs it) but placed on the GEMM and SIMD cores behind the
-sweep's tile params kv_at and on the xDMA core behind the sweep's softmax geometry: its weights land after the cache, so
-the cached tiles' sweep runs while they stream. Every matmul is a blocking task (the GEMVs are blocking VersaCore
-dispatches the GEMM queue cannot number, and with one query tile the sweep's QK and PV alternate on the core, so a
-queued sweep would neither reuse a configuration nor hide set-up behind a matmul). Each DM core: x, the q chunks, the
-cache, the k / v chunks, the trade, the first W_O chunks, the o put, the rest of W_O, the y put, the append.
+THE ORDERS. The compiler orders every device core's program (mini_compiler passes/bingo_dfg_schedule.py): the token's
+k / v projection is made before the sweep (the sweep's last tile needs it), and its weights land after the cache, so
+the cached tiles' sweep can run while they stream. The compiler splits the matmuls, SIMD and xDMA tasks into
+configure / start / wait parts where its schedule gains (params async_exec false: every task whole). Each DM core: x, the q chunks, the cache, the k / v
+chunks, the trade, the first W_O chunks, the o put, the rest of W_O, the y put, the append.
 
 PARAMETERS (params.hjson): ctx (cached positions, whole key tiles and whole prefill passes), rows and bc (the prefill's
-passes and key tiles: the golden's static scales are the ctx + 1-position prompt's), cache_parts, cache_after, kv_at,
+passes and key tiles: the golden's static scales are the ctx + 1-position prompt's), cache_parts, cache_after,
 w_chunk_bytes (one 32-column chunk), w_buffers, weight_ring, seed, w4_paired (true: the GEMV's INT4 layout), mask_c,
-sm_geom_xdma, cfg_reuse (softmax geometry priming), checks (y | stages), and the platform's and the graph's switches
+sm_geom_xdma, async_exec, checks (y | stages), and the platform's and the graph's switches
 (static_l1, l1_capacity, compact_id_maps, gid_lists, per_chip_image, desc_in_image, d2d_ddr, d2d_rx_yield,
 fast_host_init, args_phase_bytes).
 
@@ -91,9 +89,8 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdma1dCopyArgs, SnaxBingoKernelXdma6dArgs,
     SnaxBingoKernelXdmaMemsetArgs, SnaxBingoKernelXdmaTranspose2dArgs, simd_fp16_lanes)
-from bingo_cfg_reuse import prime_fa_softmax  # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from libs.blocks import FaSweepCfg, GemmQueue, fa_sweep, fa_sweep_alloc  # noqa: E402
+from libs.blocks import FaSweepCfg, fa_sweep, fa_sweep_alloc  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -312,7 +309,6 @@ class DBuild(ABuild):
         self.restream, self.ot8_fused, self.kv_split, self.rope_pairs = False, True, True, "chunks"
         self.mask_c = bool(p.get("mask_c", True))
         self.sm_geom = "xdma" if bool(p.get("sm_geom_xdma", False)) else None
-        self.cfg_reuse = bool(p.get("cfg_reuse", False))
         self.checks_kind = str(p.get("checks", "y"))
         if self.checks_kind not in ("y", "stages"):
             raise ValueError(f"params checks={self.checks_kind!r}: y or stages")
@@ -343,10 +339,6 @@ class DBuild(ABuild):
         self.PT = self.CT // self.P                          # key tiles a part
         # params cache_after: each ring's chunks the prefetcher pushes before the cache (its first part)
         self.cache_after = int(p.get("cache_after", self.NQC))
-        # params kv_at: the sweep's key tile the token's k / v projection runs ahead of on the GEMM and SIMD cores
-        self.kv_at = int(p.get("kv_at", 0))
-        if not 0 <= self.kv_at < self.NT:
-            raise ValueError(f"params kv_at={self.kv_at}: a key tile of the sweep, 0..{self.NT - 1}")
         # ---- the split: key/value groups on chip pairs of a column, a query head a cluster (the prefill's) -----------
         pairs = sorted({(k, k + 1) for k in self.chips if (k & 15) % 2 == 0 and k + 1 in self.chips})
         if len(pairs) != d.NKV:
@@ -503,8 +495,10 @@ class DBuild(ABuild):
             self.consts[g] = l1("consts", self.cst[g][1])
             self.xa[g] = l1("x", self.XB)                        # the token's row, a_row
             self.q16[g] = l1("q16", 2 * HD)                      # q: the GEMVs' rows, dequantised and rotated in place
-            self.rt[g] = l1("rt", 2 * HD)                        # RoPE: x cos, chunk by chunk
-            self.rs[g] = l1("rs", 2 * HD)                        # RoPE: the pair's other chunk x sin
+            # RoPE scratch, q's and k's each their own (their RoPE may run in either order): x cos, chunk by chunk;
+            # the pair's other chunk x sin
+            self.rt[g] = {sd: l1(f"rt{sd}", 2 * HD) for sd in ("q", "k")}
+            self.rs[g] = {sd: l1(f"rs{sd}", 2 * HD) for sd in ("q", "k")}
             self.a16q[g] = l1("a16q", BR * HD * 2)               # q in row 0 of a 16-row FP16 A tile
             self.q8[g] = l1("q8", BR * HD)                       # the sweep's query tile
             self.kv16[g] = l1("kv16", 2 * NC)                    # the chip's half of k or v, the GEMVs' row
@@ -523,7 +517,7 @@ class DBuild(ABuild):
     def _sweep_cfg(self):
         d = self.d
         return FaSweepCfg(bc=self.bc, nt=self.NT, nq=1, br=BR, k_s=d.k_s, k_o=d.k_o, a_exp=d.a_exp,
-                          a_n_f32bits=d.a_n_bits, d_qk=self.HD, d_v=self.HD, gemm_async=False, phase="fa")
+                          a_n_f32bits=d.a_n_bits, d_qk=self.HD, d_v=self.HD)
 
     # ---- helpers ----------------------------------------------------------------------------------------------------
     def gemv(self, g, name, x, w, out, n, k_shift, deps):
@@ -559,7 +553,7 @@ class DBuild(ABuild):
         """RoPE of one row's chunk pair in place (rope_pairs chunks): chunk ca of the head (the pairs' first
         dimensions) at x + 64 la_, chunk cb (their second) at x + 64 lb; a = a cos_a + b sin_a, b = b cos_b + a sin_b
         (sin signed), the tables the constants' rows at the token's position. Returns the two adds."""
-        cst, rt, rs, n = self.consts[g], self.rt[g], self.rs[g], QC
+        cst, rt, rs, n = self.consts[g], self.rt[g][side], self.rs[g][side], QC
         cos = lambda cc: cst.view(self.C_COS + 2 * QC * cc)
         sin = lambda cc: cst.view(self.C_SIN + 2 * QC * cc)
         xa, xb = x.view(2 * QC * la_), x.view(2 * QC * lb)
@@ -720,7 +714,6 @@ class DBuild(ABuild):
                     for j in range(t0, t0 + self.PT):
                         self.tile_ready[(g, "K", j)], self.tile_ready[(g, "V", j)] = ck, cv
         # ---- the token's k / v: the chip's half, into the new tile, then traded within the pair --------------------
-        mark = max(t.node_id for t in self.dfg.node_list) + 1
         own_q = {}
         for g in range(self.G):
             cst, kv16 = self.consts[g], self.kv16[g]
@@ -755,7 +748,6 @@ class DBuild(ABuild):
                 for n, cc in enumerate(self.kv_cc(g)):
                     own_q[g] = self.quant(g, f"vq{n}", self.va[g, n], self.vbuf[g].view(L16 + cc * QC * self.bc),
                                           QC * self.bc * 2, d.s_v.inv, [tas[n]])
-        kv_end = max(t.node_id for t in self.dfg.node_list) + 1
         kput, vput = {}, {}
         for k in self.chips:
             g0, g1 = self.gs(k)
@@ -786,7 +778,6 @@ class DBuild(ABuild):
             sw[g] = fa_sweep(self.at(k, c), self._sweep_cfg(), self.sweep_bufs[g], L1Tiles(self, g), {0: (self.q8[g], [q8t[g]])},
                              self.roles, name="s_", early=1, mask=lambda j, u, mk=mk: mk if j == self.LAST else None,
                              mask_c=self.mask_c, ot8=self.ot8_bits(), geom_core=self.sm_geom)
-        self._kv_at_tile(mark, kv_end, sw)
         # ---- o: every head's row into the root, its multicast, every cluster's copy -----------------------------------
         rg = [g for g in range(self.G) if self.chip(g) == R]
         far = lambda k: None if k == R else R
@@ -858,30 +849,6 @@ class DBuild(ABuild):
                          self.vbuf[g].view(t0 * self.TILE_B + half * self.HB), self.HB, self.HB, self.TILE_B, self.PT, deps)
         return ck, cv
 
-    def _kv_at_tile(self, lo, hi, sw):
-        """params kv_at: the token's k / v projection's tasks (node ids lo .. hi - 1) on the GEMM and SIMD cores ahead
-        of the sweep's tile kv_at there, on the xDMA core behind the sweep's softmax geometry (made at its head); its
-        loads and its trade stay where they were made on the DM core."""
-        if not self.kv_at:
-            return
-        gemm, simd, xdma = self.roles["gemm"], self.roles["simd"], self.roles["xdma"]
-        at = {}
-        for g in range(self.G):
-            key = (self.chip(g), self.c(g))
-            at[key] = {gemm: sw[g]["qk"][0][self.kv_at].node_id - 0.5,
-                       simd: sw[g]["sm"][0][self.kv_at].node_id - 0.5,
-                       xdma: sw[g]["qk"][0][0].node_id + 0.01}
-        moved = 0
-        for t in self.dfg.node_list:
-            if not lo <= t.node_id < hi:
-                continue
-            a = at[(t.assigned_chiplet_id, t.assigned_cluster_id)].get(t.assigned_core_id)
-            if a is None:
-                continue
-            t.order_key = a + 1e-4 * (t.node_id - lo)
-            moved += 1
-        print(f"[{self.TAG}] kv_at {self.kv_at}: {moved} k / v projection tasks behind the sweep's tile {self.kv_at - 1}")
-
     def _link_report(self):
         """The bytes each memory link carries in the window: the weights and the cache halves of the chips behind it."""
         per = {}
@@ -944,18 +911,7 @@ class DBuild(ABuild):
         self.run_checks(checks)
 
     # ---- emission -------------------------------------------------------------------------------------------------------
-    def chain_program_order(self):
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        return GemmQueue.of(self.dfg, False).program_order(self.dfg, dev, tag=self.TAG)
-
     def finish(self, app_name, x_prefixes=("x_wait_",)):
-        self.chain_program_order()
-        if self.p.get("args_phase_bytes"):
-            from bingo_args_phases import split_args_phases
-            split_args_phases(self, int(self.p["args_phase_bytes"]), [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")])
-        if self.cfg_reuse:
-            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
-            print(f"[{self.TAG}] cfg_reuse: softmax {primed} PRIMED + {csr} CSR_PRIMED")
         self.dfg.split_chip_functions = True
         cm.ChipletBuild.finish(self, app_name, x_prefixes)
 

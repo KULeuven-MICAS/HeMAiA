@@ -84,7 +84,8 @@ has no cheap conversion (4-byte runs; the xDMA moves 8-byte atoms).
 THE WEIGHTS stream as in the prefill's first pass: each cluster's gate|up and down chunks sit in its memory chip's HBM;
 the memory chip pushes them into the chip's L3 ring and the DM core loads each into an L1 slab behind its landed flag.
 
-THE PROGRAM ORDER. Every device core runs its tasks in the order this driver creates them (chain_program_order).
+THE PROGRAM ORDER. The compiler orders every device core's program (mini_compiler passes/bingo_dfg_schedule.py); the
+edges this driver adds are every ordering the data needs.
 
 TIMING. The start stamp after every chip's setup (the scales loaded, the X tiles zeroed); the end stamp after the HBM
 write of Y. X's multicast and the weight stream are inside the window.
@@ -357,7 +358,8 @@ class DBuild(fp.PBuild):
                                SnaxBingoKernelSimdMulF16Args(row, self.sbuf[g].view(off), row, N // 32, 32), [gm])
                 sw = self.node(k, c, simd, f"swi_c{j}_i{i}_g{g}", "__snax_bingo_kernel_simd_swiglu_f16_f16",
                                SnaxBingoKernelSimdSwigluF16F16Args(row, self.grow[g].view(off + 2 * nb_ * BLK),
-                                                                   self.a16r[g].view(2 * BLK * b0), 1, nb_ * BLK), [dq])
+                                                                   self.a16r[g].view(2 * BLK * b0), 1, nb_ * BLK),
+                               [dq] + ([sw] if sw is not None else []))     # in turn: the last stands for every one
             last_sw[g] = sw
         return last_sw, last_gemm
 
@@ -417,7 +419,7 @@ class DBuild(fp.PBuild):
         SL, others, h, GS = self.SLICE, self.order[1:], self.NDN // self.NC, self.chain_group
         p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
         lag = 1                                 # a gather's stores follow the next gather (two fold slots)
-        sym_reader, p1_reader, pending, last_st = {}, {}, [], {}
+        sym_reader, p1_reader, pending, last_st, all_st = {}, {}, [], {}, []
         last_red = None
         # params chains_after_stream: the gathers are made after every down GEMM, the first behind every cluster's last
         # one, which follows the cluster's last ring load: every gather runs after every chunk of every memory chip's
@@ -451,6 +453,7 @@ class DBuild(fp.PBuild):
                                                                                        w // BLK))
                 sts.append(self.node(R, c, dm, f"y_store_j{j}" if n == 0 else f"y_store_j{j}n{n}", kern, kargs, [red]))
             last_st[c] = sts
+            all_st.extend(sts)
             p1_reader[(c, s)] = sts
 
         def gathers(jl, dn, last_dn):
@@ -528,8 +531,8 @@ class DBuild(fp.PBuild):
             gathers(jl, dn, [prev_dn[g] for g in range(self.G)])
         while pending:
             store(*pending.pop(0))
-        # Y's row into HBM once both root clusters' last copies are done: every gather has ended by then
-        ready = [t for c in sorted(last_st) for t in last_st[c]]
+        # Y's row into HBM once every copy into it is done (every gather has ended by then)
+        ready = list(all_st)
         if self.y_dequant:                      # Y16 = Y_raw (.) s_dn, in place, the prefill's dequantise kernel
             ready = [self.node(R, 0, self.roles["simd"], "y_deq", "__snax_bingo_kernel_simd_stream_elementwise",
                                SnaxBingoKernelSimdMulF16Args(self.yrow, self.sdn, self.yrow, self.D // 32, 32), ready)]

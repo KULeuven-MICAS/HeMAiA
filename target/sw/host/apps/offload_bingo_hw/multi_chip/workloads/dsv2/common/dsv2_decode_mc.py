@@ -72,10 +72,9 @@ THE GEMV SECOND BLOCK (params moe.gemv, ffn.gu_gemv). X is the token's INT8 row 
 above): the glue spreads the gained FP16 row into the same zeroed FP16 buffer and quantises it at s_h; C00 multicasts
 the 4,096 B into the block's landing (md_xland or fn_xland) behind its flag. The final residual takes the block's y row
 as above: the MoE's root fold rows are y's two halves in column order, the FFN's Y16 row is on the root's cluster 0. The
-block's checks are its GEMV forms (moe_decode_mc.DBuild.a8_gold: the A8 rows in a_row; ffn_decode_mc.DBuild.a8_root). On
-every cluster each GEMV of the second block follows every queued gemm_wait of the attention (a GEMV advances the array's
-retired count, which a wait compares against): the GEMM core runs its tasks in creation order, and check_collectives
-proves it in the graph. stop attn writes X in a_row (4,096 B) into HBM with layer.x_arow.
+block's checks are its GEMV forms (moe_decode_mc.DBuild.a8_gold: the A8 rows in a_row; ffn_decode_mc.DBuild.a8_root). A
+GEMV advances the array's retired count, which a split dispatch's wait compares against: the compiler numbers every
+array dispatch of a cluster, the GEMVs included (passes/bingo_dfg_schedule.py). stop attn writes X in a_row (4,096 B) into HBM with layer.x_arow.
 
 THE COLLECTIVES. The fabric deadlocks on two multicast sources at once and on a multicast beside a ChainGather, so every
 two multicasts and every multicast / chain pair are ordered by the graph, and check_collectives proves it (dependency
@@ -153,9 +152,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulF16Args,
     SnaxBingoKernelSimdRmsnormArgs, SnaxBingoKernelXdma6dArgs, SnaxBingoKernelXdmaMemsetArgs, simd_beats)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from bingo_cfg_reuse import prime_fa_softmax, reuse_gemm_fa_config, reuse_gemm_start_config  # noqa: E402
-from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -189,13 +185,6 @@ def _reads_hbm(t):
     """Whether task t is a copy whose source is in HBM (an address, or a handle of mem_level HBM)."""
     src = getattr(t.kernel_args, "src_addr", None)
     return isinstance(src, int) or getattr(src, "mem_level", None) == "HBM"
-
-
-class _Nodes:
-    """A view of a graph's tasks for the configuration-reuse passes, which walk `node_list`: one block's tasks."""
-
-    def __init__(self, nodes):
-        self.node_list = list(nodes)
 
 
 # ---- the blocks, over the layer's graph ---------------------------------------------------------------------------
@@ -595,8 +584,7 @@ class LayerBuild(cm.ChipletBuild):
         return out
 
     def mlp_window(self, extra):
-        """Where the second block starts on each chip (each core runs its tasks in creation order, so the block's follow
-        the attention's): a probe behind the attention's last chain and the block's own setup tasks on the chip (the
+        """Where the second block starts on each chip: a probe behind the attention's last chain and the block's own setup tasks on the chip (the
         FFN's zeroed X tiles, the MoE's warm-up). The chain ends before the glue starts, so the probe adds nothing to
         X's path; it makes the order the X flag gives visible to the dependency tags and the static L1 plan (the
         attention's tasks before the block's). The block's preloads from HBM (the FFN's scale factors) go before the
@@ -606,7 +594,6 @@ class LayerBuild(cm.ChipletBuild):
             local = []
             for t in (extra or {}).get(k, []):
                 if _reads_hbm(t):
-                    t.order_key = -1
                     self.edge(t, self.attn_pre[k][-1] if self.attn_pre[k] else self.start)
                 else:
                     local.append(t)
@@ -837,15 +824,9 @@ class LayerBuild(cm.ChipletBuild):
         self.glue()
         if self.mlp is None:
             return
-        # the second block dispatches its GEMMs as it does alone: no configure-ahead tasks (the attention's queue
-        # settings are put back for the program order, which places the attention's configure tasks)
-        q = GemmQueue.of(self.dfg)
-        saved = (q.cfg_ahead, q.cfg_ahead_fa, q.cfg_hoist)
-        q.cfg_ahead = q.cfg_ahead_fa = q.cfg_hoist = False
         n1 = len(self.dfg.node_list)
         self.mlp.build()
         self.mlp_ids = (n1, len(self.dfg.node_list))
-        q.cfg_ahead, q.cfg_ahead_fa, q.cfg_hoist = saved
         if self.chains_after_stream:
             self.mlp_chains_after_stream()
         # the second block's tasks named as an attention task (its prefetchers, made before its build, and its GEMM
@@ -958,7 +939,6 @@ class LayerBuild(cm.ChipletBuild):
         win = nx.descendants(gr, self.start) & nx.ancestors(gr, self.end)
         reads = [t.node_name for t in nodes if t in win and t is not self.n_ld and t.assigned_core_id in dev
                  and _reads_hbm(t)]
-        gemv = self._check_gemv_order(gr) if self.mlp_gemv else 0
         strict = self.attn_kind == "ks"
         if beside and strict:
             raise ValueError(f"the layer: {len(beside)} (chain, block, chip) with the chain beside that block's pushes "
@@ -977,31 +957,7 @@ class LayerBuild(cm.ChipletBuild):
               + ("after every ring's last chunk" if not late else f"with {len(late)} (write, block, chip) not after "
                                                                    f"its last chunk")
               + "; concurrent chains in one direction; "
-              + (f"device HBM reads in the window: {reads[:4]}" if reads else "no device HBM read in the window but x")
-              + (f"; {gemv} clusters' GEMVs after their gemm_waits" if self.mlp_gemv else ""))
-
-    def _check_gemv_order(self, gr):
-        """On every cluster, the second block's first GEMV follows every queued gemm_wait of the cluster (a GEMV
-        advances the array's retired count, which a wait compares against). Returns the clusters with a GEMV of the
-        block."""
-        import networkx as nx
-        lo, hi = self.mlp_ids
-        first, waits = {}, {}
-        for t in self.dfg.node_list:
-            key = (t.assigned_chiplet_id, t.assigned_cluster_id)
-            if t.kernel_name == "__snax_bingo_kernel_gemm_wait":
-                waits.setdefault(key, []).append(t)
-            elif t.kernel_name == "__snax_bingo_kernel_gemv" and lo <= t.node_id < hi and key not in first:
-                first[key] = t
-        bad = []
-        for key, t in first.items():
-            if waits.get(key):
-                anc = nx.ancestors(gr, t)
-                bad += [(w.node_name, t.node_name) for w in waits[key] if w not in anc]
-        if bad:
-            raise ValueError(f"the layer: {len(bad)} gemm_wait(s) not before the second block's first GEMV of their "
-                             f"cluster: {bad[:4]}")
-        return len(first)
+              + (f"device HBM reads in the window: {reads[:4]}" if reads else "no device HBM read in the window but x"))
 
     def stream_report(self):
         """The bytes each D2D link carries (both directions: a link is half duplex), by phase: the attention (its rings,
@@ -1135,23 +1091,9 @@ class LayerBuild(cm.ChipletBuild):
                 part.emit_ring_schedules()
 
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_", "kx_ld_")):
-        A, M = self.attn, self.mlp
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
+        M = self.mlp
         self.check_collectives()
-        if A.p.get("cfg_reuse", False):
-            n = reuse_gemm_fa_config(self.dfg, [self.roles["gemm"]])
-            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
-            print(f"[{self.TAG}] attention cfg_reuse: {n} FA matmuls REUSE, softmax {primed} PRIMED + {csr} CSR_PRIMED")
-            A._check_csr_primed()
-        if A.p.get("gemm_reuse", False):
-            # the attention's queued gemm_starts only, as the block alone (the MoE's keep their configuration)
-            nodes = _Nodes(t for t in self.dfg.node_list if self.attn_ids[0] <= t.node_id < self.attn_ids[1])
-            print(f"[{self.TAG}] attention gemm_reuse: {reuse_gemm_start_config(nodes, [self.roles['gemm']])} "
-                  f"gemm_start configurations reuse")
         if self.mlp_kind == "ffn" and M is not None:
-            nodes = _Nodes(t for t in self.dfg.node_list if self.mlp_ids[0] <= t.node_id < self.mlp_ids[1])
-            print(f"[{self.TAG}] FFN gemm_reuse: {reuse_gemm_config(nodes)} GEMMs run as gemm_minimal")
             bad = M.check_hazards()
             if bad:
                 raise ValueError(f"FFN: {len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))

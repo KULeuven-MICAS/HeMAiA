@@ -145,19 +145,11 @@ class FaStages(fa.FaBuild):
         # col_major tile (one token a lane: no fold, no plane); the value columns come from its output (c^T, row major
         # [512, 16]) by the reshape and quantisation of before, the key rows' c by a transpose back first
         self.kv_norm_cm = bool(p.get("kv_norm_cm", False))
-        # params kv_cfg_ahead (stage 2, stage_kv_split): each single-launch SIMD task (dequantisation, RoPE's multiplies
-        # and add, quantisation) and each xDMA 6-D task as a configure task, which writes the engine's registers and
-        # starts nothing, and a start task that launches and drains; program_order puts the configure task right
-        # before its start, without a dependency, so it runs while the start still waits for its operands
-        self.kv_cfg_ahead = bool(p.get("kv_cfg_ahead", False))
-        self._ahead = False
         # params s4_split_x (stage 4): the xDMA's share of each cluster's rows of x (L3 -> L1), the iDMA the rest (whole
         # 512-byte blocks; 0 = the iDMA alone); s4_overlap: a chunk's rows land without waiting for the previous chunk's
-        # projection (each chunk has its own rows buffer); s4_cfg_ahead: stage 4's single-launch SIMD and xDMA tasks
-        # configured ahead (kv_cfg_ahead's split)
+        # projection (each chunk has its own rows buffer)
         self.s4_split_x = float(p.get("s4_split_x", 0.0))
         self.s4_overlap = bool(p.get("s4_overlap", False))
-        self.s4_cfg_ahead = bool(p.get("s4_cfg_ahead", False))
         self._first_ld = set()
         # params chunks (stage "full"): only the first `chunks` token chunks' queries, sweep and output are made (a proof
         # of concept of a long prompt in a short window); stages 0-3 still make every token's keys
@@ -225,10 +217,8 @@ class FaStages(fa.FaBuild):
         # relayout and quantisation behind its own GEMM (they overlap the next tiles' GEMMs)
         self.s4_tile_absorb = bool(p.get("s4_tile_absorb", False))
         self.s4_q8a_first = bool(p.get("s4_q8a_first", False))
-        # params s4_early (stage "full"): chunk 0's stage-4 loads (its x rows, W_q, W_UK, the RoPE table) ahead of the
-        # stage-2 and stage-3 tasks on each cluster's in-order DM core, since they need only stage 0's x and the ring;
-        # the cluster that runs stage 3 (s3_root's x_put_cluster) keeps stage 3 first and releases its chip's W_q / W_UK
-        # ring slots, so the other cluster there does not wait for its reads
+        # params s4_early (stage "full"): the cluster that runs stage 3 (s3_root's x_put_cluster) releases its chip's
+        # W_q / W_UK ring slots, so the other cluster there does not wait for its reads
         self.s4_early = bool(p.get("s4_early", False))
         # params s4_qpe_first (stage 4, with s4_tile_absorb and dq_fused): chunks after the first run q_pe's chain first
         self.s4_qpe_first = bool(p.get("s4_qpe_first", False))
@@ -458,9 +448,6 @@ class FaStages(fa.FaBuild):
         d, T, dm, xdma = self.d, self.TAG, self.roles["dm"], self.roles["xdma"]
         pg = 2
         pair_bytes = HIDDEN * 16 * pg // 2              # an INT4 pair of W_KVA's columns, paired layout
-        # keys_by_chunk: the keys' GEMMs in a queue phase of their own, so a projection's wait never trails a key GEMM
-        # that program_order moved behind it (GemmQueue: a wait trails the next start of its phase)
-        kv_phase = "kv" if self.keys_by_chunk else "proj"
         self.kvc_put, self.kvx_put = {}, {}
         for j, k in enumerate(self.chips):
             g0, g1 = self.kvg[k]
@@ -596,7 +583,7 @@ class FaStages(fa.FaBuild):
                         ld_x[n] = kx(n)
                     own = [put[pmid(n)]] if mid(n) and pmid(n) is not None else []
                     gm[n] = self.gmm(g, f"gkvc_q{q}", XB(n), wb, OB(n), 1, HIDDEN // 4, ng, d.k_x,
-                                     [wld] + ld_x[n] + ([put[n - 2]] if n >= 2 else []) + own, kv_phase)
+                                     [wld] + ld_x[n] + ([put[n - 2]] if n >= 2 else []) + own)
                     if self.kx_ahead and n + 1 < len(tiles) and n + 1 not in ld_x:
                         ld_x[n + 1] = kx(n + 1)
                     put[n] = self.node(k, c, dm, f"kvc_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
@@ -628,7 +615,7 @@ class FaStages(fa.FaBuild):
                                     [go[k]]))
                             xsb, xld = xsl[("xs", h)]
                         gmx[n] = self.gmm(g, f"gkvx_q{q}", XB(n), xsb, obx[m % 2], 1, HIDDEN // 4, pg, d.k_x,
-                                          [xld] + ld_x[n] + ([putx[m - 2]] if m >= 2 else []), kv_phase)
+                                          [xld] + ld_x[n] + ([putx[m - 2]] if m >= 2 else []))
                         putx.append(self.node(k, c, dm, f"kvx_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
                                               SnaxBingoKernelIdmaPutFlaggedArgs(
                                                   obx[m % 2], on(f"{T}_kvraw", lt * self.KVD + ga0 * TILE16),
@@ -638,8 +625,8 @@ class FaStages(fa.FaBuild):
                     if n + 2 < len(tiles) and not mid(n + 2):
                         ld_x[n + 2] = kx(n + 2)
                 if si is not None:
-                    self.ls[g].release(si, gm[len(tiles) - 1])
-                last[k] += [put[len(tiles) - 1]] + putx[-1:]
+                    self.ls[g].release(si, [gm[n] for n in range(len(tiles))])     # every tile's GEMM reads it
+                last[k] += list(put.values() if isinstance(put, dict) else put) + list(putx)
         # every owner waits for its tiles' 16 slices, and for a helped tile its helpers' slices: the end of the stage
         # (own_wait {tile: the waits}: where a chained stage 2 starts)
         self.own_wait = {}
@@ -902,7 +889,7 @@ class FaStages(fa.FaBuild):
             n = self.chunk_index(i, "head") + r
             ld, si, slab = self.load(g, n, f"Ld_wq{r}_i{i}")
             deps = [ld, x]
-            gm = self.gmm(g, f"gq{r}_i{i}", b["xrows"], slab, b["q"][r], mt, fa.HIDDEN // 4, 4, d.k_x, deps, "proj")
+            gm = self.gmm(g, f"gq{r}_i{i}", b["xrows"], slab, b["q"][r], mt, fa.HIDDEN // 4, 4, d.k_x, deps)
             self.ls[g].release(si, gm)
             gq.append(gm)
         # ---- dequantise the three regions --------------------------------------------------------
@@ -928,12 +915,13 @@ class FaStages(fa.FaBuild):
             # a query tile's A rows and D rows are each a contiguous run of the chunk's
             gat = [self.gmm(g, f"gab{q}_i{i}", b["qn8"].view(q * 16 * fa.Q_NOPE), slabu,
                             b["qt"].view(q * (fa.KV_RANK // 16) * fa.TILE16), 1, fa.Q_NOPE // 4, fa.KV_RANK // 16, d.k_uk,
-                            [ldu, qn], "proj") for q in range(self.NQ)]
+                            [ldu, qn]) for q in range(self.NQ)]
             ga = gat[-1]
         else:
             ga = self.gmm(g, f"gab_i{i}", b["qn8"], slabu, b["qt"], mt, fa.Q_NOPE // 4, fa.KV_RANK // 16, d.k_uk,
-                          [ldu, qn], "proj")
-        self.ls[g].release(siu, ga)
+                          [ldu, qn])
+            gat = [ga]
+        self.ls[g].release(siu, gat)                    # every query tile's GEMM reads the slab
         sqt = self.consts[g].view(self.C_QT)
         if self.s4_tile_absorb and not self.dq_fused:
             raise ValueError("params s4_tile_absorb needs dq_fused")
@@ -980,8 +968,6 @@ class FaStages(fa.FaBuild):
             ad = self.simd_add(g, f"rope_add_i{i}", b["t1"], b["t2"], b["pe"], n_pe, [m1, m2])
         d2p = self.xd(g, f"d2ap_i{i}", fa.d_to_a_args(mesh, mt, 4, 16, b["pe"], b["a16p"]),
                       [ad])
-        if self.s4_q8_pairs is not None:
-            d2p.order_key = d2qt[int(self.s4_q8_pairs)].node_id - 0.5
         # ---- Q8 per query tile ---------------------------------------------------------------------
         q8, qps, qas = {}, {}, {}
         # s4_q8a_first: q~'s quantisations ahead of q_pe's on the in-order SIMD core (with s4_tile_absorb each q~ tile
@@ -1031,7 +1017,7 @@ class FaStages(fa.FaBuild):
         lds = [self.load(g, self.chunk_index(i, "head") + r, f"Ld_wq{r}_i{i}") for r in range(3)]
         for r in (2, 0, 1):
             ld, si, slab = lds[r]
-            gm = self.gmm(g, f"gq{r}_i{i}", b["xrows"], slab, b["q"][r], mt, fa.HIDDEN // 4, 4, d.k_x, [ld, x], "proj")
+            gm = self.gmm(g, f"gq{r}_i{i}", b["xrows"], slab, b["q"][r], mt, fa.HIDDEN // 4, 4, d.k_x, [ld, x])
             self.ls[g].release(si, gm)
             gq[r] = gm
         # ---- dequantise the three regions --------------------------------------------------------
@@ -1093,12 +1079,13 @@ class FaStages(fa.FaBuild):
             # a query tile's A rows and D rows are each a contiguous run of the chunk's
             gat = [self.gmm(g, f"gab{q}_i{i}", b["qn8"].view(q * 16 * fa.Q_NOPE), slabu,
                             b["qt"].view(q * (fa.KV_RANK // 16) * fa.TILE16), 1, fa.Q_NOPE // 4, fa.KV_RANK // 16, d.k_uk,
-                            [ldu, qn], "proj") for q in range(self.NQ)]
+                            [ldu, qn]) for q in range(self.NQ)]
             ga = gat[-1]
         else:
             ga = self.gmm(g, f"gab_i{i}", b["qn8"], slabu, b["qt"], mt, fa.Q_NOPE // 4, fa.KV_RANK // 16, d.k_uk,
-                          [ldu, qn], "proj")
-        self.ls[g].release(siu, ga)
+                          [ldu, qn])
+            gat = [ga]
+        self.ls[g].release(siu, gat)                    # every query tile's GEMM reads the slab
         sqt = self.consts[g].view(self.C_QT)
         if self.s4_tile_absorb and not self.dq_fused:
             raise ValueError("params s4_tile_absorb needs dq_fused")
@@ -1152,48 +1139,6 @@ class FaStages(fa.FaBuild):
     def _next_id(self):
         """The node id the next task made gets."""
         return max((t.node_id for t in self.dfg.node_list), default=-1) + 1
-
-    def _s4_early_order(self, owner, s4_ids):
-        """params s4_early: on each cluster's DM core, chunk 0's stage-4 tasks (made in s4_ids[g], after stages 2 and 3)
-        run ahead of the cluster's first stage-2/3 task (made in owner). A task moves only if each task it waits for was
-        made before stages 2 and 3 or moves too, so a moved task never waits for one behind it; the cluster that runs
-        stage 3 keeps its order (stage 3 first). The order keys are program_order's."""
-        dm, R = self.roles["dm"], self.ROOT
-        lo, hi = owner
-        nodes = self.dfg.node_list
-        preds = {t: set(self.dfg.predecessors(t)) for t in nodes}
-        for a, b in self.dfg.order_edges:
-            preds[b].add(a)
-
-        def on(t, k, c):
-            return t.assigned_chiplet_id == k and t.assigned_cluster_id == c and t.assigned_core_id == dm
-
-        cand, first = {}, {}
-        for g, (a, b) in s4_ids.items():
-            k, c = self.chip(g), self.c(g)
-            own = [t.node_id for t in nodes if lo <= t.node_id < hi and on(t, k, c)]
-            if (k, c) == (self.kv_root, self.x_put_cluster) or not own:
-                continue
-            first[g] = min(own)
-            cand[g] = sorted((t for t in nodes if a <= t.node_id < b and on(t, k, c)), key=lambda t: t.node_id)
-        moved = set()
-        while True:
-            more = {t for ts in cand.values() for t in ts
-                    if t not in moved and all(p.node_id < lo or p in moved for p in preds[t])}
-            if not more:
-                break
-            moved |= more
-        n = 0
-        for g, ts in cand.items():
-            mv = [t for t in ts if t in moved]
-            for j, t in enumerate(mv):
-                t.order_key = first[g] - 1 + (j + 1) / (len(mv) + 1)
-            n += len(mv)
-            if g in (0, 1, 2, 3):
-                print(f"[{self.TAG}] s4_early: chip {self.chip(g):02x} cl{self.c(g)}: "
-                      f"{', '.join(t.node_name for t in mv)} ahead of its stage 2/3 DM tasks")
-        print(f"[{self.TAG}] s4_early: {n} DM tasks on {len(cand)} clusters ahead of stages 2/3; root's ring chunks "
-              f"{sorted(n for k, n in self.ring_rel1 if k == self.kv_root)} on {self.kv_root:02x} released by cluster 1")
 
     def build_full(self):
         d, R = self.d, self.ROOT
@@ -1268,7 +1213,6 @@ class FaStages(fa.FaBuild):
                         self.edge(self.split_root_prefetch(go), self.x_puts[0])
                     self.edge(self.x_puts[-1], self.prefetch[R])
         front = {k: [] for k in self.chips}
-        owner = s4_ids = None
         if not post_only:
             k0 = self._next_id()
             self.stage_keys(go, front)
@@ -1281,15 +1225,12 @@ class FaStages(fa.FaBuild):
                         t._key_chunk = int(m.group(1)) // P if m else 0
             # full_kv_all false: no chip waits for both chunks' keys at the end of stage 3 (stage "0123"'s window end);
             # the sweep waits for its own tiles, and the wait would hold cluster 0's in-order DM core ahead of stage 4
-            owner = [self._next_id()]
             self.stage_owner(go, front, chained=True, end_wait=bool(self.p.get("full_kv_all", True)))
-            owner.append(self._next_id())
             if self.keys_by_chunk and len(self.x_puts) > 2 and len(self.kv_mc) > 1:
                 # the rest of x after chunk 1's key multicast too (x_rest_early: after chunk 0's, and chunk 1's waits
                 # for its last tile), as a dependency (the check below proves the order)
                 self.edge(self.kv_mc[0 if self.x_rest_early else 1], self.x_puts[2])
             if self.s4_early:
-                s4_ids = {}
                 self.ring_rel1 |= {(self.kv_root, self.chunk_index(i, "head") + r)
                                    for i in range(self.NCH) for r in range(self.PER_CHUNK_HEAD)}
         if self.chunks_built is not None:
@@ -1304,7 +1245,6 @@ class FaStages(fa.FaBuild):
                     self.ring_rel1 |= {(k, self.chunk_index(i, "head") + r) for r in range(self.per_chunk())}
             print(f"[{self.TAG}] yr_rel1: {sum(1 for k, n in self.ring_rel1 if k in self.y_roots)} ring chunks on the "
                   f"collectors released by cluster 1")
-        s4_end = {}                                 # keys_by_chunk: (cluster, chunk) -> the first id after its stage 4
         for i in range(self.NCH):
             if i:
                 self.chunk_start(i)
@@ -1342,9 +1282,6 @@ class FaStages(fa.FaBuild):
                     post_res[g] = dict(xt_rd=[x])
                     continue
                 q8 = self.proj_of(i)(g, i, x)
-                s4_end[(g, i)] = self._next_id()
-                if s4_ids is not None and i == 0:
-                    s4_ids[g] = (s4_from, self._next_id())
                 if self.reduce_early and i > 0 and k == R and not self.chains_after_sweep:
                     # chunk i-1's chains of this root cluster, behind its q side of chunk i in its xDMA core's program
                     w = {c: [stores[(i - 2, c)]] if (i - 2, c) in stores else []}
@@ -1440,7 +1377,7 @@ class FaStages(fa.FaBuild):
             for g in range(self.G):
                 k, c = self.chip(g), self.c(g)
                 post_res[g] = dict(xt_rd=post[g][0])
-                parts_ready[(k, c, i)] = [self.stage_post_b(g, i, post[g][1], sym_free.get((k, c), []))]
+                parts_ready[(k, c, i)] = self.stage_post_b(g, i, post[g][1], sym_free.get((k, c), []))
             self.flush_late_stores(stores)
             if self.stop == "full" and self.sync == "barrier":
                 self._reduce_chunk(i, parts_ready, red, stores, sym_free)
@@ -1465,7 +1402,8 @@ class FaStages(fa.FaBuild):
                     self.dfg.bingo_add_order_edge(t, yw)
             ends = [yw]
         elif stores:
-            ends = [stores[(self.NCH - 1, c)] for c in range(self.NC)]
+            # every chunk's stores (the checks read every one)
+            ends = [t for v in stores.values() for t in (v if isinstance(v, (list, tuple)) else [v])]
         else:
             # a stop before the reduce: one probe a chip behind that chip's last chunk, the root's last
             # (the end stamp sits behind the root's previous task on its core)
@@ -1481,15 +1419,13 @@ class FaStages(fa.FaBuild):
                     self.edge(t, self.x_puts[2])
                 else:
                     self.edge(self.x_puts[2], t)
-        if s4_ids is not None:
-            self._s4_early_order(owner, s4_ids)
-        if self.yr_store_tile is not None:
-            self._yr_store_order(int(self.yr_store_tile))
         self.end_window(ends)
         if self.keys_by_chunk:
-            self._keys_by_chunk_order(s4_end)
+            self._keys_by_chunk_order()
             if self.kx_per_chunk:
                 self._kx_per_chunk_edges()
+            if self.kx_after_chains:
+                self._kx_before_chains()
         if post_only:
             # 678: y only (no keys were made)
             self.fresh = False
@@ -1511,7 +1447,6 @@ class FaStages(fa.FaBuild):
         """Stage 4: per chunk, every cluster's rows of x into L1 and its query projection (FaBuild's stage_x and
         stage_proj); a chunk's rows land once the previous chunk's projection has read the buffer."""
         self.q8_of, rd = {}, {}
-        self._ahead = self.s4_cfg_ahead
         T = self.TAG
         for i in range(self.NCH):
             for g in range(self.G):
@@ -1536,7 +1471,6 @@ class FaStages(fa.FaBuild):
                 self.q8_of[(g, i)] = q8
                 rd[g] = sorted({t for _, ts in q8.values() for t in ts}, key=lambda t: t.node_id)
                 last[k] += rd[g]
-        self._ahead = False
         self._x_extra = {}
 
     def run_checks(self, checks):
@@ -1545,42 +1479,38 @@ class FaStages(fa.FaBuild):
         it a key check could read the last pieces before they land."""
         if self.keys_by_chunk and self.chunks_built is not None and getattr(self, "kv_mc", None):
             self.check_copies = list(self.check_copies) + [self.kv_mc[-1]]
+        # the key checks read what every owner's puts wrote into its L3
+        puts = list(getattr(self, "kv_put", {}).values()) + list(getattr(self, "kvp_put", {}).values())
+        self.check_copies = list(self.check_copies) + [t for t in puts if t not in self.check_copies]
         return super().run_checks(checks)
 
-    def chain_program_order(self):
-        n = super().chain_program_order()
+    def finish(self, app_name, **kw):
         if self.keys_by_chunk:
+            self._order_collectives()
             self._check_multicasts()
-        if self.kx_after_chains:
-            self._check_sweep_simd()
-        return n
+        super().finish(app_name, **kw)
 
-    def _check_sweep_simd(self):
-        """kx_after_chains: on every SIMD core, nothing but a sweep's own tasks between its first and last softmax (in the
-        program's order: order keys, then creation order). Raises otherwise."""
-        simd, progs = self.roles["simd"], {}
-        for x in self.dfg.node_list:
-            if x.assigned_core_id == simd:
-                progs.setdefault((x.assigned_chiplet_id, x.assigned_cluster_id), []).append(x)
-        bad = []
-        for key, ts in progs.items():
-            ts.sort(key=lambda x: (getattr(x, "order_key", x.node_id), x.node_id))
-            pos = {}
-            for j, x in enumerate(ts):
-                m = re.match(r"s(\d+)_sm", x.node_name)
-                if m:
-                    pos.setdefault(int(m.group(1)), []).append(j)
-            for i, js in pos.items():
-                bad += [(ts[j].node_name, i) for j in range(min(js), max(js) + 1)
-                        if not ts[j].node_name.startswith(f"s{i}_")]
-        if bad:
-            raise ValueError(f"params kx_after_chains: {len(bad)} SIMD task(s) inside a sweep's softmaxes: {bad[:6]}")
-        print(f"[{self.TAG}] kx_after_chains: no SIMD task inside a sweep's softmaxes on {len(progs)} cores")
+    def _order_collectives(self):
+        """keys_by_chunk: every multicast and every reduce chain of the graph one after the other, in the order they
+        were made (the graph's topological order nearest to it): an ordering edge from each to the next where no path
+        orders them yet. Concurrent multicast sources, or a multicast beside a chain, deadlock the fabric."""
+        import networkx as nx
+        g = nx.DiGraph(self.dfg.bingo_order_view())
+        coll = [t for t in self.dfg.node_list if (t.kernel_name or "").endswith(("hbm_bcast", "xdma_chain_gather"))
+                or ((t.kernel_name or "").endswith("idma_put_flagged") and getattr(t.kernel_args, "bcast", False))]
+        pos = {t: n for n, t in enumerate(nx.lexicographical_topological_sort(g, key=lambda t: t.node_id))}
+        coll.sort(key=lambda t: pos[t])
+        added = 0
+        for a, b in zip(coll, coll[1:]):
+            if not nx.has_path(g, a, b):
+                self.dfg.bingo_add_order_edge(a, b)
+                g.add_edge(a, b)
+                added += 1
+        print(f"[{self.TAG}] collectives: {len(coll)} multicasts and chains in turn, {added} ordering edges added")
 
     def _check_multicasts(self):
         """keys_by_chunk: every two multicasts (the memory chip's x multicasts, the root's key multicasts), and every
-        multicast and reduce chain, are ordered by the graph (dependencies, flag edges, the cores' program order), so no
-        two run at once: concurrent multicast sources, or a multicast beside a chain, deadlock the fabric. Raises
+        multicast and reduce chain, are ordered by the graph (dependencies and flag edges), so no two run at once: concurrent multicast sources, or a multicast beside a chain, deadlock the fabric. Raises
         otherwise."""
         import networkx as nx
         g = nx.DiGraph(self.dfg)
@@ -1618,28 +1548,6 @@ class FaStages(fa.FaBuild):
         hits = [t for t in self.dfg.node_list if t.assigned_chiplet_id == k and t.assigned_cluster_id == c
                 and t.assigned_core_id == dm and rx.match(t.node_name)]
         return max(hits, key=lambda t: t.node_id) if hits else None
-
-    def _yr_store_order(self, t):
-        """params yr_store_tile: each collector cluster's store of chunk i < NCH - 1 behind its load of chunk i + 1's key
-        tile t's values (the order keys are program_order's; the hang check verifies the result)."""
-        if not self.y_roots:
-            raise ValueError("params yr_store_tile: needs y_roots")
-        by = {t_.node_name: t_ for t_ in self.dfg.node_list}
-        rx = lambda k, c, i: re.compile(rf"Ld_V{t}_i{i}(_|$)")  # noqa: E731
-        dm, n = self.roles["dm"], 0
-        for i in range(self.NCH - 1):
-            for h in range(2):
-                k = self.y_root(i, h)
-                for c in range(self.NC):
-                    st = by.get(f"y_store_c{c}_i{i}_h{h}_k{k:02x}_cl{c}")
-                    at = [x for x in self.dfg.node_list if x.assigned_chiplet_id == k and x.assigned_cluster_id == c
-                          and x.assigned_core_id == dm and rx(k, c, i + 1).match(x.node_name)]
-                    if st is None or not at:
-                        raise ValueError(f"params yr_store_tile: no store or no tile-{t} load for chunk {i} block {h} "
-                                         f"on chip {k:02x} cluster {c}")
-                    st.order_key = max(at, key=lambda x: x.node_id).node_id + 0.5
-                    n += 1
-        print(f"[{self.TAG}] yr_store_tile: {n} collector stores behind their cluster's next-chunk tile-{t} value load")
 
     def _kx_l3_preload(self, pre):
         """kx_per_chunk: before the window, each chip copies its W_KVA slice, its key constants and (a helper) the
@@ -1744,11 +1652,55 @@ class FaStages(fa.FaBuild):
         print(f"[{self.TAG}] kx_per_chunk: {n} key-buffer loads behind their cluster's last q projection of the chunk "
               f"before")
 
-    def _keys_by_chunk_order(self, s4_end):
-        """params keys_by_chunk: on every device core, chunk h's key tasks (h >= 1; stage 1 by its tiles' names, stages 2
-        and 3 by the runs stage_owner recorded) right after the core's cluster's stage-4 tasks of chunk h - 1, those of
-        the chunks after the last one made right after the end stamp (outside the window, ahead of the exits). Their
-        own order is kept. The order keys are program_order's; the hang check verifies the result."""
+    KX_TRANSFER = r"(kvc_put|kvx_put|Ld_wkvc_q|Ld_wkvxl_q|kvc_lld_g\d+_q|kv_put_t)"
+
+    def _kx_before_chains(self):
+        """kx_after_chains: chunk h's key transfers (h >= 1: its HBM copies, its puts to the owners) ahead of chunk h - 1's
+        reduce chains: each one an edge to every task of its chip, of that chunk, that those chains wait for (a cluster's
+        last W_O GEMM of the chunk), so no key transfer of the chip runs beside a chain of the chunk before -- unless that task
+        already precedes the transfer (a ring load behind the GEMM that frees its slot, which the chain's own release
+        of the ring orders after the chain). With the edges of _kx_per_chunk_edges (behind chunk h - 2's chains) every
+        key transfer is ordered with every chain (_check_multicasts proves it)."""
+        import networkx as nx
+        PC = self.C // 16
+        q_of = {t: q for q, t in getattr(self, "kv_put", {}).items()}
+        feeds = {}                                  # (chunk, chip) -> the chains' inputs on that chip
+        for ch in self._chains:
+            m = re.match(r"y_chain_c\d+_i(\d+)_", ch.node_name)
+            if m:
+                i = int(m.group(1))
+                for pr in self.dfg.predecessors(ch):
+                    if f"_i{i}_" in pr.node_name:   # the chunk's own work (not a collector's store of the one before)
+                        feeds.setdefault((i, pr.assigned_chiplet_id), set()).add(pr)
+        bit = {pr: 1 << i for i, pr in enumerate(sorted({p for ps in feeds.values() for p in ps},
+                                                         key=lambda x: x.node_id))}
+        g = self.dfg.bingo_order_view()
+        reach = {}                                  # task -> the bits of the chains' inputs that precede it
+        for v in nx.topological_sort(g):
+            r = bit.get(v, 0)
+            for u in g.predecessors(v):
+                r |= reach[u]
+            reach[v] = r
+        n = 0
+        for t in list(self.dfg.node_list):
+            if not re.match(self.KX_TRANSFER, t.node_name):
+                continue
+            m = re.search(r"_q(\d+)_", t.node_name)
+            q = int(m.group(1)) if m else q_of.get(t)
+            if q is None or not 1 <= q // PC < self.NCH:
+                continue
+            for pr in sorted(feeds.get((q // PC - 1, t.assigned_chiplet_id), ()), key=lambda x: x.node_id):
+                if pr is not t and not reach[t] & bit[pr] and not self.dfg.has_edge(t, pr):
+                    self.dfg.bingo_add_edge(t, pr)
+                    n += 1
+        print(f"[{self.TAG}] kx_after_chains: {n} edges, each key transfer ahead of the chunk before's chains")
+
+    def _keys_by_chunk_order(self):
+        """params keys_by_chunk: the key tasks of the chunks after the last one made (stage 1 by its tiles' names, stages 2
+        and 3 by the runs stage_owner recorded) run after the window: each of them that no other one of them precedes
+        waits for the end stamp. On the root, whose L1 is the fullest, the static L1 planner can then lay their buffers
+        over the window's; everywhere, their transfers stay out of the window's last chains, which run two at a time
+        (last_pair_chains) and must not meet another chip's traffic on a hop."""
         runs = sorted(self._key_runs, key=lambda r: r[0])      # stable: a run's end before the next run's start
         for (a, h), (b, _) in zip(runs, runs[1:]):
             if h is None:
@@ -1756,49 +1708,19 @@ class FaStages(fa.FaBuild):
             for t in self.dfg.node_list:
                 if a <= t.node_id < b:
                     t._key_chunk = h
-        end = max(t.node_id for t in self.dfg.node_list)
-        moved = {}
-        for t in self.dfg.node_list:
-            h = getattr(t, "_key_chunk", 0)
-            if h < 1 or t.node_id >= end:
-                continue
-            g = self.chips.index(t.assigned_chiplet_id) * self.NC + t.assigned_cluster_id
-            pos = s4_end[(g, h - 1)] if h < self.NCH else end + 1
-            st = self._kx_store_of(t.assigned_chiplet_id, t.assigned_cluster_id, h) if h < self.NCH else None
-            if self.kx_after_chains and 2 <= h < self.NCH and not re.match(self.KX_STAGE1, t.node_name):
-                # kx_after_chains, stages 2 and 3 (the owners' and the root's, with every SIMD key task): behind
-                # chunk h - 1's last softmax / normalisation on every core, never between two softmaxes of one sweep
-                # (a softmax that carries its tiles' state hung behind a key RMSNorm there, stg_dsv2poc_t1024_c3_1)
-                st = self._kx_sweep_end_of(t.assigned_chiplet_id, t.assigned_cluster_id, h)
-            elif st is None and self.kx_after_chains and 2 <= h < self.NCH:
-                st = self._kx_vload_of(t.assigned_chiplet_id, t.assigned_cluster_id, h)
-            if st is not None:
-                # kx_per_chunk: on a collector of chunk h - 2, behind its store of that chunk's y block;
-                # kx_after_chains: on the other clusters, behind the same value load of chunk h - 1
-                pos = (st.node_id if getattr(st, "order_key", None) is None else st.order_key) + 1
-            moved.setdefault(pos, []).append(t)
-        n = 0
-        for pos, ts in moved.items():
-            ts.sort(key=lambda t: t.node_id)
-            for j, t in enumerate(ts):
-                t.order_key = pos - 1 + (j + 1) / (len(ts) + 1)
-            n += len(ts)
-        # the keys after the window wait for its end stamp, on every chip (a dependency: their first task on each device
-        # core; the rest follow it in the core's program). On the root, whose L1 is the fullest, the static L1 planner
-        # can then lay their buffers over the window's; everywhere, their transfers stay out of the window's last
-        # chains, which run two at a time (last_pair_chains) and must not meet another chip's traffic on a hop
         end_stamp = next(t for t in self.dfg.node_list if t.node_name.startswith("S1_end"))
-        heads = {}
-        for t in moved.get(end + 1, []):
-            key = (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
-            if key not in heads or t.order_key < heads[key].order_key:
-                heads[key] = t
-        for t in heads.values():
+        after = {t for t in self.dfg.node_list
+                 if getattr(t, "_key_chunk", 0) >= self.NCH and t.node_id < end_stamp.node_id}
+        preds = {t: set(self.dfg.predecessors(t)) for t in after}
+        for x, y in self.dfg.order_edges:
+            if y in preds:
+                preds[y].add(x)
+        heads = [t for t in after if not preds[t] & after]
+        for t in sorted(heads, key=lambda t: t.node_id):
             self.dfg.bingo_add_edge(end_stamp, t)
         if heads:
-            print(f"[{self.TAG}] keys_by_chunk: the keys after the window behind the end stamp on {len(heads)} cores")
-        print(f"[{self.TAG}] keys_by_chunk: {n} key tasks of chunks 1..{self.NX * 16 // self.C - 1} moved behind the "
-              f"stage-4 tasks of the chunk before (the chunks from {self.NCH} on behind the end stamp)")
+            print(f"[{self.TAG}] keys_by_chunk: {len(after)} key tasks after the window, {len(heads)} behind the end "
+                  f"stamp")
 
     def stage_owner(self, go, last, chained=False, end_wait=True):
         """Stage 2: FaBuild's stage_kv on every chip, its kvr_waits behind the chip's start (the flags are already
@@ -1811,7 +1733,6 @@ class FaStages(fa.FaBuild):
         if not chained:
             self.kvc_put = {(q, k2): go[k2] for q in range(self.NX) for k2 in self.chips}
         self.kvp_put = {}
-        self._ahead = self.kv_cfg_ahead
         for k in self.chips:
             if self.kv_split or self.kv_fused or self.kv_norm_cm:
                 self.stage_kv_split(k)
@@ -1822,7 +1743,6 @@ class FaStages(fa.FaBuild):
             self._key_runs.append((self._next_id(), None))
             last[k] += [self.kv_put[q] for q in self.kv_tiles[k]] + [self.kvp_put[q] for q in self.kv_tiles[k]
                                                                     if q in self.kvp_put]
-        self._ahead = False
         c, prev = self.x_put_cluster, []
         self.kv_mc = []
         waits = [("kv_nwait", "kvnflag", self.kv_put)] + ([("kv_pwait", "kvpflag", self.kvp_put)] if self.kv_split else [])
@@ -1869,62 +1789,12 @@ class FaStages(fa.FaBuild):
             self.dfg.bingo_add_order_edge(t, w)
         return w
 
-    def _split(self, k, c, role, name, kernel, args, deps, stage):
-        """kv_cfg_ahead: the task as a configure task (stage(args, 1), no dependency, config_only: liveness counts it
-        as no user) and a start task (stage(args, 2)), registered as a pair for program_order."""
-        ca, sa = copy.copy(args), copy.copy(args)
-        stage(ca, 1)
-        stage(sa, 2)
-        cf = self.node(k, c, role, f"{name}_cfg", kernel, ca, [])
-        cf.config_only = True
-        st = self.node(k, c, role, name, kernel, sa, list(deps))
-        fa.GemmQueue.of(self.dfg, self.gemm_async).cfg_task[cf] = st
-        return st
-
-    def simd_mul(self, g, name, a, b, out, nelems, deps):
-        if not self._ahead:
-            return super().simd_mul(g, name, a, b, out, nelems, deps)
-        return self._split(self.chip(g), self.c(g), self.roles["simd"], name,
-                           "__snax_bingo_kernel_simd_stream_elementwise",
-                           fa.SnaxBingoKernelSimdMulF16Args(a, b, out, nelems // 32, 32), deps,
-                           lambda x, v: setattr(x, "csr_mode", v))
-
-    def simd_add(self, g, name, a, b, out, nelems, deps):
-        if not self._ahead:
-            return super().simd_add(g, name, a, b, out, nelems, deps)
-        return self._split(self.chip(g), self.c(g), self.roles["simd"], name,
-                           "__snax_bingo_kernel_simd_stream_elementwise",
-                           fa.SnaxBingoKernelSimdAddF16Args(a, b, out, nelems // 32, 32), deps,
-                           lambda x, v: setattr(x, "csr_mode", v))
-
-    def quant(self, g, name, src, dst, nbytes, inv_bits, deps):
-        if not self._ahead:
-            return super().quant(g, name, src, dst, nbytes, inv_bits, deps)
-        # an immediate scale only: a configure task reads no data
-        return self._split(self.chip(g), self.c(g), self.roles["simd"], name, "__snax_bingo_kernel_simd_fp16_to_int8",
-                           fa.SnaxBingoKernelSimdFp16ToInt8Args(src, dst, beats=fa.simd_beats(nbytes), rows=1,
-                                                                inv_scale_f32bits=inv_bits), deps,
-                           lambda x, v: setattr(x, "csr_mode", v))
-
-    def mul_quant(self, g, name, a, scale, dst, nelems, inv_bits, deps):
-        if not self._ahead:
-            return super().mul_quant(g, name, a, scale, dst, nelems, inv_bits, deps)
-        return self._split(self.chip(g), self.c(g), self.roles["simd"], name,
-                           "__snax_bingo_kernel_simd_stream_elementwise",
-                           fa.SnaxBingoKernelSimdMulI8Args(a, scale, dst, nelems // 32, 32, inv_bits), deps,
-                           lambda x, v: setattr(x, "csr_mode", v))
-
-    def gmm(self, g, name, a, b, d, M, K, N, k_shift, deps, phase="fa"):
+    def gmm(self, g, name, a, b, d, M, K, N, k_shift, deps):
         # s4_split_x: the q GEMMs read the rows both DMAs copy
         if name.startswith("gq") and self._x_extra.get(g):
             deps = list(deps) + self._x_extra[g]
-        return super().gmm(g, name, a, b, d, M, K, N, k_shift, deps, phase)
+        return super().gmm(g, name, a, b, d, M, K, N, k_shift, deps)
 
-    def xd(self, g, name, args, deps):
-        if not self._ahead:
-            return super().xd(g, name, args, deps)
-        return self._split(self.chip(g), self.c(g), self.roles["xdma"], name, "__snax_bingo_kernel_xdma_6d", args, deps,
-                           lambda x, v: setattr(x, "stage", v))
 
     def stage_kv_split(self, k):
         """kv_split_clusters / kv_norm_fused: chip k's tiles as two parts. The tile's cluster takes c: its 512 columns
@@ -1950,6 +1820,7 @@ class FaStages(fa.FaBuild):
         # window (the first DM task of the first such tile), so the window's copies are free once chunk 1's keys are made
         late_from = int(self.chunks_built or self.NCH) * (self.C // 16) if self.keys_by_chunk else self.NX
         self._kvc_late = getattr(self, "_kvc_late", {})
+        self._kvc_late_ld = getattr(self, "_kvc_late_ld", {})      # (k, cluster, chunk) -> the copy that fills it
         for lt, q in enumerate(self.kv_tiles[k]):
             self._key_runs.append((self._next_id(), q // (self.C // 16)))
             s = "" if lt == 0 else f"_t{lt}"
@@ -1966,12 +1837,14 @@ class FaStages(fa.FaBuild):
                         buf = self.cx_chip(k).at(cc).l1(f"{T}_lkvc{'pe' if src is self.kvc_pe else ''}"
                                                         + ("" if hk is None else f"_h{hk}"), self.KC_BYTES)
                         # kx_per_chunk: from the chip's L3 copy (_kx_l3_preload), never HBM inside the window
-                        self.dm_copy(g, f"kvc_lld_g{g}" + ("" if hk is None else f"_q{q}"),
-                                     self.h_kc[k].address if hk is None or not self.kx_l3 else BingoMemSymbol(f"{T}_kc3"),
-                                     buf,
-                                     self.KC_BYTES, [])
+                        self._kvc_late_ld[(k, cc, hk)] = self.dm_copy(
+                            g, f"kvc_lld_g{g}" + ("" if hk is None else f"_q{q}"),
+                            self.h_kc[k].address if hk is None or not self.kx_l3 else BingoMemSymbol(f"{T}_kc3"),
+                            buf, self.KC_BYTES, [])
                         self._kvc_late[(k, cc, hk)] = buf
             kvcp = (lambda cc: self._kvc_late[(k, cc, hk)]) if late else (lambda cc: self.kvc_pe[(k, cc)])
+            # the tile's loads (and the RoPE table copy) behind the copy of the constants their readers read
+            kdep = (lambda cc: [self._kvc_late_ld[(k, cc, hk)]] if late and (k, cc, hk) in self._kvc_late_ld else [])
             g0, g1 = self.chips.index(k) * self.NC + c0, self.chips.index(k) * self.NC + c1
             puts = [self.kvc_put[(q, k2)] for k2 in self.chips]
 
@@ -1997,7 +1870,7 @@ class FaStages(fa.FaBuild):
             w0 = wait(c0, "kvr_wait")
             w1 = wait(c1, "kvp_wait") if self.kv_split else w0
             pre = {}
-            ld = self.dm_copy(g0, f"kvr_ld{s}", src, kvd, cb, w0)
+            ld = self.dm_copy(g0, f"kvr_ld{s}", src, kvd, cb, list(w0) + kdep(c0))
             dq = self.simd_mul(g0, f"kv_dq{s}", kvd, kvc, kvd, 16 * KR, [ld])
             cv = self.xd(g0, f"kv_crm{s}", fa.convert_args("D", "row_major", 16, KR, mesh, 2, kvd, crow), [dq])
 
@@ -2069,13 +1942,14 @@ class FaStages(fa.FaBuild):
                 pd, pe, pa = l1("d", n_pe * 2), l1("pe", n_pe * 2), l1("pa", n_pe * 2)
                 p8 = pv if self.kv_vals_other else l1("p8", n_pe) if self.kv_split else piece.view(16 * KR)
                 rc = self.KC_ROPE + lt * self.KC_TILE
+                kd1 = kdep(c1) if self.kv_split else kdep(c0)
                 ld1 = self.dm_copy(g1, f"kvp_ld{s}", BingoMemSymbol(f"{T}_kvraw", offset=lt * self.KVD + cb), pd,
-                                   n_pe * 2, w1)
+                                   n_pe * 2, list(w1) + kd1)
                 if self.kv_rope_fused:
                     # the dequantisation writes x into slot 0 of [x | cos | xswap | sin]; the tables come from kvc
                     rb, r4 = n_pe * 2, l1("rope4", 4 * n_pe * 2)
                     tb = self.node(k, c1, dm, f"kvp_tab{s}", "__snax_bingo_kernel_idma_2d_copy",
-                                   fa.SnaxBingoKernelIdma2dCopyArgs(kvc1.view(rc), r4.view(rb), rb, rb, 2 * rb, 2), [])
+                                   fa.SnaxBingoKernelIdma2dCopyArgs(kvc1.view(rc), r4.view(rb), rb, rb, 2 * rb, 2), kd1)
                     dq1 = self.simd_mul(g1, f"kvp_dq{s}", pd, kvc1.view(cb), r4, n_pe, [ld1])
                     sw = [self.node(k, c1, dm, f"kvp_swap{h}{s}", "__snax_bingo_kernel_idma_1d_copy",
                                     SnaxBingoKernelIdma1dCopyArgs(r4.view((1 - h) * half), r4.view(2 * rb + h * half),
@@ -2098,7 +1972,7 @@ class FaStages(fa.FaBuild):
                 # kv_vals_own: c^T built on the values' cluster first (its SIMD's long dequantisation ahead of k_pe)
                 beat = fa.simd_fp16_lanes() * 2
                 kvd1, crow1, xt1 = l1("cd", cb), l1("crow", 16 * KR * 2), l1("xt", beat + 16 * KR * 2)
-                ldv = self.dm_copy(g1, f"kvv_ld{s}", src, kvd1, cb, w1)
+                ldv = self.dm_copy(g1, f"kvv_ld{s}", src, kvd1, cb, list(w1) + kdep(c1))
                 dqv = self.simd_mul(g1, f"kvv_dq{s}", kvd1, kvcp(c1), kvd1, 16 * KR, [ldv])
                 cvv = self.xd(g1, f"kvv_crm{s}", fa.convert_args("D", "row_major", 16, KR, mesh, 2, kvd1, crow1), [dqv])
                 pre["xtbuf"] = xt1

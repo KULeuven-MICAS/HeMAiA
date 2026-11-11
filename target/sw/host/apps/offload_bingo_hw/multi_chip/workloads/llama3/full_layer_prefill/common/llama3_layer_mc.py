@@ -75,7 +75,6 @@ glue_lag, final_lag, final_slice, ffn_pf_head, inplace_norm (the input norm's RM
 norm_cluster, glue_cluster, final_cluster, final_step, final_root_rows, x_slots, alias_l3, rope_hbm, ffn_part_chunk.
 """
 
-import itertools
 import os
 import re
 import sys
@@ -99,10 +98,7 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdRmsnormArgs,
     SnaxBingoKernelWaitFlagsArgs, simd_beats)
-from bingo_cfg_reuse import prime_fa_softmax, program_key, reuse_gemm_fa_config, reuse_gemm_start_config  # noqa: E402
-from bingo_gemm_reuse import reuse_gemm_config  # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -351,9 +347,8 @@ class LayerBuild(cm.ChipletBuild):
             # a piece a pass: the last piece's write follows that iteration's W_O loads, which the root's prefetcher pushes
             # before pass p's x multicast only up to iteration p - 2
             raise ValueError(f"params layer.norm_lead={self.norm_lead} with {self.NPC} pieces a tile: at least {self.NPC + 1}")
-        self.ps, self._anch, self._scanned = {}, {}, 0
+        self.ps = {}
         self.marks, self.pending, self.made = {}, [], set()
-        self.part_n = 0
         seed = int(common.get("seed", 1))
         llama3_data.register_ffn(seed=seed)
 
@@ -474,13 +469,10 @@ class LayerBuild(cm.ChipletBuild):
             self.pending.append((last, make))
 
     def _placed(self, tasks, key):
-        """Tasks made later than the point `key`: their place in each core's program is that point's."""
+        """Tasks made later than the point `key` that belong there: the point must have been reached (the compiler
+        places them in the cores' programs)."""
         if key not in self.marks:
             raise ValueError(f"step point {key}: not reached when a step placed there is made")
-        base = self.marks[key] - 0.5
-        for t in tasks:
-            self.part_n += 1
-            t.order_key = base + 1e-6 * self.part_n
 
     # ---- helpers ----------------------------------------------------------------------------------------------------
     def _t(self, k, role, name, kernel, args, deps, c=None):
@@ -633,35 +625,12 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the steps in pieces (params layer.piece_rows below 16) ------------------------------------------------------
     # A tile's piece n is its rows 16 n / NPC ..; it has L1 buffers of its own, live for that piece only, so the static
-    # plan fits them into what the block leaves free at the piece's point. A step's pieces on one chip form a chain: each
+    # plan fits them into what the block leaves free where the piece runs. A step's pieces on one chip form a chain: each
     # piece's first writer of a buffer follows the previous piece's last reader of its counterpart, so successive
-    # pieces may take the same bytes. Inside the attention a
-    # piece runs in one iteration j: its loads, the conversion to rows and the SIMD work up to the gain at j's W_O point
-    # (after the cluster's last softmax of j), h's write right behind the cluster's o8 put of j, the reshape, the
-    # quantise and the INT8 rows' copy into the tile's L3 staging (an A-layout tile, row block by row block) right behind
-    # the cluster's last y put of j; after the last piece one put of the staged tile into HBM. Past the attention's last
-    # iteration a piece runs in creation order at its end. In the FFN a final piece runs at down slice s of a pass, its
-    # write at slice s + 1.
-    def _anchor(self, name):
-        """A task of the attention by name (o8 puts and y flag puts, indexed as the graph grows)."""
-        if name not in self._anch:
-            for t in itertools.islice(self.dfg.nodes, self._scanned, None):
-                if t.node_name.startswith(("o_put_i", "y_sf_i")):
-                    self._anch[t.node_name] = t
-            self._scanned = self.dfg.number_of_nodes()
-        return self._anch[name]
-
-    def _keyed(self, base, tasks):
-        for t in tasks:
-            self.part_n += 1
-            t.order_key = base + 1e-6 * self.part_n
-
-    def _keys_attn(self, k, c, j, early, mid, late):
-        """Pieces at attention iteration j on chip k's cluster c: early tasks at j's W_O point, mid ones right behind the
-        cluster's o8 put of j, late ones right behind its last y put of j."""
-        self._keyed(self.marks[("attn_wo", j)] - 0.5, early)
-        self._keyed(self._anchor(f"o_put_i{j}_k{k:02x}_cl{c}").node_id + 0.5, mid)
-        self._keyed(self._anchor(f"y_sf_i{j}m{self.NQ - 1}_k{k:02x}_cl{c}").node_id + 0.5, late)
+    # pieces may take the same bytes. A piece's loads, its conversion to rows, its SIMD work, h's write, the reshape, the
+    # quantise and the INT8 rows' copy into the tile's L3 staging (an A-layout tile, row block by row block); after the
+    # last piece one put of the staged tile into HBM. Where each runs in the cores' programs is the compiler's
+    # (passes/bingo_dfg_schedule.py).
 
     def _place(self, k, name, src, stg, r0, deps, c):
         """A piece's INT8 rows (A layout of PR rows: 4 rows' 4 bytes a 4-column block) into an L3 staging tile (A layout of
@@ -703,23 +672,18 @@ class LayerBuild(cm.ChipletBuild):
         ld = self._copy(k, f"n_ld_{sfx}", BingoMemFixedAddr(self._x16(q).address + r0 * H * 2, mem_level="HBM"), b["x"],
                         PB, after + prev.get("toa", []), c)
         cl = self._cld(k, f"n_cld_{sfx}", 0, 1, b["c"], after + prev.get("gain", []), c)
-        early = [ld, cl]
         rn = self._rms(k, f"n_rms_{sfx}", b["x"], b["x"], b["s"], [ld], rows=PR, c=c)
         gm = self._mul_rows(k, f"n_gain_{sfx}", b["x"], b["c"], [rn, cl], rows=PR, c=c)
         cv = self._cvt(k, f"n_toa_{sfx}", "row_major", "A", b["x"], b["e"], [gm] + prev.get("q", []), rows=PR, c=c)
         qz = self._quant(k, f"n_q_{sfx}", b["e"], b["q8"], A.d.s_x.inv, [cv] + prev.get("place", []), nb=PB, c=c)
         pl = self._place(k, f"n_pl_{sfx}", b["q8"], f"{self.TAG}_n8stg", r0, [qz], c)
-        early += [rn, gm]
-        late = [cv, qz, pl]
         if last:
             flag = _hbm(self.h_nf, q * 64)
             put = self._put_hbm(k, f"n_put_q{q}", BingoMemSymbol(f"{self.TAG}_n8stg"), _hbm(A.h_xhbm, q * self.XTB),
                                 self.XTB, flag, [pl], c)
             conf = self._landed(k, f"n_conf_q{q}", flag, b["f"], [put], c)
             self.n_conf[q // self.NQ].append(conf)
-            late += [put, conf]
         prev.update(toa=[cv], q=[qz], place=[pl], gain=[gm])
-        self._keys_attn(k, c, j, early, [], late)
 
     def glue_piece(self, q, n, j):
         """Piece n of tile q's glue at attention iteration j (None: at the attention's end; cluster layer.glue_cluster): y's
@@ -733,7 +697,6 @@ class LayerBuild(cm.ChipletBuild):
         last = n == self.NPC - 1
         b, prev = self._piece_bufs("g", q, n, k, c, dict(d=PB, a=PB, x=PB, s=self._scr(PR), e=PB, q8=PR * H, c=2 * self.CB,
                                                          **(dict(f=64) if last else {})))
-        early = []
         if n == 0:
             # every cluster's columns of tile q of y have landed in the chip's L3 (and, inside the attention, this
             # cluster's sweep of iteration j is done, so the buffers live once the sweep's are free)
@@ -742,10 +705,8 @@ class LayerBuild(cm.ChipletBuild):
                                 SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{A.TAG}_ytflag", offset=lt * G * 64), G, 1),
                                 after, c)
             self.waits.append((prev["w"], "attn", q))
-            early.append(prev["w"])
         w = prev["w"]
         cl = self._cld(k, f"g_cld_{sfx}", 1, 2, b["c"], [w] + prev.get("gain", []), c)
-        early.append(cl)
         ly = self._d_rows(k, f"g_ldy_{sfx}", A.yt_sym(q), r0, b["d"], [w] + prev.get("rows", []), c)
         rw = self._cvt(k, f"g_rows_{sfx}", "D", "row_major", b["d"], b["a"], [ly] + prev.get("add", []), rows=PR, c=c)
         dq = self._mul_rows(k, f"g_deq_{sfx}", b["a"], b["c"], [rw, cl], rows=PR, c=c)
@@ -763,18 +724,13 @@ class LayerBuild(cm.ChipletBuild):
         cv = self._cvt(k, f"g_toa_{sfx}", "row_major", "A", b["x"], b["e"], [gm] + prev.get("q", []), rows=PR, c=c)
         qz = self._quant(k, f"g_q_{sfx}", b["e"], b["q8"], F.d.s_h.inv, [cv] + prev.get("place", []), nb=PB, c=c)
         pl = self._place(k, f"g_pl_{sfx}", b["q8"], f"{self.TAG}_g8stg", r0, [qz], c)
-        early += [ly, rw, dq, lx, ad, rn, gm]
-        late = [cv, qz, pl]
         if last:
             flag = _hbm(self.h_gf, q * 64)
             put = self._put_hbm(k, f"g_put_q{q}", BingoMemSymbol(f"{self.TAG}_g8stg"), _hbm(F.h_xhbm, q * self.XTB),
                                 self.XTB, flag, [pl], c)
             conf = self._landed(k, f"g_conf_q{q}", flag, b["f"], [put], c)
             self.g_conf[q // self.NQ].append(conf)
-            late += [put, conf]
         prev.update(rows=[rw], add=[ad], toa=[cv], q=[qz], place=[pl], gain=[gm])
-        if j is not None:
-            self._keys_attn(k, c, j, early, [sh], late)
 
     def final_piece(self, q, n, at):
         """Piece n of tile q's final residual at FFN pass / down slice `at` = (i, s) (None: at the FFN's end; cluster
@@ -787,14 +743,12 @@ class LayerBuild(cm.ChipletBuild):
         own, lt = F.y_owner(q)
         PB, r0, sfx = PR * H * 2, n * PR, f"q{q}p{n}"
         b, prev = self._piece_bufs("f", q, n, k, c, dict(d=PB, a=PB, h=PB, c=self.CB))
-        early = []
         if n == 0:
             # every slice of tile q of Y_raw has landed in the chip's L3
             prev["w"] = self._t(k, "dm", f"f_wait_q{q}", "__snax_bingo_kernel_wait_flags",
                                 SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{F.TAG}_ytflag", offset=lt * F.NDN * 64),
                                                              F.NDN, 1), [], c)
             self.waits.append((prev["w"], "ffn", q))
-            early.append(prev["w"])
         w = prev["w"]
         ly = self._d_rows(k, f"f_ldy_{sfx}", F.yt_sym(q), r0, b["d"], [w] + prev.get("rows", []), c, rows=PR)
         rw = self._cvt(k, f"f_rows_{sfx}", "D", "row_major", b["d"], b["a"], [ly] + prev.get("add", []), rows=PR, c=c)
@@ -814,12 +768,7 @@ class LayerBuild(cm.ChipletBuild):
         st = (self._put_hbm(k, f"f_st_{sfx}", b["h"], orow, PB, of, [ad], c) if last else
               self._copy(k, f"f_st_{sfx}", b["h"], orow, PB, [ad], c))
         self.f_out.append(st)
-        early += [ly, rw, cl, dq, lh, ad] if tight else [cl, ly, rw, dq, lh, ad]
         prev.update(rows=[rw], add=[ad], st=[st], deq=[dq])
-        if at is not None:
-            i, sl = at
-            self._keyed(self.marks[("ffn_dn", i, sl)] - 0.5, early)
-            self._keyed(self.marks[("ffn_dn", i, sl + 1)] - 0.5, [st])
 
     def _plan_pieces(self):
         """params layer.piece_rows below 16: every piece of every step, made at the point after its last part."""
@@ -1201,24 +1150,6 @@ class LayerBuild(cm.ChipletBuild):
         return checks
 
     # ---- proofs -------------------------------------------------------------------------------------------------------
-    def _check_csr_primed(self):
-        """cfg_reuse: every GEOM_CSR_PRIMED softmax follows a softmax on its SIMD core in program order (the steps' SIMD
-        kernels sit between the blocks' tasks)."""
-        from bingo_kernel_args import SnaxBingoKernelSimdFaSoftmaxArgs as SM
-        simd, progs = self.roles["simd"], {}
-        for t in self.dfg.node_list:
-            if t.assigned_core_id == simd:
-                progs.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id), []).append(t)
-        bad = []
-        for ts in progs.values():
-            ts.sort(key=program_key)
-            for a, b in zip(ts, ts[1:]):
-                if (b.kernel_name.endswith("simd_fa_softmax") and b.kernel_args.geom_mode == SM.GEOM_CSR_PRIMED
-                        and not a.kernel_name.endswith("simd_fa_softmax")):
-                    bad.append((a.node_name, b.node_name))
-        if bad:
-            raise ValueError(f"cfg_reuse: {len(bad)} CSR_PRIMED softmax(es) after another SIMD kernel: {bad[:6]}")
-
     def _check_collectives(self):
         """Every multicast (an HBM multicast, a device bcast put) and every ChainGather ordered against every other by a
         path of dependency and order edges: sorted by a topological order, each one reaches the next."""
@@ -1371,24 +1302,6 @@ class LayerBuild(cm.ChipletBuild):
 
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
         A, F = self.attn, self.ffn
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
-        if not F.gemm_async:
-            # the FFN's blocking GEMMs that repeat their core's previous configuration run as
-            # gemm_minimal (the attention's queued starts break a run)
-            print(f"[{self.TAG}] ffn gemm_reuse: {reuse_gemm_config(self.dfg)} GEMMs run as gemm_minimal")
-        if self.p.get("args_phase_bytes"):
-            from bingo_args_phases import split_args_phases
-            split_args_phases(self, int(self.p["args_phase_bytes"]), dev)
-        if A.cfg_reuse:
-            n = reuse_gemm_fa_config(self.dfg, [self.roles["gemm"]])
-            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
-            print(f"[{self.TAG}] attn cfg_reuse: {n} FA matmuls REUSE, softmax {primed} PRIMED + {csr} CSR_PRIMED")
-            self._check_csr_primed()
-        if A.gemm_reuse or F.gemm_async:
-            # both blocks' queued starts: a start that repeats its cluster's previous dispatch writes only its addresses
-            n = reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
-            print(f"[{self.TAG}] gemm_reuse: {n} gemm_start configurations reuse")
         bad = [b for b in F.check_hazards() if "root fold slot" not in b]
         if bad:
             raise ValueError(f"{len(bad)} FFN buffer hazards, e.g. " + "; ".join(bad[:4]))

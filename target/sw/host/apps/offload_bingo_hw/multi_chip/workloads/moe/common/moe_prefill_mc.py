@@ -63,7 +63,7 @@ sys.path.insert(0, HERE)
 
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs, PhaseArgsLoadArgs, INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, INT4_B_LAYOUT_PARITY, SnaxBingoKernelGemmFullArgs, SnaxBingoKernelGemmShapeInitArgs,
+    HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs, PhaseArgsLoadArgs, INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED, INT4_B_LAYOUT_PARITY, SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs,
     SnaxBingoKernelIdmaFetchFlaggedArgs, SnaxBingoKernelIdmaGatherRowsArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelMoeDispatchArgs, SnaxBingoKernelMoeTopkRowsArgs,
@@ -73,7 +73,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdScatterAddRowsArgs, SnaxBingoKernelSimdSoftmaxF16F16Args, SnaxBingoKernelWaitFlagsArgs,
     SnaxBingoKernelXdmaChainGatherArgs)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 import moe_prefill_data as md  # noqa: E402
@@ -96,14 +95,6 @@ SOFTMAX_ROWS = 32             # the softmax's rows a task (its scratch fits the 
 B_PARITY_OFF = 8              # a parity-layout weight chunk starts one word into its slab: A's rows
                               # start 64-B aligned, so B is an odd number of words after A
 EW_F16_ADD = cm.EW_F16_ADD
-# params gemm_async: the GEMMs whose waits may trail the next start (same phase), by name prefix. The
-# router's own phase: its wait releases the route, so it must not wait behind a shared GEMM's start,
-# which waits for that GEMM's weight chunk to stream in. The experts' gate|up phase is per expert slot and
-# the down projection's per output slice (gemm_phase): a slot's last wait releases its last SwiGLU and slab,
-# while the next slot's first start waits for its row gather; a slice's last wait releases its last
-# scatter-add and so its ChainGather, while the next slice's first start waits for the ChainGather two
-# slices back to free the output buffer
-GEMM_PHASE = {"rt": "route", "sg": "x", "gu": "gate_up", "sd": "down", "dn": "down"}
 
 
 def chain_path_param(p, chips, root, whole=True):
@@ -118,18 +109,6 @@ def chain_path_param(p, chips, root, whole=True):
     if whole and set(path) != set(chips):
         raise ValueError(f"params chain_path={cp}: must pass every chip")
     return path
-
-
-def gemm_phase(name):
-    """The async phase of a GEMM by its name: GEMM_PHASE, the experts' gate|up per slot (gu_s0c1) and the
-    down projection per slice (sd_j3, dn_j3s0)."""
-    head = name.split("_")[0]
-    ph = GEMM_PHASE.get(head, name)
-    if ph == "gate_up":
-        ph += "_" + name.split("_")[1].split("c")[0]
-    elif ph == "down":
-        ph += "_" + name.split("_")[1].split("s")[0]
-    return ph
 
 
 def row_pitch(nbytes):
@@ -338,15 +317,6 @@ class MBuild(cm.ChipletBuild):
         self.ndt = int(p.get("dtmp_bufs", 2))
         if self.ndt < 1:
             raise ValueError(f"params dtmp_bufs={self.ndt}: at least one")
-        # params gemm_async: every GEMM is a gemm_start / gemm_wait pair, and the GEMM core's program
-        # issues a start before the previous GEMM's wait where the graph allows (chain_program_order),
-        # so it programs the next dispatch while the array runs (VersaCore and its streamer queue a
-        # configuration)
-        self.gemm_async = bool(p.get("gemm_async", False))
-        # params gemm_shape_l1 (with gemm_async): each cluster's GEMM core first copies the array shape's
-        # parameters into its L1 (gemm_shape_init), and every gemm_start reads them there instead of L3
-        self.gemm_shape_l1 = bool(p.get("gemm_shape_l1", False))
-        self.gsh = {}
         # params b_parity: the INT4 weights in the parity layout (gemm.h), one word into their slab,
         # so the B reader and the row-major A reader keep to banks of opposite parity
         self.b_parity = bool(p.get("b_parity", False))
@@ -484,10 +454,6 @@ class MBuild(cm.ChipletBuild):
         self.esrc_early = bool(p.get("esrc_early", False))
         if self.esrc_early and p.get("chain_halves") is None:
             raise ValueError("params esrc_early: needs chain_halves")
-        # params down_one_phase (gemm_async): the down projection's GEMMs are one async phase, so a slice's last wait
-        # trails the next slice's first start, whose weight chunk is in by then; that start waits for the ChainGather
-        # out_slots slices back to free its output slot
-        self.down_one_phase = bool(p.get("down_one_phase", False))
         # params expert_rows (default 0: off): an expert slot of more rows runs its gate|up in row blocks of at most this
         # many (whole 8-row tiles, as even as they come), each its own pass: its rows gathered into the next row buffer
         # (xe), the expert's gate|up chunks streamed again, its rows of A8 quantised; the down projection still takes
@@ -1013,23 +979,22 @@ class MBuild(cm.ChipletBuild):
     # ---- helpers ----------------------------------------------------------------------------
     def args_phase(self, name):
         """An args phase boundary (params down_phases): in a layer, the layer's (MoePart); the block alone, with params
-        args_phases, its own: each cluster's DM core gets the task that loads the next phase's args, after the last
-        task of the phase on each core of the chip (a task may write the other cluster's L1, so a chip's clusters
-        leave a phase together); the tasks made from here on are of the next phase."""
+        args_phases, its own: each cluster's DM core gets the task that loads the next phase's args, after every task
+        of the phase on the chip (a task may write the other cluster's L1, so a chip's clusters leave a phase
+        together): after each of the phase's tasks on the chip that no other one of them follows. The tasks made from
+        here on are of the next phase."""
         if not self.args_phases:
             raise ValueError("params down_phases: the block alone has args phases only with params args_phases")
-        dev = lambda n: (n.kernel_name or "").startswith("__snax")
         lo = self.phase_starts[-1] if self.phase_starts else 0
-        last = {}
+        mine = {}
         for n in self.dfg.node_list:
-            if n.node_id >= lo and dev(n) and not getattr(n, "args_resident", False):
-                key = (n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id)
-                if key not in last or n.node_id > last[key].node_id:
-                    last[key] = n
+            if n.node_id >= lo and self._phase_task(n):
+                mine.setdefault(n.assigned_chiplet_id, set()).add(n)
         ph = len(self.phase_starts) + 1
         for k in self.chips:
+            ts = mine.get(k, set())
+            deps = sorted((t for t in ts if not any(v in ts for v in self.dfg.successors(t))), key=lambda t: t.node_id)
             for c in range(self.NC):
-                deps = [t for (kk, _, _), t in sorted(last.items(), key=lambda x: x[0]) if kk == k]
                 ld = self.node(k, c, self.roles["dm"], f"args_p{ph}", "__snax_bingo_kernel_idma_1d_copy",
                                PhaseArgsLoadArgs(k, c, ph), deps)
                 ld.args_resident = True
@@ -1037,26 +1002,31 @@ class MBuild(cm.ChipletBuild):
         self.phase_starts.append(max(n.node_id for n in self.dfg.node_list) + 1)
         self.phase_names.append(name)
 
+    @staticmethod
+    def _phase_task(n):
+        """A device task whose args sit in its phase's region (not the compiler's resident ones)."""
+        return (n.kernel_name or "").startswith("__snax") and not getattr(n, "args_resident", False)
+
     def _assign_phases(self):
-        """params args_phases: every device task its args phase; each core's first task of a phase after its
-        cluster's load."""
-        dev = lambda n: (n.kernel_name or "").startswith("__snax")
-        first = {}
+        """params args_phases: every device task its args phase; each task of a phase that no task of the phase on its
+        cluster precedes waits for its cluster's load."""
+        phase_of = {}
         for n in self.dfg.node_list:
-            if not dev(n) or getattr(n, "args_resident", False):
+            if self._phase_task(n):
+                phase_of[n] = n.args_phase = sum(1 for s in self.phase_starts if n.node_id >= s)
+        cl = lambda t: (t.assigned_chiplet_id, t.assigned_cluster_id)
+        for n, ph in phase_of.items():
+            if not ph:
                 continue
-            ph = sum(1 for s in self.phase_starts if n.node_id >= s)
-            n.args_phase = ph
-            key = (ph, n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id)
-            if key not in first or n.node_id < first[key].node_id:
-                first[key] = n
-        for (ph, k, c, core), n in first.items():
-            if ph and not self.dfg.has_edge(self.loaders[(ph, k, c)], n):
-                self.edge(self.loaders[(ph, k, c)], n)
+            ld = self.loaders[(ph, *cl(n))]
+            if any(phase_of.get(u) == ph and cl(u) == cl(n) for u in self.dfg.predecessors(n)):
+                continue
+            if not self.dfg.has_edge(ld, n):
+                self.edge(ld, n)
         counts = {}
         for n in self.dfg.node_list:
-            if dev(n) and n.assigned_chiplet_id == self.ROOT and n.assigned_cluster_id == 0:
-                counts[getattr(n, "args_phase", "r")] = counts.get(getattr(n, "args_phase", "r"), 0) + 1
+            if self._phase_task(n) and n.assigned_chiplet_id == self.ROOT and n.assigned_cluster_id == 0:
+                counts[n.args_phase] = counts.get(n.args_phase, 0) + 1
         print(f"[{self.TAG}] args phases: " + "; ".join(f"{q} {nm}" for q, nm in enumerate(self.phase_names))
               + f"; root cluster 0 tasks a phase {dict(sorted(counts.items(), key=str))}")
 
@@ -1108,16 +1078,18 @@ class MBuild(cm.ChipletBuild):
             self.sc_reader[g][sc.buf] = reader
 
     def _release(self, g, si, gemm, deq, sc):
-        """Slab si is free after its last reader: the dequantisation `deq`, which reads the scale tile from the slab,
-        or with params scale_out the chunk's last GEMM `gemm` and the copy of its scale tile."""
+        """Slab si is free after its readers: the dequantisation `deq`, which reads the scale tile from the slab and
+        follows its GEMM, or with params scale_out the chunk's GEMM `gemm` and the copy of its scale tile. `gemm` a
+        list: the chunk's GEMMs of every row block, each a reader."""
+        gms = list(gemm) if isinstance(gemm, (list, tuple)) else [gemm]
         if sc.copy is None:
-            self.ls[g].release(si, deq)
+            self.ls[g].release(si, [deq] + gms if isinstance(gemm, (list, tuple)) else deq)
         else:
-            self.ls[g].release(si, gemm)
+            self.ls[g].release(si, gms)
             self.ls[g]._extra[si].append(sc.copy)
 
     def gemm(self, k, c, name, a, a_pitch, b, dst, M, K, N, k_shift, deps, int4=1):
-        """One GEMM; returns the task its output is ready after (params gemm_async: the wait)."""
+        """One GEMM (gemm_full); returns the task its output is ready after."""
         lay = 0
         if int4:
             lay = INT4_B_LAYOUT_PARITY if self.b_parity else INT4_B_LAYOUT_PAIRED if self.w4_paired else INT4_B_LAYOUT_B
@@ -1128,24 +1100,8 @@ class MBuild(cm.ChipletBuild):
         kw = dict(input_A_addr=a, input_B_addr=b, input_C_addr=0, output_D_addr=dst, M=M, K=K, N=N,
                   array_shape_idx=SHAPE3, transpose_A=0, transpose_B=0, accumPrevC=0,
                   int32tofp16_enable=1, int4_b_enable=lay, d_shift=k_shift, a_pitch=a_pitch)
-        gc = self.roles["gemm"]
-        if not self.gemm_async:
-            return self.node(k, c, gc, name, "__snax_bingo_kernel_gemm_full", SnaxBingoKernelGemmFullArgs(**kw),
-                             list(deps))
-        shape_addr = 0
-        if self.gemm_shape_l1:
-            if (k, c) not in self.gsh:
-                buf = self.cx_chip(k).at(c).l1(f"{self.TAG}_gsh", SnaxBingoKernelGemmShapeInitArgs.BYTES)
-                self.node(k, c, gc, "gsh_init", "__snax_bingo_kernel_gemm_shape_init",
-                          SnaxBingoKernelGemmShapeInitArgs(buf, SHAPE3))
-                self.gsh[(k, c)] = buf
-            shape_addr = self.gsh[(k, c)]
-        # the phase a start opens: a wait moves behind the next start of its own phase only
-        phase = gemm_phase(name)
-        if self.down_one_phase and phase.startswith("down_"):
-            phase = "down"
-        return GemmQueue.of(self.dfg, True).dispatch(self.at(k, c), name, SnaxBingoKernelGemmFullArgs(**kw), list(deps),
-                                                     phase=phase, shape_addr=shape_addr)
+        return self.node(k, c, self.roles["gemm"], name, "__snax_bingo_kernel_gemm_full",
+                         SnaxBingoKernelGemmFullArgs(**kw), list(deps))
 
     # ---- the prefill --------------------------------------------------------------------------
     def build(self):
@@ -1194,7 +1150,7 @@ class MBuild(cm.ChipletBuild):
                                           [wz_init], int4=0 if self.w4_paired else 1))
                     if c == 0 or self.route_dist:
                         warm.append(self.node(k, c, simd, "warm_scale", "__snax_bingo_kernel_simd_mul_tiles",
-                                              SnaxBingoKernelSimdMulTilesArgs(wz.view(512), wz.view(512),
+                                              SnaxBingoKernelSimdMulTilesArgs(wz.view(256), wz.view(256),
                                                                               wz.view(768), 1, 1), [wz_init]))
                         warm.append(self.node(k, c, simd, "warm_softmax", "__snax_bingo_kernel_simd_softmax_f16_f16",
                                               SnaxBingoKernelSimdSoftmaxF16F16Args(wz, wz.view(768), 2, 64),
@@ -1232,6 +1188,7 @@ class MBuild(cm.ChipletBuild):
         # right after putting it, before the next put
         puts = []
         xblk_reader = {g: [[], []] for g in range(G)}
+        sg_gms = {}                                         # (g, chunk) -> its shared gate|up GEMMs, every X block
         gb_reader = {g: [None, None] for g in range(G)}
         self.gcount = {g: 0 for g in range(G)}
         sh_ld = {}
@@ -1327,7 +1284,8 @@ class MBuild(cm.ChipletBuild):
                 o = b * XR * ROUTE_B
                 if self.x_cast == "unicast":
                     # params x_cast unicast: the block's table into each chip's L3 in turn (self.order: the root's own
-                    # first), each with its flag there
+                    # first, a copy onto itself that sets its flag), each with its flag there
+                    prev = [w]
                     for kk in self.order:
                         there = None if kk == R else kk
                         rput_to[(b, kk)] = self.node(
@@ -1335,7 +1293,8 @@ class MBuild(cm.ChipletBuild):
                             SnaxBingoKernelIdmaPutFlaggedArgs(
                                 BingoMemSymbol(f"{Tg}_rland", offset=o), BingoMemSymbol(f"{Tg}_rland", offset=o, chip_id=there),
                                 XR * ROUTE_B, BingoMemSymbol(f"{Tg}_rflag", offset=64 * b, chip_id=there), value=1),
-                            [w])
+                            prev)
+                        prev = [rput_to[(b, kk)]]
                     rputs.append(rput_to[(b, self.order[-1])])
                     continue
                 rputs.append(self.node(R, 0, dm, f"rt_bput_b{b}", "__snax_bingo_kernel_idma_put_flagged",
@@ -1548,6 +1507,7 @@ class MBuild(cm.ChipletBuild):
                                    2 * n // BLK, d.k_x,
                                    [xc, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
                     xblk_reader[g][b % 2].append(gm)
+                    sg_gms.setdefault((g, j), []).append(gm)
                     nsh = sn // BLK
                     sw = self.node(k, c, simd, f"ssw_c{j}_b{b}_g{g}", "__snax_bingo_kernel_simd_deq_swiglu",
                                    SnaxBingoKernelSimdDeqSwigluArgs(
@@ -1557,7 +1517,7 @@ class MBuild(cm.ChipletBuild):
                     last_sw[g] = sh_quant_block(g, j, b, b0, n, sw)
                     self._scale_read(g, sc, sw)
                     if b == self.XB - 1:
-                        self._release(g, si, gm, sw, sc)
+                        self._release(g, si, sg_gms[(g, j)], sw, sc)
 
         if self.x_hbm:
             # the root's prefetcher drives the multicast's engine: it pushes once X has landed
@@ -1670,8 +1630,7 @@ class MBuild(cm.ChipletBuild):
         a16_used = {g: 0 for g in range(G)}               # a16_pairs: pairs so far, the buffer in turn
         root_gat = {}
         # params x_in_xe: the row blocks' last readers (one GEMM core, in order) hold the buffers first
-        xe_reader = {g: [(xblk_reader[g][i] or [None])[-1] if self.x_in_xe else None for i in range(2)]
-                     for g in range(G)}
+        xe_reader = {g: [list(xblk_reader[g][i]) if self.x_in_xe else [] for i in range(2)] for g in range(G)}
         pend = {g: [] for g in range(G)}                    # exchange copies created one slot later
         held_ex = {g: [] for g in range(G)}                 # barrier_at kernel: every exchange, after the gate|up
 
@@ -1719,6 +1678,7 @@ class MBuild(cm.ChipletBuild):
             nsh = sn // BLK
             ld, si, slab, sc = self._load(g, j)
             sw = gm = None
+            gms = []                                        # every X block's GEMM reads the chunk's slab
             for b in range(self.XB):
                 xb = bg["xe"][b % 2]
                 # x_hbm: the root's X is its landing too (the multicast fills every chip's); its source holds X only
@@ -1726,14 +1686,15 @@ class MBuild(cm.ChipletBuild):
                 src = self.xsrc(b * XR * self.H) if k == R and not self.x_hbm else self.xland(b * XR * self.H)
                 xc = self.node(k, c, dm, f"x_copy_p{j}_b{b}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
                                SnaxBingoKernelIdma2dCopyArgs(src, xb, self.H, self.H, self.PX, XR),
-                               [xe_reader[g][b % 2]] if xe_reader[g][b % 2] is not None else [])
+                               list(xe_reader[g][b % 2]))
                 if k == R:
                     root_gat[c] = xc                        # l3_overlay: the root cluster's last read of X
                 gi, gb = next_g(g)
                 gm = self.gemm(k, c, f"sg_c{j}_b{b}_g{g}", xb, self.PX, slab, gb, XR // 8, self.H // 8,
                                2 * n // BLK, d.k_x,
                                [xc, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
-                xe_reader[g][b % 2] = gm
+                xe_reader[g][b % 2] = [gm]
+                gms.append(gm)
                 sw = self.node(k, c, simd, f"ssw_c{j}_b{b}_g{g}", "__snax_bingo_kernel_simd_deq_swiglu",
                                SnaxBingoKernelSimdDeqSwigluArgs(
                                    gb, sc.addr, bg["sg"], sh_a16(g, b, b0),
@@ -1742,7 +1703,7 @@ class MBuild(cm.ChipletBuild):
                 last_sw[g] = sh_quant_block(g, j, b, b0, n, sw)
             sh_quant_chunk_end(g, j, b0, n)
             self._scale_read(g, sc, sw)
-            self._release(g, si, gm, sw, sc)
+            self._release(g, si, gms, sw, sc)
 
         def sh_passes(g):
             """{slot: [shared chunks whose pass follows that slot's gate|up]} of cluster g"""
@@ -1825,13 +1786,14 @@ class MBuild(cm.ChipletBuild):
                     gat = self.node(k, c, dm, f"gather_s{s}{rs}_g{g}", "__snax_bingo_kernel_idma_gather_rows",
                                     SnaxBingoKernelIdmaGatherRowsArgs(self.xland(), self.H, lists.view(ids0 + 2 * r0), mr, xe,
                                                                       self.PX),
-                                    [disp[g]] + ([xe_reader[g][xi]] if xe_reader[g][xi] is not None else [])
+                                    [disp[g]] + list(xe_reader[g][xi])
                                     # the root's clusters never wait for the X flag: its X has landed after the last put
                                     + (list(x_last.values()) if k == R and (self.x_put_c1 or self.x_local or self.x_puts_first)
                                        else []))
                     if k == R:
                         root_gat[c] = gat                   # l3_overlay: the root cluster's last row gather
                     w_rows = lists.view(w0 + 2 * r0)
+                    pass_gms = []
                     for j, (b0, n) in enumerate(chs):
                         jj = len(self.chunks(self.ch(k, c)[0][1])) + sum(len(self.chunks(ex[x][1])) for x in self.held[k][:s]) + j
                         ld, si, slab, sc = self._load(g, jj, tag=f"r{r}" if r else "")
@@ -1839,6 +1801,7 @@ class MBuild(cm.ChipletBuild):
                         gm = self.gemm(k, c, f"gu_s{s}{rs}c{j}_g{g}", xe, self.PX, slab, gb, mr // 8, self.H // 8,
                                        2 * n // BLK, d.k_x,
                                        [gat, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
+                        pass_gms.append(gm)
                         ne = en // BLK
                         if self.a16_pairs:
                             p0, bi = chs[j - j % 2][0], a16_used[g] % len(bg["a16c"])   # the pair's first column, its buffer
@@ -1864,7 +1827,7 @@ class MBuild(cm.ChipletBuild):
                                           [sw] + ([q] if q is not None else []))
                             a16_reader[g][bi] = q
                             a16_used[g] += 1
-                    xe_reader[g][xi] = gm
+                    xe_reader[g][xi] = pass_gms
                     if quant and not self.a16_pairs:
                         q = self.node(k, c, simd, f"q_s{s}{rs}_g{g}", "__snax_bingo_kernel_simd_quant_rows",
                                       SnaxBingoKernelSimdQuantRowsArgs(a16, mr, en // BLK, (en // BLK) * D_BLOCK,
@@ -1990,7 +1953,8 @@ class MBuild(cm.ChipletBuild):
                 if self.fuse_deq_scatter:
                     prev = self.node(k, c, simd, f"scat_j{jl}s{s}_g{g}", "__snax_bingo_kernel_simd_scatter_add_rows",
                                      SnaxBingoKernelSimdScatterAddRowsArgs(y, dt, nt, ids, int(d.cnt[e]),
-                                                                           s_addr=sc.addr), [gm, prev] + sc.deps)
+                                                                           s_addr=sc.addr, y_bytes=self.SL),
+                                     [gm, prev] + sc.deps)
                     self._scale_read(g, sc, prev)
                     self._release(g, si, gm, prev, sc)
                 else:
@@ -1999,7 +1963,8 @@ class MBuild(cm.ChipletBuild):
                     self._scale_read(g, sc, mt)
                     self._release(g, si, gm, mt, sc)
                     prev = self.node(k, c, simd, f"scat_j{jl}s{s}_g{g}", "__snax_bingo_kernel_simd_scatter_add_rows",
-                                     SnaxBingoKernelSimdScatterAddRowsArgs(y, dt, nt, ids, int(d.cnt[e])), [mt, prev])
+                                     SnaxBingoKernelSimdScatterAddRowsArgs(y, dt, nt, ids, int(d.cnt[e]), y_bytes=self.SL),
+                                     [mt, prev])
                 dt_reader[g][di] = prev
             last_add[g] = prev
             if jl % GS:
@@ -2293,13 +2258,6 @@ class MBuild(cm.ChipletBuild):
         self.run_checks(checks)
 
     # ---- emission -----------------------------------------------------------------------------
-    def chain_program_order(self):
-        """Each device core runs its tasks in creation order, except (params gemm_async) that a GEMM's
-        wait trails the next GEMM's start of the same phase when nothing else sits between them on
-        the GEMM core and the program stays acyclic with every dependency and order edge."""
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        return GemmQueue.of(self.dfg, self.gemm_async).program_order(self.dfg, dev, tag=self.TAG)
-
     def check_window_local(self):
         """sync barrier: no dependency edge crosses chips between the start barrier and the end stamp; only the
         barriers synchronise the chips there (data a chip waits for by its flag is an order edge, not a dependency).
@@ -2323,7 +2281,6 @@ class MBuild(cm.ChipletBuild):
                   f"chips inside the window")
         if self.args_phases:
             self._assign_phases()
-        self.chain_program_order()
         self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 

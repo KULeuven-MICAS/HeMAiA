@@ -83,7 +83,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs,
     SnaxBingoKernelSimdRmsnormArgs, SnaxBingoKernelXdma6dArgs, simd_beats)
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -387,20 +386,19 @@ class LayerBuild(cm.ChipletBuild):
 
     def phase_boundary(self, name):
         """The current args phase ends on every cluster: each cluster's DM core gets the task that loads the next
-        phase's args, after the last task of the phase on each core of the chip (a block's task may write the other
-        cluster's L1, so a chip's clusters leave a phase together); the tasks made from here on are of the next
-        phase."""
+        phase's args, after every task of the phase on the chip (a block's task may write the other cluster's L1, so a
+        chip's clusters leave a phase together): after each of them that no other one of them follows. The tasks made
+        from here on are of the next phase."""
         lo = self.phase_starts[-1] if self.phase_starts else 0
-        last = {}
+        mine = {}
         for n in self.dfg.node_list:
             if n.node_id >= lo and self._dev(n) and not getattr(n, "args_resident", False):
-                key = (n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id)
-                if key not in last or n.node_id > last[key].node_id:
-                    last[key] = n
+                mine.setdefault(n.assigned_chiplet_id, set()).add(n)
         p = len(self.phase_starts) + 1
         for k in self.chips:
+            ts = mine.get(k, set())
+            deps = sorted((t for t in ts if not any(v in ts for v in self.dfg.successors(t))), key=lambda t: t.node_id)
             for c in range(self.NC):
-                deps = [t for (kk, cc, _), t in sorted(last.items(), key=lambda x: x[0]) if kk == k]
                 ld = self.node(k, c, self.roles["dm"], f"args_p{p}", "__snax_bingo_kernel_idma_1d_copy",
                                PhaseArgsLoadArgs(k, c, p), deps)
                 ld.args_resident = True
@@ -409,21 +407,22 @@ class LayerBuild(cm.ChipletBuild):
         self.phase_names.append(name)
 
     def _assign_phases(self):
-        """Every device task its args phase; each core's first task of a phase after its cluster's load."""
+        """Every device task its args phase; each task of a phase that no task of the phase on its cluster precedes
+        waits for its cluster's load."""
         starts = self.phase_starts
-        first = {}
+        phase_of = {}
         for n in self.dfg.node_list:
             if not self._dev(n) or getattr(n, "args_resident", False):
                 continue
-            p = sum(1 for s in starts if n.node_id >= s)
-            n.args_phase = p
-            key = (p, n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id)
-            if key not in first or n.node_id < first[key].node_id:
-                first[key] = n
+            phase_of[n] = n.args_phase = sum(1 for s in starts if n.node_id >= s)
+        cl = lambda t: (t.assigned_chiplet_id, t.assigned_cluster_id)
         added = 0
-        for (p, k, c, core), n in first.items():
-            if p and not self.dfg.has_edge(self.loaders[(p, k, c)], n):
-                self.edge(self.loaders[(p, k, c)], n)
+        for n, p in phase_of.items():
+            if not p or any(phase_of.get(u) == p and cl(u) == cl(n) for u in self.dfg.predecessors(n)):
+                continue
+            ld = self.loaders[(p, *cl(n))]
+            if not self.dfg.has_edge(ld, n):
+                self.edge(ld, n)
                 added += 1
         counts = {}
         for n in self.dfg.node_list:
@@ -737,8 +736,6 @@ class LayerBuild(cm.ChipletBuild):
             if bad:
                 raise ValueError(f"params layer.l3_arena: {bad} overrun their places in dl_act ({room})")
         self._assign_phases()
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
         self.dfg.split_chip_functions = True
         self.st.finish()
         super().finish(app_name, x_prefixes)

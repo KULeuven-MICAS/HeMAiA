@@ -104,7 +104,8 @@ class LStages(ABuild):
 
     def _init(self):
         self.slot, self.tile_ready, self.rope_ld, self._rope_war, self._o8_war = {}, {}, {}, {}, {}
-        self._first_ld = {}
+        self._first_ld, self._proj_lds, self._x_first, self._x_last, self._last_sm = {}, {}, {}, {}, {}
+        self._post_first, self._x_xdma = {}, {}
         self._ofull_war, self._ywo_war, self._y_last, self._yt_puts, self._y_first = {}, {}, [], {}, {}
         for ls in self.ls:
             ls.strict = True
@@ -132,38 +133,18 @@ class LStages(ABuild):
         for i in range(self.NP):
             if i:
                 self.pass_start(i)
-            x = {g: self.stage_x(g, i, puts[i], [go[self.chip(g)]] + ([last_proj[g]] if g in last_proj else []))
+            x = {g: self.stage_x(g, i, puts[i], [go[self.chip(g)]] + list(last_proj.get(g, [])))
                  for g in range(self.G)}
             own = {}
             for g in range(self.G):
                 q8s[(g, i)], last_proj[g], own[g] = self.stage_proj(g, i, x[g])
-            if self.x_ahead and i:
-                # pass i's RoPE table and first weight chunk, then its x fetch (which waits for pass i - 1's last GEMM),
-                # ahead of pass i - 1's trade
-                for g in range(self.G):
-                    first = trade_first.get(g)
-                    if first is None:
-                        continue
-                    front = [self.rope_ld[g, i], self._first_ld[g, i], x[g]]
-                    for j, t in enumerate(front):
-                        t.order_key = first.node_id - 1 + (j + 1) / (len(front) + 1)
             if i + 1 < self.NP and not self.x_mem:
                 puts.append(self.stage_x_put(i + 1, [go[R]] + puts[-1:]))
-            mark = max(t.node_id for t in self.dfg.node_list) + 1
             if self.kv_split:
                 self.stage_trade_kv_split(i, own)
             else:
                 for k in self.chips:
                     self.stage_trade_kv(k, i, own)
-            # each cluster's first DM task of this pass's trade (x_ahead puts the next pass's front before it)
-            dm = self.roles["dm"]
-            g_at = {(self.chip(g), self.c(g)): g for g in range(self.G)}
-            trade_first = {}
-            for t in self.dfg.node_list:
-                if t.node_id >= mark and t.assigned_core_id == dm:
-                    g = g_at.get((t.assigned_chiplet_id, t.assigned_cluster_id))
-                    if g is not None and (g not in trade_first or t.node_id < trade_first[g].node_id):
-                        trade_first[g] = t
             for g in range(self.G):
                 k = self.chip(g)
                 last[k] += [t for u in range(self.NQ) for t in q8s[(g, i)][u][1]]
@@ -221,7 +202,7 @@ class LStages(ABuild):
                 sw = fa_sweep(self.at(k, c), self.sweep_cfg(i + 1), self.sweep_bufs[g], la.L1Tiles(self, g), q8, self.roles,
                               prev=prev_sw.get(g), oacc_free=xt_rd.get(g), name=f"s{i}_", early=1, mask=self.mask(i)(g),
                               mask_c=self.mask_c, ot8=self.ot8_bits(), geom_core=self.sm_geom,
-                              sm_batch=self.sm_batch, sm_async=self.sm_async)
+                              sm_batch=self.sm_batch)
                 outs = [self.copy(g, f"ot_out{u}_i{i}", sw["xt"][u],
                                   BingoMemSymbol(f"{T}_otout", offset=((i * self.NC + c) * self.NQ + u) * self.OTB),
                                   self.OTB, [sw["tr"][u]]) for u in range(self.NQ)]

@@ -124,10 +124,7 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulF16Args, SnaxBingoKernelSimdRmsnormArgs,
     SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdma6dArgs, SnaxBingoKernelXdmaMemsetArgs, simd_beats)
-from bingo_cfg_reuse import prime_fa_softmax, program_key  # noqa: E402
-from bingo_gemm_reuse import GEMM_FULL, GEMM_MINIMAL, reuse_gemm_config  # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 from libs.verify import checks as vchecks  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -441,9 +438,8 @@ class LayerBuild(cm.ChipletBuild):
         prefetchers per params layer.ffn_prefetch. Returns {chip: the task its X waits follow} (the chip's attention
         end)."""
         F = self.ffn
-        base = self.start.node_id - 0.5
-        for i, t in enumerate(self.ffn_pre):
-            t.order_key = base + 1e-6 * (i + 1)
+        for t in self.ffn_pre:
+            self.edge(t, self.start)            # before the window
         for k in self.chips:
             for t in (extra or {}).get(k, []):
                 self.edge(t, self.start)
@@ -622,40 +618,13 @@ class LayerBuild(cm.ChipletBuild):
                 f"{len(writes)} HBM writes ({', '.join(sorted({w.node_name.split('_k')[0] for w in writes}))}) after "
                 f"every collective and every push")
 
-    def _gemm_reuse(self):
-        """The GEMM-config reuse over the FFN's GEMMs only (the attention's GEMVs reconfigure the array, which
-        reuse_gemm_config does not see); then every gemm_minimal's previous array task in its core's program is a
-        gemm_full or gemm_minimal."""
-        class _View:
-            pass
-        v = _View()
-        v.node_list = [t for t in self.dfg.node_list if t.node_id >= self.ffn_first]
-        n = reuse_gemm_config(v)
-        gemm = self.roles["gemm"]
-        progs = {}
-        for t in self.dfg.node_list:
-            if t.assigned_core_id == gemm and (t.kernel_name or "").startswith("__snax"):
-                progs.setdefault((t.assigned_chiplet_id, t.assigned_cluster_id), []).append(t)
-        bad = []
-        for ts in progs.values():
-            prev = None
-            for t in sorted(ts, key=program_key):
-                kn = t.kernel_name
-                if kn == GEMM_MINIMAL and prev not in (GEMM_FULL, GEMM_MINIMAL):
-                    bad.append(f"{t.node_name} after {prev}")
-                if "gemm" in kn or "gemv" in kn:
-                    prev = kn
-        if bad:
-            raise ValueError(f"gemm_minimal after another array task: {bad[:4]}")
-        print(f"[{self.TAG}] ffn.gemm_reuse: {n} FFN GEMMs run as gemm_minimal; none follows a GEMV or a sweep matmul")
-
     def _check_array_ks(self):
         """attn ks: the attention's array tasks are GEMVs and FA matmuls only (no gemm_full / gemm_minimal, as KsBuild
         checks alone), and with the all-GEMV FFN none in the whole graph, so no GEMM configuration is reused across
         another array task on any GEMM core. Prints the array tasks by kernel."""
         gemm = self.roles["gemm"]
         arr = [t for t in self.dfg.node_list if t.assigned_core_id == gemm and (t.kernel_name or "").startswith("__snax")]
-        full = (GEMM_FULL, GEMM_MINIMAL)
+        full = ("__snax_bingo_kernel_gemm_full", "__snax_bingo_kernel_gemm_minimal")
         bad = [t.node_name for t in arr if t.kernel_name in full
                and (t.node_id < self.ffn_first if self.ffn is not None else True)]
         if self.ffn is not None and self.ffn.gu_gemv:
@@ -728,13 +697,6 @@ class LayerBuild(cm.ChipletBuild):
         return self.st.lines() if self.ring_alias else []
 
     def finish(self, app_name, x_prefixes=("x_wait_",)):
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        GemmQueue.of(self.dfg, False).program_order(self.dfg, dev, tag=self.TAG)
-        if self.ffn is not None:
-            self._gemm_reuse()
-        if self.attn.cfg_reuse:
-            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
-            print(f"[{self.TAG}] attn.cfg_reuse: softmax {primed} PRIMED + {csr} CSR_PRIMED")
         if self.ffn is not None:
             bad = self.ffn.check_hazards()
             if bad:
@@ -745,9 +707,6 @@ class LayerBuild(cm.ChipletBuild):
             self.attn._check_collectives()
         self._check_collectives()
         self._stream_report()
-        if self.p.get("args_phase_bytes"):
-            from bingo_args_phases import split_args_phases
-            split_args_phases(self, int(self.p["args_phase_bytes"]), dev)
         self._args_report()
         self.dfg.split_chip_functions = True
         if self.ring_alias:

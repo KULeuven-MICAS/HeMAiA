@@ -97,9 +97,6 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdRmsnormArgs, simd_beats)
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from bingo_cfg_reuse import prime_fa_softmax, reuse_gemm_fa_config, reuse_gemm_start_config  # noqa: E402
-from bingo_gemm_reuse import GEMM_FULL, GEMM_MINIMAL, reuse_gemm_config  # noqa: E402
-from libs.blocks import GemmQueue  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
@@ -176,7 +173,7 @@ class AttnPart(fas.FaStages):
 
     def __init__(self, layer, args, p, plat, hw):
         self.layer = layer
-        self.post_heads, self.post_tasks = {}, []
+        self.post_heads, self.post_tasks = [], []
         super().__init__(args, p, plat, hw, shared=layer)
 
     def setup(self, extra=None):
@@ -195,9 +192,10 @@ class AttnPart(fas.FaStages):
         """The layer checks the attention through h (y dequantised plus x): its L3 regions are the second block's by the
         end."""
 
-    def _keys_by_chunk_order(self, s4_end):
-        """fa_stages_mc.py's order of the key tasks, with the keys after the window recorded instead of tied to an end
-        stamp: the layer's end stamp comes later (relocate_post_keys)."""
+    def _keys_by_chunk_order(self):
+        """fa_stages_mc.py's keys after the window, recorded instead of tied to an end stamp: the layer's end stamp comes
+        later (relocate_post_keys). The key tasks of the chunks after the last one made, and those of them that no other
+        one of them precedes (they follow the end stamp)."""
         runs = sorted(self._key_runs, key=lambda r: r[0])
         for (a, h), (b, _) in zip(runs, runs[1:]):
             if h is None:
@@ -205,45 +203,19 @@ class AttnPart(fas.FaStages):
             for t in self.dfg.node_list:
                 if a <= t.node_id < b:
                     t._key_chunk = h
-        end = max(t.node_id for t in self.dfg.node_list)
-        moved = {}
-        for t in self.dfg.node_list:
-            h = getattr(t, "_key_chunk", 0)
-            if h < 1 or t.node_id >= end:
-                continue
-            g = self.chips.index(t.assigned_chiplet_id) * self.NC + t.assigned_cluster_id
-            pos = s4_end[(g, h - 1)] if h < self.NCH else end + 1
-            st = self._kx_store_of(t.assigned_chiplet_id, t.assigned_cluster_id, h) if h < self.NCH else None
-            if self.kx_after_chains and 2 <= h < self.NCH and not re.match(self.KX_STAGE1, t.node_name):
-                st = self._kx_sweep_end_of(t.assigned_chiplet_id, t.assigned_cluster_id, h)
-            elif st is None and self.kx_after_chains and 2 <= h < self.NCH:
-                st = self._kx_vload_of(t.assigned_chiplet_id, t.assigned_cluster_id, h)
-            if st is not None:
-                pos = (st.node_id if getattr(st, "order_key", None) is None else st.order_key) + 1
-            moved.setdefault(pos, []).append(t)
-        n = 0
-        for pos, ts in moved.items():
-            ts.sort(key=lambda t: t.node_id)
-            for j, t in enumerate(ts):
-                t.order_key = pos - 1 + (j + 1) / (len(ts) + 1)
-            n += len(ts)
-        for t in moved.get(end + 1, []):
-            key = (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
-            if key not in self.post_heads or t.order_key < self.post_heads[key].order_key:
-                self.post_heads[key] = t
-        self.post_tasks = sorted(moved.get(end + 1, []), key=lambda t: t.order_key)
-        print(f"[{self.TAG}] keys_by_chunk: {n} key tasks of chunks 1..{self.NX * 16 // self.C - 1} moved behind the "
-              f"stage-4 tasks of the chunk before; {len(self.post_tasks)} of the chunks from {self.NCH} on after the "
-              f"layer's window on {len(self.post_heads)} cores")
+        post = {t for t in self.dfg.node_list if getattr(t, "_key_chunk", 0) >= self.NCH}
+        preds = {t: set(self.dfg.predecessors(t)) for t in post}
+        for x, y in self.dfg.order_edges:
+            if y in preds:
+                preds[y].add(x)
+        self.post_tasks = sorted(post, key=lambda t: t.node_id)
+        self.post_heads = [t for t in self.post_tasks if not preds[t] & post]
+        print(f"[{self.TAG}] keys_by_chunk: {len(self.post_tasks)} key tasks of the chunks from {self.NCH} on after the "
+              f"layer's window, {len(self.post_heads)} behind its end stamp")
 
     def relocate_post_keys(self, end):
-        """The keys after the window: last in every core's program (after every task the layer made) and behind the
-        layer's end stamp (their first task on each core)."""
-        end = max(t.node_id for t in self.dfg.node_list)
-        n = len(self.post_tasks)
-        for j, t in enumerate(self.post_tasks):
-            t.order_key = end + (j + 1) / (n + 1)
-        for t in self.post_heads.values():
+        """The keys after the window behind the layer's end stamp."""
+        for t in self.post_heads:
             self.dfg.bingo_add_edge(end, t)
 
 
@@ -826,49 +798,10 @@ class LayerBuild(cm.ChipletBuild):
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_", "kx_ld_")):
         A, M = self.attn, self.mlp
         A.relocate_post_keys(self.end)
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        attn_nodes = {t for t in self.dfg.node_list if t.node_id <= self.attn_last_id or t in set(A.post_tasks)}
-        GemmQueue.of(self.dfg, True).program_order(self.dfg, dev, tag=self.TAG)
         self.prune_post_edges()
         if A.keys_by_chunk:
+            A._order_collectives()
             A._check_multicasts()
-        if A.kx_after_chains:
-            A._check_sweep_simd()
-        pa = A.p
-        if pa.get("cfg_reuse", False):
-            n = reuse_gemm_fa_config(self.dfg, [self.roles["gemm"]])
-            primed, csr = prime_fa_softmax(self.dfg, [self.roles["simd"]])
-            print(f"[{self.TAG}] cfg_reuse: {n} FA matmuls REUSE, softmax {primed} PRIMED + {csr} CSR_PRIMED")
-            A._check_csr_primed()
-        if pa.get("gemm_reuse", False):
-            n = reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
-            # the attention's switch: its own gemm_starts only (the MoE's keep their full configuration, as alone)
-            off = 0
-            for t in self.dfg.node_list:
-                if t.kernel_name.endswith("gemm_start") and t not in attn_nodes and getattr(t.kernel_args, "reuse", 0):
-                    t.kernel_args.reuse = 0
-                    off += 1
-            print(f"[{self.TAG}] gemm_reuse (attention): {n - off} gemm_start configurations reuse")
-        ffn_queued = self.which == 0 and M.gemm_async
-        if self.which == 0 and not ffn_queued:
-            # the FFN's own gemm_fulls only (it runs after every attention GEMM on each core)
-            before = {t: (t.kernel_name, t.kernel_args) for t in self.dfg.node_list if t.kernel_name == GEMM_FULL}
-            n = reuse_gemm_config(self.dfg)
-            back = 0
-            for t, (kn, ka) in before.items():
-                if t.kernel_name == GEMM_MINIMAL and t in attn_nodes:
-                    t.kernel_name, t.kernel_args = kn, ka
-                    back += 1
-            print(f"[{self.TAG}] gemm_reuse (FFN): {n - back} GEMMs run as gemm_minimal")
-        if self.p.get("args_phase_bytes"):
-            from bingo_args_phases import split_args_phases
-            split_args_phases(self, int(self.p["args_phase_bytes"]), dev)
-        if ffn_queued:
-            # the FFN's queued starts, along the cores' programs as they stand after the args phases, as the block alone
-            reuse_gemm_start_config(self.dfg, [self.roles["gemm"]])
-            n = sum(t.kernel_name.endswith("gemm_start") and t not in attn_nodes and bool(t.kernel_args.reuse)
-                    for t in self.dfg.node_list)
-            print(f"[{self.TAG}] gemm_reuse (FFN): {n} gemm_start configurations reuse")
         if self.which == 0:
             bad = M.check_hazards()
             if bad:
@@ -953,9 +886,9 @@ class LayerBuild(cm.ChipletBuild):
               f"over overlapping L3), every ring chunk loaded; the writers: {kinds}")
 
     def prune_post_edges(self):
-        """The keys after the window (a proof of concept's later chunks) follow the layer's end stamp on every core: a
-        dependency on them from another core's task that the stamp already follows is implied, and it would hold a
-        dep tag across the whole MoE / FFN. Such edges go (each core's own program order stays)."""
+        """The keys after the window (a proof of concept's later chunks) follow the layer's end stamp: a dependency on
+        them from another core's task that the stamp already follows is implied (every one of them is behind the stamp,
+        directly or through another of them), and it would hold a dep tag across the whole MoE / FFN. Such edges go."""
         post = set(self.attn.post_tasks)
         if not post:
             return

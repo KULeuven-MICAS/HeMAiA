@@ -48,7 +48,7 @@ import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelXdmaChainGatherArgs)
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
-from libs.blocks import chain_gather, chain_gather_teardown  # noqa: E402
+from libs.blocks import chain_gather  # noqa: E402
 
 import chiplet_mc as cm  # noqa: E402
 from moe_prefill_mc import chain_path_param  # noqa: E402
@@ -64,8 +64,6 @@ class GatherTb(cm.ChipletBuild):
         if self.reduce_impl != "chain" or self.sync != "edge":
             raise ValueError("this testbench builds reduce chain, sync edge")
         self.mode = str(p.get("chain_mode", "concurrent"))
-        # params chain_cfg_ahead: each ChainGather a configure, a start and a wait task (blocks/gather.py chain_gather)
-        self.chain_cfg_ahead = bool(p.get("chain_cfg_ahead", False))
         if self.mode not in ("serial", "concurrent"):
             raise ValueError(f"params chain_mode={self.mode!r}: serial or concurrent")
         self.NSLC = int(p.get("slices", 8))                 # slices a cluster
@@ -206,9 +204,7 @@ class GatherTb(cm.ChipletBuild):
                                    f"y_chain_c{c}j{j}", ga,
                                    [t for g in range(G) if self.c(g) == c for t in ready[g]]
                                    + ([before] if before is not None else [])
-                                   + ([p1_reader[c][s2]] if p1_reader[c][s2] is not None else []),
-                                   cfg_ahead=self.chain_cfg_ahead,
-                                   cfg_after=[last_red[c]] if last_red[c] is not None else [])
+                                   + ([p1_reader[c][s2]] if p1_reader[c][s2] is not None else []))
                 last_red[c] = last_any = red
                 st = self.node(R, c, dm, f"y_store_c{c}j{j}", "__snax_bingo_kernel_idma_1d_copy",
                                SnaxBingoKernelIdma1dCopyArgs(self.p1c[c].view(s2 * self.SL),
@@ -216,8 +212,6 @@ class GatherTb(cm.ChipletBuild):
                                                              self.SL),
                                [red])
                 p1_reader[c][s2] = st
-        if self.chain_cfg_ahead:
-            chain_gather_teardown(self.dfg, xdma)
         self.end_window([p1_reader[c][(self.NSLC - 1) % 2] for c in range(self.NC)])
         checks = []
         for c in range(self.NC):

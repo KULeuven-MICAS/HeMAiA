@@ -76,8 +76,8 @@ THE CACHE. Chip i's shard in its memory chip's HBM (fk_kv_k<chip>): its tiles in
 P / 64, which holds the appended piece. Each tile streams through the chip's ring like a weight chunk, K and V one chunk
 each: no chip's cache crosses another memory chip's links, and no multicast carries it.
 
-THE ORDERS. Every device core runs its tasks in creation order (GemmQueue.program_order); a ring load blocks its DM core
-until its chunk lands, so each DM core loads its chunks where its program needs them. A chip's ring order: W_KVA's
+THE ORDERS. The compiler orders every device core's program (mini_compiler passes/bingo_dfg_schedule.py), each cluster's
+ring loads in the ring's order; a ring load blocks its DM core until its chunk lands. A chip's ring order: W_KVA's
 chunk(s) (cluster 1), W_q x 6 and W_UK (cluster 0), its cached K tiles, then its V tiles, W_UV, cluster 1's two W_O
 chunks, cluster 0's two W_O chunks: cluster 0's last W_O chunk is the chip's last push.
 
@@ -126,7 +126,7 @@ from bingo_kernel_args import (  # noqa: E402
     SnaxBingoKernelXdmaMemsetArgs, SnaxBingoKernelXdmaTranspose2dArgs, simd_beats, simd_fp16_lanes)
 from bingo_mem_handle import BingoMemSymbol  # noqa: E402
 from libs import at_offset  # noqa: E402
-from libs.blocks import GemmQueue, WeightRings  # noqa: E402
+from libs.blocks import WeightRings  # noqa: E402
 from libs.comm.nest import convert_args  # noqa: E402
 
 HIDDEN, KV_RANK, ROPE, Q_NOPE, V_HEAD = 2048, 512, 64, 128, 128
@@ -1091,8 +1091,6 @@ class FaDecodeKs(FaBuild):
 
     # ---- emission ----------------------------------------------------------------------------------------------------
     def finish(self, app_name, x_prefixes=("x_wait_",)):
-        dev = [self.roles[r] for r in ("gemm", "simd", "xdma", "dm")]
-        GemmQueue.of(self.dfg, False).program_order(self.dfg, dev, tag=self.TAG)
         self._check_collectives()
         self.dfg.split_chip_functions = bool(self.p.get("per_chip_image", False))
         cm.ChipletBuild.finish(self, app_name, x_prefixes)

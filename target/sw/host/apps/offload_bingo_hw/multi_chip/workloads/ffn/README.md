@@ -79,18 +79,15 @@ those rungs have no overlap inside the pass. `bcast_reduce` runs one ChainGather
 also works kernel by kernel), so the step to `all` is the synchronisation alone. Stage: `./stages.sh abl64_<rung>`; runs and
 results: `target/sim/automation/sweep/llm_blocks/ffn/README.md`.
 
-## Queued GEMMs (`gemm_async`)
+## Asynchronous dispatch
 
-By default every GEMM is one blocking `gemm_full` task: it configures the array (the shape table read from L3),
-starts it and waits, so the array idles for the whole configuration of every GEMM whose shape changes. With
-`gemm_async` each GEMM is a `gemm_start` / `gemm_wait` pair (`libs/blocks/gemm_async.py`, the FA and MoE blocks' path):
-the GEMM core programs the next dispatch while the array runs, and a GEMM's consumers and the buffers it reads wait
-for its wait. `gemm_shape_l1`: the shape parameters copied into each cluster's L1 once (`gemm_shape_init`).
-`gemm_cfg_ahead`: each GEMM a configure task, which runs as soon as the previous dispatch has started, and a start task
-that waits for the operands; `gemm_cfg_hoist`: the configure ahead of the waits before its start (not with
-`sync: barrier`, whose fences would close a cycle with it). The block then marks the starts that repeat their
-cluster's previous configuration (they write only the four addresses). A wait trails only the next start of its phase,
-the GEMM's kind in its pass (`gu_i<i>`, `dn_i<i>`).
+The driver makes every GEMM one blocking `gemm_full` task and every SIMD and xDMA task whole; the compiler orders each
+core's program (`mini_compiler/passes/bingo_dfg_schedule.py`). It splits the GEMMs, the SIMD's staged kernels and the
+xDMA's transfers into configure / start / wait parts where its schedule gains (params `async_exec: false` keeps every
+task whole: `llama3_prefill/stage123` and `stage45` beside their `_async` twins): the core programs the
+next dispatch while the accelerator runs, a task's consumers and the buffers it reads follow its wait, and each
+cluster's GEMM core reads the array shape's parameters from an L1 copy. A dispatch that repeats its core's previous
+configuration writes only its addresses (the compiler's CSR reuse).
 
 ## The strong-scaling sweep at 64 tokens (`scaling`)
 
