@@ -69,7 +69,7 @@ PAIR = 32                          # an INT4 GEMV's column unit
 
 
 class ClusterNodes:
-    """The node factory the mini_compiler blocks take (GemmQueue.dispatch, fa_sweep): chip k cluster c
+    """The node factory the mini_compiler blocks take (fa_sweep): chip k cluster c
     of a ChipletBuild, creating its nodes with the build's names."""
 
     def __init__(self, fb, k, c):
@@ -188,10 +188,11 @@ class ChipletBuild(FabricBase):
         # by one loop, the symbol lookup by signature, the g2l table runs by DMA)
         dfg.fast_host_init = bool(p.get("fast_host_init", False))
         dfg.remote_broadcast = bool(p.get("remote_broadcast", True))
-        # the compiler orders every device core's program (a driver that orders them itself keeps its order); params
-        # async_exec: each VersaCore dispatch runs as configure / start / wait parts where the schedule gains from it
+        # the compiler orders every device core's program, and runs each accelerator's tasks as configure / start /
+        # wait parts where its model says the program finishes sooner (passes/bingo_dfg_schedule.py); params
+        # async_exec false keeps every task whole (the synchronous arm of an A/B)
         dfg.schedule_cores = True
-        dfg.async_exec = bool(p.get("async_exec", False))
+        dfg.async_exec = bool(p.get("async_exec", True))
         self.roles = core_roles(plat)
         self.ctx = Ctx(dfg=dfg, mesh=MESH, roles=self.roles, hw=hw, chiplet=self.ROOT)
         self.pipe = Pipeline(self.ctx, verbose=False, gate_sources=True)
@@ -282,6 +283,10 @@ class ChipletBuild(FabricBase):
                                list(dict.fromkeys(deps)))
         self.last_barrier = out
         self.barrier_rounds.append(out)
+        # the graph's every round, whichever build of it made them: the hazard check's order across the chips
+        if not hasattr(self.dfg, "barrier_rounds"):
+            self.dfg.barrier_rounds = []
+        self.dfg.barrier_rounds.append(out)
         return out
 
     def fence_barriers(self):
@@ -664,6 +669,15 @@ class ChipletBuild(FabricBase):
             from bingo_l1_packer import StaticL1Options
             static_l1 = StaticL1Options(enable=True, pin_last=tuple(p.get("l1_pin_last", ())),
                                         order=p.get("l1_order", "name"))
+        # params args_phase_bytes: each cluster's device args in phases of at most this many bytes, two alternating L1
+        # regions (passes/bingo_args_phases.py), for a cluster whose args do not fit beside its static buffers; the
+        # compiler cuts them once it has fixed each core's program
+        if p.get("args_phase_bytes") and not getattr(dfg, "args_pingpong", False):
+            dm = self.roles["dm"]
+            dfg.args_phases = dict(
+                budget=int(p["args_phase_bytes"]), dm=dm,
+                dev_cores=[self.roles[r] for r in ("gemm", "simd", "xdma", "dm")],
+                node=lambda k, c, name, kernel, kargs, deps: self.node(k, c, dm, name, kernel, kargs, deps))
         dfg.bingo_compile_dfg(
             app_name=app_name, output_dir=args.output_dir,
             output_file_name=args.output_offload_file_name, extra_include_header_list=extra,
@@ -712,32 +726,54 @@ class ChipletBuild(FabricBase):
                                 gates=p.get("replay_gates"), durations=p.get("replay_durations"),
                                 include_pre=bool(p.get("replay_pre", False)))
 
-    def check_core_order(self, header, x_prefixes):
-        """Every DM core reaches its cluster's x task before its first weight-ring load, in the
-        order the hardware runs it: the descriptor list of the emitted header, which is not the
-        node-id order. A ring load spins on a chunk the prefetcher pushes only after the start,
-        and the start stamp shares the root's DM core: one ring load ahead of it is a deadlock
-        no dependency check sees."""
-        names = {str(n.node_id): n.node_name for n in self.dfg.node_list}
-        ring = {str(n.node_id) for n in self.dfg.node_list
-                if (n.kernel_name or "").endswith("idma_ring_load")}
+    def check_core_order(self, header, x_prefixes=()):
+        """No DM core runs a weight-ring load ahead of a task the prefetcher that pushes the load's chunk waits for, in
+        the order the hardware runs them: the descriptor list of the emitted header, which is not the node-id order. A
+        ring load spins on a chunk the prefetcher pushes only after it starts: one ring load ahead of a task that
+        prefetcher (through the start) waits for, on the same core, is a deadlock no dependency check sees. A load's
+        prefetcher: the one filling its ring's flags whose chunk range holds the load's chunk. (x_prefixes: unused, kept
+        for the drivers that pass it.)"""
+        import networkx as nx
+        g = nx.DiGraph(self.dfg)
+        g.add_edges_from(self.dfg.order_edges)
+
+        def flags(a):
+            f = getattr(a, "flag_addr", None) if a is not None else None
+            return getattr(getattr(f, "base", f), "symbol_name", None) or getattr(f, "name", None)
+        pfs, anc = {}, {}
+        for n in self.dfg.node_list:
+            if isinstance(n.kernel_args, HostBingoKernelWeightPrefetchArgs):
+                pfs.setdefault(n.assigned_chiplet_id, []).append(n)
+                anc[n] = nx.ancestors(g, n)
+
+        def pushers(ld):
+            out = []
+            for p in pfs.get(ld.assigned_chiplet_id, []):
+                a = p.kernel_args
+                if flags(a) is not None and flags(a) != flags(ld.kernel_args):
+                    continue
+                chunk = getattr(ld, "exec_chunk", None)
+                lo, hi = getattr(a, "chunk_lo", 0), getattr(a, "chunk_hi", 0)
+                if chunk is None or (lo <= chunk[1] and (not hi or chunk[1] < hi)):
+                    out.append(p)
+            return out or pfs.get(ld.assigned_chiplet_id, [])[:1]
+        by_id = {str(n.node_id): n for n in self.dfg.node_list}
         txt = open(header).read()
-        seen_x, bad = set(), []
+        loaded, bad = {}, []
         dm = str(self.roles["dm"])
         for chip, nid, ty, cl, core in desc_rows(txt):
             if ty != "0" or core != dm:
                 continue
-            nm = names.get(nid, "")
-            key = (chip, cl)
-            if nm.startswith(tuple(x_prefixes)):
-                seen_x.add(key)
-            elif nid in ring and key not in seen_x:
-                bad.append(f"chip {chip} cluster {cl}: {nm}")
+            n = by_id.get(nid)
+            if n is None:
+                continue
+            seen = loaded.setdefault((chip, cl), set())
+            if (n.kernel_name or "").endswith("idma_ring_load"):
+                seen.update(pushers(n))
+            elif any(n in anc[p] for p in seen):
+                bad.append(f"chip {chip} cluster {cl}: {n.node_name}")
         if bad:
-            raise ValueError(f"a weight load runs before its cluster's x: {bad[:4]}")
-        if len(seen_x) != len(self.chips) * self.NC:
-            raise ValueError(f"the core-order check found the x task on {len(seen_x)} of "
-                             f"{len(self.chips) * self.NC} DM cores (header format changed?)")
+            raise ValueError(f"a weight-ring load runs ahead of a task its prefetcher waits for: {bad[:4]}")
 
     def check_barrier_order(self, header):
         """Every chip's barrier core runs barrier 1, 2, ... in that order (the descriptor order of
