@@ -57,8 +57,8 @@ The keys of the later chunks run after the window (behind its end stamp, last in
 
 L1: each block's static plan overlays the blocks' buffers by lifetime (the steps' tiles take the gaps, a tile's buffers
 its own); every device task's args come in phases of at most params args_phase_bytes, two alternating L1 regions
-(mini_compiler passes/bingo_args_phases.py), cut over the whole layer. Every block has its own symmetric buffer; their lifetimes
-are disjoint, so each sits at offset 0 of its cluster's arena.
+(mini_compiler passes/bingo_args_phases.py), cut over the whole layer. Every block has its own exchange buffer; their
+lifetimes are disjoint, so each sits at offset 0 of its cluster's arena.
 
 L3: the attention's activations (its x landing, the y blocks over it, the keys) and the MoE's / FFN's (its X landing,
 its ring of weight slots) are one region, dl_act (LayerStaging): the second block's prefetchers start after its X
@@ -324,22 +324,22 @@ class MoePart(mom.MBuild):
         # the layer's output, slice by slice, into the root memory chip's HBM (this pass's rows)
         return BingoMemFixedAddr(self.layer.h_out.address + self.base + off, mem_level="HBM")
 
-    def _resid_add(self, g, jl, y, after):
+    def _resid_add(self, cl, jl, y, after):
         """moe_prefill_mc.py's residual add, h read from its HBM region (the glue's, in the output's slice layout)."""
-        k, c = self.chip(g), self.c(g)
+        k, c = self.chip(cl), self.local(cl)
         dm, simd = self.roles["dm"], self.roles["simd"]
-        pc, hb = self.resid["piece"], self.B[g]["hres"]
+        pc, hb = self.resid["piece"], self.B[cl]["hres"]
         prev = after
         for o in range(0, self.SL, pc):
-            war = [self._hres_reader[g]] if self._hres_reader.get(g) is not None else []
-            ld = self.node(k, c, dm, f"res_ld_j{jl}o{o}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+            war = [self._hres_reader[cl]] if self._hres_reader.get(cl) is not None else []
+            ld = self.node(k, c, dm, f"res_ld_j{jl}o{o}", "__snax_bingo_kernel_idma_1d_copy",
                            SnaxBingoKernelIdma1dCopyArgs(
                                BingoMemFixedAddr(self.layer.h_h3.address + self.base + self.y_off(c, jl) + o,
                                                  mem_level="HBM"),
                                hb, pc), war)
-            prev = self.node(k, c, simd, f"res_add_j{jl}o{o}_g{g}", "__snax_bingo_kernel_simd_stream_elementwise",
+            prev = self.node(k, c, simd, f"res_add_j{jl}o{o}", "__snax_bingo_kernel_simd_stream_elementwise",
                              SnaxBingoKernelSimdAddF16Args(y.view(o), hb, y.view(o), pc // 64, 32), [ld, prev])
-            self._hres_reader[g] = prev
+            self._hres_reader[cl] = prev
         return prev
 
     def end_window(self, after):
@@ -464,7 +464,7 @@ class LayerBuild(cm.ChipletBuild):
             aliases.update({f"{t}_rwland": ("dl_act", 0) for t in tags})
         self.st = LayerStaging(self.st, aliases, zero_hbm=("fp_xhbm",) + tuple(f"{t}_xhbm" for t in tags),
                                chip_arrays=self.l3_arena)
-        self.sym_zero = False
+        self.xch_zero = False
         self.phase_starts = []
         self.attn_ends, self.block_checks, self.deferred = [], [], []
 
@@ -879,8 +879,8 @@ class LayerBuild(cm.ChipletBuild):
             for nm, q, off in (("out_a", 0, 0), ("out_m", nt // 2, TB // 2), ("out_b", nt - 1, TB - n)):
                 o = q * TB + off
                 checks.append((nm, self.hbm(self.h_outm[self.mem[self.owner(q)[0]]], o), o16[o:o + n], n))
-        # the hold that keeps the second block's symmetric buffers live to the end
-        self.sym = M.sym
+        # the hold that keeps the second block's exchange buffers live to the end
+        self.xch = M.xch
         cm.ChipletBuild.run_checks(self, checks)
 
     # ---- emission -----------------------------------------------------------------------------------------------
@@ -912,13 +912,13 @@ class LayerBuild(cm.ChipletBuild):
             self._check_l3_arena()
         self.st.finish()
         super().finish(app_name, x_prefixes)
-        # every block's symmetric buffer at offset 0 of its cluster's arena (super checked the second block's)
+        # every block's exchange buffer at offset 0 of its cluster's arena (super checked the second block's)
         pl = self.dfg.static_l1_placement
         for part in [A] + self.mlps:
-            bad = [(k, c, pl[id(h)][1]) for (k, c), h in part.sym.items() if id(h) not in pl or pl[id(h)][1] != 0]
+            bad = [(k, c, pl[id(h)][1]) for (k, c), h in part.xch.items() if id(h) not in pl or pl[id(h)][1] != 0]
             if bad:
-                raise ValueError(f"the {part.TAG} block's symmetric buffers not at offset 0: {bad[:4]}")
-        print(f"[{self.TAG}] symmetric buffers: every block's ({', '.join(p.TAG for p in [A] + self.mlps)}) at offset 0")
+                raise ValueError(f"the {part.TAG} block's exchange buffers not at offset 0: {bad[:4]}")
+        print(f"[{self.TAG}] exchange buffers: every block's ({', '.join(p.TAG for p in [A] + self.mlps)}) at offset 0")
 
     def _place_l3_arena(self):
         """params layer.l3_arena: ARENA_ATTN past the attention's activations in dl_act, the router's weights past the

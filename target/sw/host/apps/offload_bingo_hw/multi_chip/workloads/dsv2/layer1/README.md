@@ -27,7 +27,7 @@ step, the golden and the parameters.
   `bingo_hw_offload_manager_paged` reads them).
 - **One L3 arena** (`layer.l3_arena`). The attention's weight ring and scratch and the router's landing area share one
   region of each chip's L3 with the activations, which the full layer's host image needs to fit.
-- **One symmetric buffer** for both blocks' partials, one L3 region for both weight rings.
+- **One exchange buffer** for both blocks' partials, one L3 region for both weight rings.
 - **The attention's y stored by halves** (`y_store_halves`), so the root holds half of a chunk's y at a time.
 
 The prefill runs are in `target/sim/automation/sweep/llm_layer/dsv2_prefill/runs/`.

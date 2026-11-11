@@ -60,7 +60,7 @@ its own ring. The steps that change:
     glue         as above
     append       the new piece from C00 cluster 1's L1 into its slot of the root's cache shard in HBM (the block's two
                  copies: the key rows, then the value columns), after the second block's last chains
-Every symmetric buffer is zeroed before the window (the block's query and m* flags and its pass-2 arena are read before
+Every exchange buffer is zeroed before the window (the block's query and m* flags and its pass-2 arena are read before
 they are written, as the block alone zeroes them). C00's prefetcher starts once x's multicast is done (the input norm's
 HBM read and x's landing in C00's own L3 run beside no push into that L3). The collectives: x's multicast before every
 x fetch (its flag), so before the block's query, m*, o~ and o8 multicasts and its chains, which the block orders among
@@ -393,7 +393,7 @@ class LayerBuild(cm.ChipletBuild):
         common = {k: v for k, v in p.items() if k not in ("attn", "moe", "ffn", "layer")}
         lp = self.lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
-        self.sym_zero = False
+        self.xch_zero = False
         self.stop = str(lp.get("stop", "full"))
         if self.stop not in ("full", "attn"):
             raise ValueError(f"params layer.stop={self.stop!r}: full or attn")
@@ -447,7 +447,7 @@ class LayerBuild(cm.ChipletBuild):
         attention's x (checked against the block's), y, h, and the rows the second block's data is made on. Stop full:
         the second block's (MoePart's or FfnPart's mem_handles, on h), the output's golden and X's landing area and flag
         of the block; stop attn: the post-attention gain and s_h of the second block's layer. X, checked against the
-        second block's golden X. One symmetric buffer a cluster for both blocks. The layer's own data: x and the
+        second block's golden X. One exchange buffer a cluster for both blocks. The layer's own data: x and the
         output (stop attn: h and X) in the HBM of the root's memory chip, the constants in L3, and C00 cluster 0's L1
         buffers of the input norm, the glue and the final step."""
         R = self.ROOT
@@ -502,15 +502,15 @@ class LayerBuild(cm.ChipletBuild):
         if xm is not None and not np.array_equal(self.x8, np.asarray(xm)):
             raise AssertionError("the glue's X and the second block's golden X differ")
 
-        # ---- one symmetric buffer for both blocks ----------------------------------------------------------------
-        sizes = [A.sym_bytes] + ([self.mlp.NSLC * self.mlp.SL if self.mlp_kind == "moe" else self.mlp.sym_bytes]
+        # ---- one exchange buffer for both blocks ----------------------------------------------------------------
+        sizes = [A.xch_bytes] + ([self.mlp.NSLC * self.mlp.SL if self.mlp_kind == "moe" else self.mlp.xch_bytes]
                                  if self.mlp else [])
-        self.sym_bytes = max(sizes)
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_sym", self.sym_bytes)
+        self.xch_bytes = max(sizes)
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_xch", self.xch_bytes)
                     for k in self.chips for c in range(self.NC)}
-        A.sym = self.sym
+        A.xch = self.xch
         if self.mlp:
-            self.mlp.sym = self.sym
+            self.mlp.xch = self.xch
 
         # ---- the layer's own data -------------------------------------------------------------------------------
         st, T = self.st, self.TAG
@@ -596,15 +596,15 @@ class LayerBuild(cm.ChipletBuild):
         return dict(self.go)
 
     def _sym_zero(self):
-        """ks: every cluster's symmetric buffer zeroed on its xDMA before the window, a chain a chip (as
+        """ks: every cluster's exchange buffer zeroed on its xDMA before the window, a chain a chip (as
         ChipletBuild.setup zeroes the key-split block's alone: its flags and its pass-2 arena are read before they are
         written). Returns each chip's last."""
         xdma, out = self.roles["xdma"], []
         for k in self.chips:
             prev = []
             for c in range(self.NC):
-                prev = [self.node(k, c, xdma, f"sym_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
-                                  SnaxBingoKernelXdmaMemsetArgs(self.sym[(k, c)], self.sym_bytes,
+                prev = [self.node(k, c, xdma, f"xch_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
+                                  SnaxBingoKernelXdmaMemsetArgs(self.xch[(k, c)], self.xch_bytes,
                                                                 SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), prev)]
             out += prev
         return out
@@ -786,31 +786,32 @@ class LayerBuild(cm.ChipletBuild):
     def attn_checks_ks(self):
         """The key-split attention's: m* and o~ on the root, the partial and x's landing (the a_row) on the chip in the
         middle of the fold order, the appended piece in HBM (the head and the tail of its key rows and of its V slot),
-        and the token's y row on C00; stop attn also that chip's query tile (with a second block its symmetric buffer's
+        and the token's y row on C00; stop attn also that chip's query tile (with a second block its exchange buffer's
         head holds that block's slots by the end); attn.checks stages also the root's query row of that chip's head, the
         root's o8 row and the new tile's K."""
-        A, R, g, n = self.attn, self.ROOT, self.attn.gold, 2048
+        A, R, gold, n = self.attn, self.ROOT, self.attn.gold, 2048
         far = A.order[len(A.order) // 2]
         checks = [("mstar", self.stash("mstar", R, 0, A.msrc, fdk.BEAT, [A.m_made]),
-                   np.asarray(g.mstar, np.float16).view(np.uint8), fdk.BEAT),
-                  (f"loc_k{far:02x}", self.stash(f"loc_k{far:02x}", far, 0, A.sv(far, 0, A.OFF_LOC), fdk.PB, []),
-                   g.part_bytes(far).view(np.uint8), fdk.PB),
-                  ("xt", self.stash("xt", R, 0, A.xt, fdk.OB, []), g.xt.view(np.uint8), fdk.OB),
-                  ("x_far", A.l3("xland", chip=far), fdk.a_row(g.x8).view(np.uint8), fdk.XB)]
+                   np.asarray(gold.mstar, np.float16).view(np.uint8), fdk.BEAT),
+                  (f"loc_k{far:02x}", self.stash(f"loc_k{far:02x}", far, 0, A.xch_view(far, 0, A.OFF_LOC), fdk.PB, []),
+                   gold.part_bytes(far).view(np.uint8), fdk.PB),
+                  ("xt", self.stash("xt", R, 0, A.xt, fdk.OB, []), gold.xt.view(np.uint8), fdk.OB),
+                  ("x_far", A.l3("xland", chip=far), fdk.a_row(gold.x8).view(np.uint8), fdk.XB)]
         if self.stop == "attn":
-            checks.insert(0, ("q8", self.stash("q8", far, 0, A.sv(far, 0, A.OFF_X), fdk.QB, []),
-                              g.q8_tile.view(np.uint8), fdk.QB))
+            checks.insert(0, ("q8", self.stash("q8", far, 0, A.xch_view(far, 0, A.OFF_X), fdk.QB, []),
+                              gold.q8_tile.view(np.uint8), fdk.QB))
         if A.checks_kind == "stages":
             h = A.head[far]
             checks += [("qrow", self.stash("qrow", R, 0, A.l3("qrows", fdk.QROW * h), fdk.QROW, []),
-                        g.qrow[h].view(np.uint8), fdk.QROW),
+                        gold.qrow[h].view(np.uint8), fdk.QROW),
                        ("o8row", self.stash("o8row", R, 0, A.l3("oland"), len(A.chips) * fdk.OAR, []),
-                        fdk.a_row(g.o8_all).view(np.uint8), len(A.chips) * fdk.OAR),
-                       ("ktnew", self.stash("ktnew", R, 1, A.b1["kt"], fdk.PK, []), g.piece_k.view(np.uint8), fdk.PK)]
+                        fdk.a_row(gold.o8_all).view(np.uint8), len(A.chips) * fdk.OAR),
+                       ("ktnew", self.stash("ktnew", R, 1, A.b1["kt"], fdk.PK, []), gold.piece_k.view(np.uint8),
+                        fdk.PK)]
         base = A.h_kv[R].address + A.kv_new
         app = A.append if self.stop == "attn" else self.append
-        vt = g.vtile_new.view(np.uint8)
-        for nm, off, img in (("kapp_a", 0, g.piece_k[:n]), ("kapp_b", fdk.PK - n, g.piece_k[fdk.PK - n:]),
+        vt = gold.vtile_new.view(np.uint8)
+        for nm, off, img in (("kapp_a", 0, gold.piece_k[:n]), ("kapp_b", fdk.PK - n, gold.piece_k[fdk.PK - n:]),
                              ("vapp_a", fdk.KB, vt[:n]), ("vapp_b", fdk.KB + fdk.VB - n, vt[fdk.VB - n:])):
             img = np.ascontiguousarray(img).view(np.uint8)
             checks.append((nm, self.stash(nm, R, 0, base + off, n, [app]), img, n))
@@ -1032,9 +1033,9 @@ class LayerBuild(cm.ChipletBuild):
         mlp_free = mlp_routed = 0
         if M is not None:
             add("rest", tree(R, grid), self.xbytes)
-            for g in range(self.G):
-                k = self.chip(g)
-                offs = [o[1] for o in M.chunk_off[g]]
+            for cl in range(self.N_CL):
+                k = self.chip(cl)
+                offs = [o[1] for o in M.chunk_off[cl]]
                 nf = M.n_free[k] if self.mlp_kind == "moe" else len(offs)
                 add("free", route(self.mem[k], k), sum(offs[:nf]))
                 add("routed", route(self.mem[k], k), sum(offs[nf:]))

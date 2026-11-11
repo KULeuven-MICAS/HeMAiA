@@ -145,7 +145,7 @@ class FaData:
         return self.hm.d_port(K @ self.Q8.astype(np.int64).T, self.k_s), V
 
     def golden(self, shards, chips, order):
-        """shards {g: (t0, nt)}, chips {chip: [g, ...]} (its clusters, cluster 0 first),
+        """shards {cl: (t0, nt)}, chips {chip: [cl, ...]} (its clusters, cluster 0 first),
         order: the chips in fold order. -> m per cluster, m*, (O16, l) per cluster, the folded
         O and l, o~^T [512, 32] and xt [32, 512]."""
         hm, fp, simd = self.hm, self.fp, self.hm.simd
@@ -154,15 +154,15 @@ class FaData:
         seed = np.full(BR, -65504.0, dtype=F16)
         a32 = F32(self.a_exp)
         m_c = {}
-        for g, (t0, nt) in shards.items():
+        for cl, (t0, nt) in shards.items():
             m16 = seed
             for j in range(t0, t0 + nt):
                 m16 = lane_max(np.stack([lane_max(self._tile(j)[0]), m16]))
-            m_c[g] = m16
+            m_c[cl] = m16
         # each chip's two clusters, then the chips: the lanewise max is exact in any order
         mstar = lane_max(np.stack([lane_max(np.stack(list(m_c.values()))), seed]))
         O16, lc = {}, {}
-        for g, (t0, nt) in shards.items():
+        for cl, (t0, nt) in shards.items():
             m16, l16, o = mstar, np.zeros(BR, dtype=F16), None
             for j in range(t0, t0 + nt):
                 S16, V = self._tile(j)
@@ -176,12 +176,12 @@ class FaData:
                     np.rint(o.astype(F64) * corr16.astype(F64)[None, :]),
                     -2**31, 2**31 - 1).astype(np.int64) + pv
                 m16 = mnew
-            O16[g], lc[g] = hm.d_port(o, self.k_o), l16
+            O16[cl], lc[cl] = hm.d_port(o, self.k_o), l16
         loc = {}
-        for k, gs in chips.items():
-            acc_o, acc_l = O16[gs[0]], lc[gs[0]]
-            for g in gs[1:]:
-                acc_o, acc_l = fp.add16(acc_o, O16[g]), fp.add16(acc_l, lc[g])
+        for k, cl_k in chips.items():
+            acc_o, acc_l = O16[cl_k[0]], lc[cl_k[0]]
+            for cl in cl_k[1:]:
+                acc_o, acc_l = fp.add16(acc_o, O16[cl]), fp.add16(acc_l, lc[cl])
             loc[k] = (acc_o, acc_l)
         Ot, lt = loc[order[0]]
         for k in order[1:]:

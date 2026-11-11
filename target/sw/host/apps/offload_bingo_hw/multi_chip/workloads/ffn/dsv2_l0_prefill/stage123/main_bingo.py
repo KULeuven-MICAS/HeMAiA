@@ -65,7 +65,7 @@ def gather_check(S, name, items):
         dst = BingoMemSymbol(sym, offset=j * CHK, chip_id=S.ROOT)
         S.check_copies.append(S.node(k, c, S.roles["dm"], f"chk_{name}_{j}", "__snax_bingo_kernel_idma_1d_copy",
                                      SnaxBingoKernelIdma1dCopyArgs(src, dst, CHK), [S.end]))
-    gold = np.concatenate([np.ascontiguousarray(g).view(np.uint8).reshape(-1)[:CHK] for *_, g in items])
+    gold = np.concatenate([np.ascontiguousarray(ref).view(np.uint8).reshape(-1)[:CHK] for *_, ref in items])
     return (name, BingoMemSymbol(sym, chip_id=S.ROOT), gold, len(items) * CHK)
 
 
@@ -78,17 +78,17 @@ def pack_b(d, q):
 
 
 def split_columns(S, p):
-    """{g: (first column, columns)} of the intermediate columns, in whole GEMM column blocks, the root chip's clusters
+    """{cl: (first column, columns)} of the intermediate columns, in whole GEMM column blocks, the root chip's clusters
     taking the smaller share (in the whole block its cluster 0 also runs every gather and stores Y); params root_cols:
     exactly that many on the root's clusters (one number for both, or one each). Sets S.kcols {chip: (first column,
     columns)}: a chip's two clusters' columns, which follow each other."""
     rc = p.get("root_cols", 0)
     rc = [int(v) for v in rc] if isinstance(rc, (list, tuple)) else [int(rc)] * S.NC
-    cols = S.split_columns(S.I, last=S.gs(S.ROOT), unit=BLK,
-                           fixed=dict(zip(S.gs(S.ROOT), rc)) if any(rc) else None)
+    cols = S.split_columns(S.I, last=S.clusters(S.ROOT), unit=BLK,
+                           fixed=dict(zip(S.clusters(S.ROOT), rc)) if any(rc) else None)
     S.kcols = {}
     for k in S.chips:
-        (a0, an), (b0, bn) = (cols[g] for g in S.gs(k))
+        (a0, an), (b0, bn) = (cols[cl] for cl in S.clusters(k))
         if b0 != a0 + an:
             raise ValueError(f"chip {k:02x}'s columns are not contiguous")
         S.kcols[k] = (a0, an + bn)
@@ -151,7 +151,7 @@ class Stage123(cm.ChipletBuild):
         self.D, self.I = d.H, d.I
         self.XB = R * self.D                    # X of the pass, INT8
         self.cols = split_columns(self, self.p)
-        self.chunks = {g: gu_chunks(n, self.BPC, self.first_blocks) for g, (_, n) in self.cols.items()}
+        self.chunks = {cl: gu_chunks(n, self.BPC, self.first_blocks) for cl, (_, n) in self.cols.items()}
         print(f"[{self.TAG}] one pass of {R} tokens; columns per cluster {sorted({n for _, n in self.cols.values()})}; "
               f"gate|up chunks per cluster {sorted({len(c) for c in self.chunks.values()})}")
         self._stage()
@@ -168,35 +168,35 @@ class Stage123(cm.ChipletBuild):
         self.h_x = {m: st.put_hbm(f"{T}_s123x_m{m:02x}", x, mem_chip=(m >> 4, m & 15))
                     for m in sorted(set(self.mem.values()))}
         self.img, self.chunk_off, self.sdup = {}, {}, {}
-        for g, (c0, n) in self.cols.items():
-            k = self.chip(g)
+        for cl, (c0, n) in self.cols.items():
+            k = self.chip(cl)
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
             parts, offs, sc, off = [], [], [], 0
-            for b0, nb_ in self.chunks[g]:
+            for b0, nb_ in self.chunks[cl]:
                 gate = np.arange(c0 + BLK * b0, c0 + BLK * (b0 + nb_))
                 cols = np.concatenate([gate, self.I + gate])
                 parts.append(pack_b(d, d.gu_q[:, cols]))
                 offs.append((off, parts[-1].size))
                 off += parts[-1].size
                 sc.append(lay.to_d(np.tile(d.gu_f[cols].astype(np.float16), (16, 1)), d.mesh))
-            self.img[g] = st.put_hbm(f"{T}_w_g{g}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
-            self.chunk_off[g] = offs
+            self.img[cl] = st.put_hbm(f"{T}_w_cl{cl}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
+            self.chunk_off[cl] = offs
             s = np.concatenate(sc).astype(np.float16)
-            self.sdup[g] = (st.put_hbm(f"{T}_sgu_g{g}", s.view(np.int8), mem_chip=loc), s.nbytes)
+            self.sdup[cl] = (st.put_hbm(f"{T}_sgu_cl{cl}", s.view(np.int8), mem_chip=loc), s.nbytes)
 
     def _buffers(self):
         """Per cluster: X, two gate|up output buffers (a chunk's GEMM writes one while the other's is dequantised), the
         factors, A16 in the D and in the A layout, and the chip's A8 (both clusters' columns)."""
         R, MT, T = self.ROWS, self.MT, self.TAG
         self.xbuf, self.gbuf, self.sbuf, self.a16d, self.a16a, self.a8 = {}, {}, {}, {}, {}, {}
-        for g, (_, n) in self.cols.items():
-            l1 = lambda name, nb: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_{name}", nb)
-            self.xbuf[g] = l1("x0", self.XB)
-            self.gbuf[g] = [l1(f"g{b}", MT * 2 * self.BPC * TILE) for b in range(2)]
-            self.sbuf[g] = l1("sgu", self.sdup[g][1])
-            self.a16d[g] = l1("a16d", R * n * 2)
-            self.a16a[g] = l1("a16a", R * n * 2)
-            self.a8[g] = l1("a8_0", R * self.kcols[self.chip(g)][1])
+        for cl, (_, n) in self.cols.items():
+            l1 = lambda name, nb: self.cx(cl).l1(f"{T}_{name}", nb)
+            self.xbuf[cl] = l1("x0", self.XB)
+            self.gbuf[cl] = [l1(f"g{b}", MT * 2 * self.BPC * TILE) for b in range(2)]
+            self.sbuf[cl] = l1("sgu", self.sdup[cl][1])
+            self.a16d[cl] = l1("a16d", R * n * 2)
+            self.a16a[cl] = l1("a16a", R * n * 2)
+            self.a8[cl] = l1("a8_0", R * self.kcols[self.chip(cl)][1])
 
     def pre_window(self):
         """{chip: [task]} the start waits for: every cluster's factors and X into L1 from its memory chip's HBM. params
@@ -205,52 +205,53 @@ class Stage123(cm.ChipletBuild):
         per_chip = bool(self.p.get("start_per_chip", False))
         pre = {k: [] for k in self.chips}
         self.sgu_pre = {}
-        for g in sorted(range(self.G), key=lambda g: (self.chip(g), -self.c(g))) if per_chip else range(self.G):
-            k, c = self.chip(g), self.c(g)
-            h, nb = self.sdup[g]
-            t = self.node(k, c, dm, f"sgu_load_g{g}", "__snax_bingo_kernel_idma_1d_copy",
-                          SnaxBingoKernelIdma1dCopyArgs(h.address, self.sbuf[g], nb), pre[k][-1:] if per_chip else [])
-            self.sgu_pre[g] = t
+        by_chip = lambda cl: (self.chip(cl), -self.local(cl))
+        for cl in sorted(range(self.N_CL), key=by_chip) if per_chip else range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
+            h, nb = self.sdup[cl]
+            t = self.node(k, c, dm, f"sgu_load", "__snax_bingo_kernel_idma_1d_copy",
+                          SnaxBingoKernelIdma1dCopyArgs(h.address, self.sbuf[cl], nb), pre[k][-1:] if per_chip else [])
+            self.sgu_pre[cl] = t
             pre[k] = [t] if per_chip else pre[k] + [t]
         self.x_pre = {}
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
             src = self.h_x[self.mem[k]].address
-            self.x_pre[g] = self.node(k, c, dm, f"x_pre_g{g}", "__snax_bingo_kernel_idma_1d_copy",
-                                      SnaxBingoKernelIdma1dCopyArgs(src, self.xbuf[g], self.XB), [])
-            pre[k].append(self.x_pre[g])
+            self.x_pre[cl] = self.node(k, c, dm, f"x_pre", "__snax_bingo_kernel_idma_1d_copy",
+                                      SnaxBingoKernelIdma1dCopyArgs(src, self.xbuf[cl], self.XB), [])
+            pre[k].append(self.x_pre[cl])
         return pre
 
-    def _load(self, g, j, deps=()):
-        """Gate|up chunk j of cluster g into the next slab: a ring load behind the chunk's push. Returns (the load, the
+    def _load(self, cl, j, deps=()):
+        """Gate|up chunk j of cluster cl into the next slab: a ring load behind the chunk's push. Returns (the load, the
         slab index, the slab)."""
-        k, c = self.chip(g), self.c(g)
-        ls = self.ls[g]
-        off, nb = self.chunk_off[g][j]
+        k, c = self.chip(cl), self.local(cl)
+        ls = self.ls[cl]
+        off, nb = self.chunk_off[cl][j]
         si, slab, war = ls.take(nb)
         ld, _ = ls.rings.load_chunk(lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
-                                    f"Ld_c{j}_i0_g{g}", src=self.img[g].address + off, nbytes=nb, slab=slab, war=war,
+                                    f"Ld_c{j}_i0", src=self.img[cl].address + off, nbytes=nb, slab=slab, war=war,
                                     deps=deps, dm=self.roles["dm"])
         return ld, si, slab
 
     def build(self):
-        """The task graph (task names without their _k<chip> suffix; g a cluster, j its gate|up chunk, m a row tile, b a
-        post block); every cluster runs the same chain on its own columns:
+        """The task graph (task names without their _k<chip>_cl<c> suffix; j its gate|up chunk, m a row tile, b a post
+        block); every cluster runs the same chain on its own columns:
 
-          before the window     sgu_load_g<g>, x_pre_g<g>          DM: the factors and X, HBM -> L1
+          before the window     sgu_load, x_pre                    DM: the factors and X, HBM -> L1
                                           |
                                       S0_start  ---------->  weight_prefetch_k<chip>   host: its memory chip pushes
                                           :                                            the chunks into the L3 ring
-          every chunk j         Ld_c<j>_i0_g<g>                    DM: the chunk, ring slot -> L1 slab, once landed
+          every chunk j         Ld_c<j>_i0                         DM: the chunk, ring slot -> L1 slab, once landed
                                           |
-                                gu_c<j>_i0[b<b>]_g<g>              GEMM: X x the chunk's gate and up columns, FP16
+                                gu_c<j>_i0[b<b>]                   GEMM: X x the chunk's gate and up columns, FP16
                                           |
-                                deq_c<j>m<m>_i0_g<g>               SIMD, row tile by row tile: dequantise,
-                                swi_c<j>m<m>_i0_g<g>               then SwiGLU into A16 (D layout)
+                                deq_c<j>m<m>_i0                    SIMD, row tile by row tile: dequantise,
+                                swi_c<j>m<m>_i0                    then SwiGLU into A16 (D layout)
           the last chunk, per post block b, after its last SwiGLU:
-                                d2a_i0b<b>_g<g>                    xDMA: A16, D -> A layout
-                                quant_i0b<b>m<m>_g<g>              SIMD: FP16 -> INT8, into the chip's A8
-                                a8_push_m<m>_g<g>                  DM: the row tile into the other cluster's A8
+                                d2a_i0b<b>                         xDMA: A16, D -> A layout
+                                quant_i0b<b>m<m>                   SIMD: FP16 -> INT8, into the chip's A8
+                                a8_push_m<m>                       DM: the row tile into the other cluster's A8
                                           |
                    every a8_push  ->  S1_end  ->  pf_report, chk_a8_<n>  ->  Check_pf_a8
 
@@ -265,38 +266,38 @@ class Stage123(cm.ChipletBuild):
         # params gather_relay_only: a dep-tag cell of the xDMA tasks over budget relays its leftover edges
         if self.p.get("gather_relay_only", False):
             self.dfg.relay_not_order_cores = [self.roles["xdma"]]
-        self.sym_zero = False                   # no symmetric buffer
+        self.xch_zero = False                   # no exchange buffer
         self.setup(extra=self.pre_window())
-        self.ex_push = {g: [] for g in range(self.G)}
-        self.a16_writers = {g: {} for g in range(self.G)}     # cluster -> row tile -> its SwiGLUs, every chunk's
-        for g in range(self.G):
-            self._gate_up(g)
-        self.end_window([t for g in range(self.G) for t in self.ex_push[g]])
+        self.ex_push = {cl: [] for cl in range(self.N_CL)}
+        self.a16_writers = {cl: {} for cl in range(self.N_CL)}     # cluster -> row tile -> its SwiGLUs, every chunk's
+        for cl in range(self.N_CL):
+            self._gate_up(cl)
+        self.end_window([t for cl in range(self.N_CL) for t in self.ex_push[cl]])
         items = []
         for k, c in checked(self.chips):
-            g = self.gs(k)[c]
+            cl = self.clusters(k)[c]
             kc0, kn = self.kcols[k]
             a8 = self.d.layout.to_a(self.d.a8[:self.ROWS, kc0:kc0 + kn], self.d.mesh)
-            items += [(k, c, self.a8[g], a8), (k, c, self.a8[g].view(a8.size - CHK), a8.reshape(-1)[-CHK:])]
+            items += [(k, c, self.a8[cl], a8), (k, c, self.a8[cl].view(a8.size - CHK), a8.reshape(-1)[-CHK:])]
         self.run_checks([gather_check(self, "a8", items)])
 
-    def _gate_up(self, g):
-        """Cluster g's gate|up chunks in turn: each a GEMM over X as it lands (into the gate|up buffer the chunk before
+    def _gate_up(self, cl):
+        """Cluster cl's gate|up chunks in turn: each a GEMM over X as it lands (into the gate|up buffer the chunk before
         last used, once its reader is done), dequantised and through SwiGLU row tile by row tile into A16; the last
         chunk's per post block (_tail)."""
-        k, c = self.chip(g), self.c(g)
+        k, c = self.chip(cl), self.local(cl)
         gemm, simd = self.roles["gemm"], self.roles["simd"]
-        n = self.cols[g][1]
-        nb, xb, x = n // BLK, self.xbuf[g], self.x_pre[g]
+        n = self.cols[cl][1]
+        nb, xb, x = n // BLK, self.xbuf[cl], self.x_pre[cl]
         reader = [None, None]                   # each gate|up buffer's readers: the SwiGLUs of the chunk that wrote it
         soff = 0                                # the chunk's factors in sbuf
-        last_j = len(self.chunks[g]) - 1
-        for j, (b0, nb_) in enumerate(self.chunks[g]):
+        last_j = len(self.chunks[cl]) - 1
+        for j, (b0, nb_) in enumerate(self.chunks[cl]):
             # the first load follows X and the factors into L1: every GEMM follows its load and every load the one
             # before, so each dequantise reads the factors after they landed
-            ld, si, slab = self._load(g, j, [x, self.sgu_pre[g]] if j == 0 else ())
+            ld, si, slab = self._load(cl, j, [x, self.sgu_pre[cl]] if j == 0 else ())
             b = j % 2
-            gb, war = self.gbuf[g][b], list(reader[b] or [])
+            gb, war = self.gbuf[cl][b], list(reader[b] or [])
             nblk, half = 2 * nb_, nb_ * TILE        # its gate blocks and its up blocks; one row block's gate tiles
             kargs = dict(input_B_addr=slab, input_C_addr=0, K=self.D // 4, N=nblk, array_shape_idx=0, transpose_A=0,
                          transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=INT4_B_LAYOUT_PAIRED,
@@ -305,89 +306,89 @@ class Stage123(cm.ChipletBuild):
             if j == 0 or last:                  # one GEMM per X block (first) or per post block (last): its row tiles
                 nsp = POST_BLOCKS if last else X_BLOCKS
                 mb = self.MT // nsp
-                gms = [self.node(k, c, gemm, f"gu_c{j}_i0b{bb}_g{g}", "__snax_bingo_kernel_gemm_full",
+                gms = [self.node(k, c, gemm, f"gu_c{j}_i0b{bb}", "__snax_bingo_kernel_gemm_full",
                                  SnaxBingoKernelGemmFullArgs(input_A_addr=xb.view(bb * mb * (self.XB // self.MT)),
                                                              output_D_addr=gb.view(bb * mb * 2 * half), M=mb, **kargs),
                                  [ld, x] + war)
                        for bb in range(nsp)]
                 gm_of = lambda m, gms=gms, mb=mb: gms[m // mb]
             else:
-                gms = [self.node(k, c, gemm, f"gu_c{j}_i0_g{g}", "__snax_bingo_kernel_gemm_full",
+                gms = [self.node(k, c, gemm, f"gu_c{j}_i0", "__snax_bingo_kernel_gemm_full",
                                  SnaxBingoKernelGemmFullArgs(input_A_addr=xb, output_D_addr=gb, M=self.MT, **kargs),
                                  [ld, x] + war)]
                 gm_of = lambda m, gm=gms[0]: gm
-            self.ls[g].release(si, gms)         # every GEMM that reads the slab
+            self.ls[cl].release(si, gms)        # every GEMM that reads the slab
             if last:
-                reader[b] = self._tail(g, j, b0, nb_, gb, soff, gm_of)
+                reader[b] = self._tail(cl, j, b0, nb_, gb, soff, gm_of)
                 continue
             el = nblk * 256
-            dqs = [self.node(k, c, simd, f"deq_c{j}m{m}_i0_g{g}", "__snax_bingo_kernel_simd_stream_elementwise",
-                             SnaxBingoKernelSimdMulF16Args(gb.view(m * 2 * half), self.sbuf[g].view(soff),
+            dqs = [self.node(k, c, simd, f"deq_c{j}m{m}_i0", "__snax_bingo_kernel_simd_stream_elementwise",
+                             SnaxBingoKernelSimdMulF16Args(gb.view(m * 2 * half), self.sbuf[cl].view(soff),
                                                            gb.view(m * 2 * half), el // 32, 32), [gm_of(m)])
                    for m in range(self.MT)]
             soff += el * 2
-            reader[b] = [self.node(k, c, simd, f"swi_c{j}m{m}_i0_g{g}", "__snax_bingo_kernel_simd_swiglu_f16_f16",
+            reader[b] = [self.node(k, c, simd, f"swi_c{j}m{m}_i0", "__snax_bingo_kernel_simd_swiglu_f16_f16",
                                    SnaxBingoKernelSimdSwigluF16F16Args(gb.view(m * 2 * half),
                                                                        gb.view(m * 2 * half + half),
-                                                                       self.a16d[g].view((m * nb + b0) * TILE), 1,
+                                                                       self.a16d[cl].view((m * nb + b0) * TILE), 1,
                                                                        nb_ * 256), [dqs[m]])
                          for m in range(self.MT)]
             for m, sw in enumerate(reader[b]):
-                self.a16_writers[g].setdefault(m, []).append(sw)
+                self.a16_writers[cl].setdefault(m, []).append(sw)
 
-    def _tail(self, g, j, b0, nb_, gb, soff, gm_of):
+    def _tail(self, cl, j, b0, nb_, gb, soff, gm_of):
         """The last chunk's dequantise and SwiGLU row tile by row tile; behind each post block's last SwiGLU its reshape
         (xDMA) and the previous block's quantise (SIMD, whose reshape is done by then). Returns the SwiGLUs, the
         readers of the gate|up buffer."""
-        k, c, simd = self.chip(g), self.c(g), self.roles["simd"]
-        nb, half, el = self.cols[g][1] // BLK, nb_ * TILE, 2 * nb_ * 256
+        k, c, simd = self.chip(cl), self.local(cl), self.roles["simd"]
+        nb, half, el = self.cols[cl][1] // BLK, nb_ * TILE, 2 * nb_ * 256
         pmb = self.MT // POST_BLOCKS
         rs, sws = [], []
         for m in range(self.MT):
-            dq = self.node(k, c, simd, f"deq_c{j}m{m}_i0_g{g}", "__snax_bingo_kernel_simd_stream_elementwise",
-                           SnaxBingoKernelSimdMulF16Args(gb.view(m * 2 * half), self.sbuf[g].view(soff),
+            dq = self.node(k, c, simd, f"deq_c{j}m{m}_i0", "__snax_bingo_kernel_simd_stream_elementwise",
+                           SnaxBingoKernelSimdMulF16Args(gb.view(m * 2 * half), self.sbuf[cl].view(soff),
                                                          gb.view(m * 2 * half), el // 32, 32), [gm_of(m)])
-            sw = self.node(k, c, simd, f"swi_c{j}m{m}_i0_g{g}", "__snax_bingo_kernel_simd_swiglu_f16_f16",
+            sw = self.node(k, c, simd, f"swi_c{j}m{m}_i0", "__snax_bingo_kernel_simd_swiglu_f16_f16",
                            SnaxBingoKernelSimdSwigluF16F16Args(gb.view(m * 2 * half), gb.view(m * 2 * half + half),
-                                                               self.a16d[g].view((m * nb + b0) * TILE), 1, nb_ * 256),
+                                                               self.a16d[cl].view((m * nb + b0) * TILE), 1, nb_ * 256),
                            [dq])
             sws.append(sw)
-            self.a16_writers[g].setdefault(m, []).append(sw)
+            self.a16_writers[cl].setdefault(m, []).append(sw)
             if (m + 1) % pmb == 0:
                 bb = m // pmb
-                rs.append(self._d2a(g, bb))
+                rs.append(self._d2a(cl, bb))
                 if bb:
-                    self._quant(g, bb - 1, rs[bb - 1])
-        self._quant(g, POST_BLOCKS - 1, rs[-1])
+                    self._quant(cl, bb - 1, rs[bb - 1])
+        self._quant(cl, POST_BLOCKS - 1, rs[-1])
         return sws
 
-    def _d2a(self, g, b):
+    def _d2a(self, cl, b):
         """Post block b of A16 (its row tiles, every column) reshaped to the A layout on the xDMA, after every SwiGLU
         that wrote those rows (every chunk's columns)."""
-        k, c, n = self.chip(g), self.c(g), self.cols[g][1]
+        k, c, n = self.chip(cl), self.local(cl), self.cols[cl][1]
         mb, nb = self.MT // POST_BLOCKS, n // BLK
         m0 = b * mb
-        return self.node(k, c, self.roles["xdma"], f"d2a_i0b{b}_g{g}", "__snax_bingo_kernel_xdma_6d",
-                         d_to_a_args(self.d.mesh, mb, nb, n // 4, self.a16d[g].view(m0 * nb * TILE),
-                                     self.a16a[g].view(m0 * 16 * n * 2)),
-                         [w for m in range(m0, m0 + mb) for w in self.a16_writers[g][m]])
+        return self.node(k, c, self.roles["xdma"], f"d2a_i0b{b}", "__snax_bingo_kernel_xdma_6d",
+                         d_to_a_args(self.d.mesh, mb, nb, n // 4, self.a16d[cl].view(m0 * nb * TILE),
+                                     self.a16a[cl].view(m0 * 16 * n * 2)),
+                         [w for m in range(m0, m0 + mb) for w in self.a16_writers[cl][m]])
 
-    def _quant(self, g, b, rs):
+    def _quant(self, cl, b, rs):
         """Post block b of A16a quantised, one row tile at a time, into this cluster's run of the chip's A8, each run
-        then copied into the other cluster's A8 (self.ex_push[g])."""
-        k, c, n = self.chip(g), self.c(g), self.cols[g][1]
+        then copied into the other cluster's A8 (self.ex_push[cl])."""
+        k, c, n = self.chip(cl), self.local(cl), self.cols[cl][1]
         mb = self.MT // POST_BLOCKS
         kn = self.kcols[k][1]
-        other = self.gs(k)[1 - c]
+        other = self.clusters(k)[1 - c]
         coff = 16 * (kn - n) if c else 0        # this cluster's columns sit after the first cluster's
         for m in range(b * mb, (b + 1) * mb):
             off = m * 16 * kn + coff
-            q = self.node(k, c, self.roles["simd"], f"quant_i0b{b}m{m}_g{g}", "__snax_bingo_kernel_simd_fp16_to_int8",
-                          SnaxBingoKernelSimdFp16ToInt8Args(self.a16a[g].view(m * 16 * n * 2), self.a8[g].view(off),
+            q = self.node(k, c, self.roles["simd"], f"quant_i0b{b}m{m}", "__snax_bingo_kernel_simd_fp16_to_int8",
+                          SnaxBingoKernelSimdFp16ToInt8Args(self.a16a[cl].view(m * 16 * n * 2), self.a8[cl].view(off),
                                                             beats=simd_beats(16 * n * 2), rows=1,
                                                             inv_scale_f32bits=self.d.inv_a), [rs])
-            cp = SnaxBingoKernelIdma1dCopyArgs(self.a8[g].view(off), self.a8[other].view(off), 16 * n)
-            self.ex_push[g].append(self.node(k, c, self.roles["dm"], f"a8_push_m{m}_g{g}",
+            cp = SnaxBingoKernelIdma1dCopyArgs(self.a8[cl].view(off), self.a8[other].view(off), 16 * n)
+            self.ex_push[cl].append(self.node(k, c, self.roles["dm"], f"a8_push_m{m}",
                                              "__snax_bingo_kernel_idma_1d_copy", cp, [q]))
 
     def finish(self, app_name, x_prefixes=("x_pre_",)):

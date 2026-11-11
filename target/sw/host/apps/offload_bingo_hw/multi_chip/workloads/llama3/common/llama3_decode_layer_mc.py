@@ -74,9 +74,9 @@ llama3_decode_ks_mc.py's (KsBuild: chip i holds key tile i, its cluster c the qu
 root and multicast as two halves, the row maxima met by one ChainGather and m* multicast, the partials reduced by a
 second ChainGather, o multicast, W_O by output columns; each chip's W_O pushes wait for the reduce). What changes:
     x            the same input norm and a_row multicast, into the block's landing area lk_xland behind lk_xtflag
-    set-up       every cluster's symmetric buffer of the block zeroed before the window (its q halves, new-key tiles and
+    set-up       every cluster's exchange buffer of the block zeroed before the window (its q halves, new-key tiles and
                  partials rely on zero elsewhere), and held to the layer's end beside the FFN's (the remote writers and
-                 readers name it by address): the two sit at one offset on every chip, check_symmetric proves it
+                 readers name it by address): the two sit at one offset on every chip, check_xch_offsets proves it
     y            the root's L3 row lk_yrow, behind the block's y wait
     append       made at the layer's end (KsBuild.kv_append): the new key's chip's cluster 1 writes the new K and V^T
                  tiles into its memory chip's HBM behind the FFN's last Y copies (stop attn: behind the y wait)
@@ -271,9 +271,9 @@ class LayerBuild(cm.ChipletBuild):
         if self.ring_alias:
             self.st = AliasStaging(self.st, {f"{Part.TAG}_wring_slots": f"{self.TAG}_wring",
                                              "fd_wring_slots": f"{self.TAG}_wring"})
-        self.sym_zero = False
+        self.xch_zero = False
         self.part_checks, self.ffn, self.ffn_pre = [], None, []
-        self.sym_more, self.kv_app = [], []      # attn ks: the attention's symmetric buffers, its append
+        self.xch_more, self.kv_app = [], []      # attn ks: the attention's exchange buffers, its append
         self.seed = int(common.get("seed", 1))
         llama3_data.register_ffn(seed=self.seed)
 
@@ -290,8 +290,8 @@ class LayerBuild(cm.ChipletBuild):
         """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
         (AttnPart's or AttnPartKs's mem_handles), then the golden on its data: x (its input norm checked against the
         block's row), x8 in a_row, h, and the post-attention gain. Stop full: the FFN's (FfnPart's mem_handles, on h),
-        its gain checked against the layer's, s_h, X and the output's golden, its symmetric buffers held to the end;
-        stop attn: s_h and X from h. X's image (x_arow: in a_row); attn ks: the attention's symmetric buffers held to
+        its gain checked against the layer's, s_h, X and the output's golden, its exchange buffers held to the end;
+        stop attn: s_h and X from h. X's image (x_arow: in a_row); attn ks: the attention's exchange buffers held to
         the end too. The layer's own data in the HBM of the root's memory chip (x, the constants, the output or stop
         attn's h and X) and the root's cluster-0 L1 buffers."""
         # ---- the attention, and the glue's golden ------------------------------------------------------------------
@@ -319,7 +319,7 @@ class LayerBuild(cm.ChipletBuild):
             self.x8_ffn = np.asarray(F.d.hq[0], dtype=np.int8)
             self.dn_f = np.asarray(F.d.dn_f, dtype=F16)
             self.out16 = fp.add16(fp.mul16(F.gold["y_raw"][0], self.dn_f), self.h16)
-            self.sym = dict(F.sym)              # the FFN's symmetric buffers: at offset 0, held to the end
+            self.xch = dict(F.xch)              # the FFN's exchange buffers: at offset 0, held to the end
         else:
             xg = fp.mul16(hm.rmsnorm(self.h16[None, :]), self.ffn_gain[None, :])
             self.s_h = hm.QScale.for_amax(float(np.max(np.abs(xg.astype(np.float32)))))
@@ -329,11 +329,11 @@ class LayerBuild(cm.ChipletBuild):
         if self.ffn is not None and self.XN != self.ffn.XR:
             raise AssertionError(f"the glue's X is {self.XN} B, the FFN lands {self.ffn.XR} B")
         if self.ks:
-            # the attention's symmetric buffers, zeroed before the window and held to the end with the layer's
+            # the attention's exchange buffers, zeroed before the window and held to the end with the layer's
             if self.ffn is None:
-                self.sym = dict(A.sym)
+                self.xch = dict(A.xch)
             else:
-                self.sym_more = [dict(A.sym)]
+                self.xch_more = [dict(A.xch)]
 
         # ---- the layer's own data: in the root memory chip's HBM, and the root's cluster-0 buffers -----------------
         st, T, R = self.st, self.TAG, self.ROOT
@@ -399,13 +399,13 @@ class LayerBuild(cm.ChipletBuild):
                self._r("xdma", "ar_zero", "__snax_bingo_kernel_xdma_memset",
                        SnaxBingoKernelXdmaMemsetArgs(b["ar16"], 2 * self.RB, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), [])]
         if self.ks:
-            # the key-split block's symmetric buffers zeroed, as ChipletBuild.setup zeroes a block's own
+            # the key-split block's exchange buffers zeroed, as ChipletBuild.setup zeroes a block's own
             A = self.attn
             for k in self.chips:
                 prev = []
                 for c in range(self.NC):
-                    prev = [self.node(k, c, self.roles["xdma"], f"sym_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
-                                      SnaxBingoKernelXdmaMemsetArgs(A.sym[(k, c)], A.sym_bytes,
+                    prev = [self.node(k, c, self.roles["xdma"], f"xch_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
+                                      SnaxBingoKernelXdmaMemsetArgs(A.xch[(k, c)], A.xch_bytes,
                                                                     SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), prev)]
                 pre += prev
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])] + pre
@@ -496,34 +496,34 @@ class LayerBuild(cm.ChipletBuild):
 
     def run_checks(self, checks):
         """ChipletBuild.run_checks: the root's host compares the checks one at a time, then holds keep the layer's
-        symmetric buffers live to the end; attn ks with the FFN holds the attention's too (sym_more)."""
-        if not self.sym_more:
+        exchange buffers live to the end; attn ks with the FFN holds the attention's too (xch_more)."""
+        if not self.xch_more:
             return super().run_checks(checks)
-        g0 = self.cx_chip(self.ROOT)
+        rcx = self.cx_chip(self.ROOT)
         prev = [self.report] + self.check_copies
         for name, got, golden, nb in checks:
             a = np.ascontiguousarray(golden)
             gh = self.st.put(f"{self.TAG}_gold_{name}", "uint8_t", a.view(np.uint8).reshape(-1))
-            prev = [vchecks.check_bytes(g0, f"Check_{self.TAG}_{name}", golden=gh, got=got,
+            prev = [vchecks.check_bytes(rcx, f"Check_{self.TAG}_{name}", golden=gh, got=got,
                                         nbytes=nb, after=prev, label=f"{self.TAG}_{name}")]
-        for i, sym in enumerate([self.sym] + self.sym_more):
-            for (k, c), h in sym.items():
-                self.node(k, c, self.roles["dm"], f"sym_hold{i or ''}_c{c}", "__snax_bingo_kernel_wait_flags",
+        for i, xch in enumerate([self.xch] + self.xch_more):
+            for (k, c), h in xch.items():
+                self.node(k, c, self.roles["dm"], f"xch_hold{i or ''}_c{c}", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(h, 0, 0), prev if k == self.ROOT else [self.end])
 
-    def check_symmetric(self):
-        """ChipletBuild's (the layer's symmetric buffers at offset 0 of each cluster's arena); attn ks with the FFN, the
+    def check_xch_offsets(self):
+        """ChipletBuild's (the layer's exchange buffers at offset 0 of each cluster's arena); attn ks with the FFN, the
         attention's at one offset on every chip for each cluster index (its remote addresses are the root's)."""
-        super().check_symmetric()
+        super().check_xch_offsets()
         pl = self.dfg.static_l1_placement
-        for sym in self.sym_more:
+        for xch in self.xch_more:
             for c in range(self.NC):
-                offs = {pl[id(sym[(k, c)])][1] for k in self.chips}
+                offs = {pl[id(xch[(k, c)])][1] for k in self.chips}
                 if len(offs) != 1:
-                    raise ValueError(f"the attention's symmetric buffers of cluster {c} at {len(offs)} offsets: "
+                    raise ValueError(f"the attention's exchange buffers of cluster {c} at {len(offs)} offsets: "
                                      f"{sorted(offs)[:4]}")
-            print(f"[{self.TAG}] symmetric buffers: the FFN's at offset 0, the attention's at "
-                  f"{sorted({pl[id(h)][1] for h in sym.values()})} on every chip")
+            print(f"[{self.TAG}] exchange buffers: the FFN's at offset 0, the attention's at "
+                  f"{sorted({pl[id(h)][1] for h in xch.values()})} on every chip")
 
     # ---- the layer ----------------------------------------------------------------------------------------------------
     def build(self):
@@ -597,20 +597,20 @@ class LayerBuild(cm.ChipletBuild):
         A, F = self.attn, self.ffn
         ring = {}
         for blk, S in (("attn", A), ("ffn", F)):
-            for (g, j), (_, ld) in (S.slot.items() if S is not None else ()):
-                ring.setdefault((blk, self.chip(g)), []).append((j, ld))
+            for (cl, j), (_, ld) in (S.slot.items() if S is not None else ()):
+                ring.setdefault((blk, self.chip(cl)), []).append((j, ld))
         parts = {}
         for k in self.chips:
             head, mid, wo = A.pf_parts[k]
             at = ring[("attn", k)]
             parts[k, "W_q"] = (head, [ld for j, ld in at if j < A.NQC])
-            parts[k, "cache"] = (A.ucast[k], [t for g in self.gs(k) for t in (A.kc_ready[g], A.vc_ready[g])])
+            parts[k, "cache"] = (A.ucast[k], [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
             parts[k, "k/v"] = (mid, [ld for j, ld in at if A.NQC <= j < A.WO0])
             parts[k, "W_O"] = (wo, [ld for j, ld in at if j >= A.WO0])
-            want = {"attn": sum(len(A.chunk_off[g]) for g in self.gs(k))}
+            want = {"attn": sum(len(A.chunk_off[cl]) for cl in self.clusters(k))}
             if F is not None:
                 parts[k, "FFN"] = (F.prefetch[k], [ld for _, ld in ring[("ffn", k)]])
-                want["ffn"] = sum(len(F.chunk_off[g]) for g in self.gs(k))
+                want["ffn"] = sum(len(F.chunk_off[cl]) for cl in self.clusters(k))
             for blk, n in want.items():
                 if len(ring[(blk, k)]) != n:
                     raise ValueError(f"chip {k:#04x}: {len(ring[(blk, k)])} {blk} ring loads of its {n} chunks")
@@ -674,11 +674,11 @@ class LayerBuild(cm.ChipletBuild):
         ahead = {L: 0 for L in links}
         for k in self.chips:
             L = self.link[k]
-            att[L] += sum(n for g in self.gs(k) for _, n in A.chunk_off[g]) + A.P * A.PB
+            att[L] += sum(n for cl in self.clusters(k) for _, n in A.chunk_off[cl]) + A.P * A.PB
             if F is not None:
-                for g in self.gs(k):
-                    ffn[L] += sum(n for _, n in F.chunk_off[g])
-                    ahead[L] += sum(n for _, n in F.chunk_off[g][:F.n_slots])
+                for cl in self.clusters(k):
+                    ffn[L] += sum(n for _, n in F.chunk_off[cl])
+                    ahead[L] += sum(n for _, n in F.chunk_off[cl][:F.n_slots])
         att[self.link[self.ROOT]] += 2 * self.RB                      # x in, the output row out (the constants load before)
         MiB = 2 ** 20
         tot = lambda dct: sum(dct.values())

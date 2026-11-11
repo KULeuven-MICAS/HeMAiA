@@ -9,7 +9,7 @@ the checks and the emission. The workloads (ffn, moe, fa, and the llama3 and dsv
 their layer between `setup()` and `finish()`. It sits next to fabric.py (FabricBase, its base); a
 caller puts util/sim/multichip and mini_compiler on sys.path before importing it:
 
-    S = Workload(args, p, plat, hw)     # its data, S.make_sym(...), S.make_rings(...)
+    S = Workload(args, p, plat, hw)     # its data, S.make_xch(...), S.make_rings(...)
     go = S.setup()                      # the setup, the start stamp, the first barrier
     xin = S.broadcast(...)              # the token into every cluster
     ...                                 # the layer: per cluster a partial over every output
@@ -160,7 +160,7 @@ class ChipletBuild(FabricBase):
         NC = self.NC = int(plat["num_clusters_per_chiplet"])
         if NC != 2:
             raise ValueError(f"{NC} clusters per chip: the local fold adds two")
-        self.G = len(chips) * NC
+        self.N_CL = len(chips) * NC
         self.ROOT = chips[0]
         mems = {int(m["id"]): int(m.get("num_sys_idma", 4)) for m in plat.get("mem_chips", [])}
         if not mems:
@@ -183,7 +183,7 @@ class ChipletBuild(FabricBase):
         self.order = fold_cycle(chips, self.ROOT)   # the fold order: the root, then the cycle
 
         # ---- the graph ------------------------------------------------------------------
-        self.sym = {}
+        self.xch = {}
         self.checks = []                       # (name, got handle, golden array, bytes)
         if shared is not None:
             for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark", "ring_scheds"):
@@ -256,43 +256,43 @@ class ChipletBuild(FabricBase):
         return self.order[1:] + self.order[:1]
 
     def split_columns(self, inter, clusters=None, last=(), unit=PAIR, fixed=None):
-        """{g: (c0, n)}: `inter` columns over `clusters` (default every cluster) in whole units (default
+        """{cl: (c0, n)}: `inter` columns over `clusters` (default every cluster) in whole units (default
         pairs), the units left over after an even split going one per link in turn (a link carries the
         weights of every chip behind it), each to the nearest chip's first cluster first; the
         clusters in `last` get a leftover unit only after every other cluster has one. `fixed`
-        {g: columns}: those clusters get exactly that many, the rest is split over the others."""
-        clusters = list(range(self.G)) if clusters is None else list(clusters)
+        {cl: columns}: those clusters get exactly that many, the rest is split over the others."""
+        clusters = list(range(self.N_CL)) if clusters is None else list(clusters)
         fixed = dict(fixed or {})
         if inter % unit or any(v % unit for v in fixed.values()):
             raise ValueError(f"{inter} intermediate columns are not whole {unit}-column units")
         if fixed:
-            rest = self.split_columns(inter - sum(fixed.values()), [g for g in clusters if g not in fixed],
+            rest = self.split_columns(inter - sum(fixed.values()), [cl for cl in clusters if cl not in fixed],
                                       last, unit)
-            n = {g: (fixed[g] if g in fixed else rest[g][1]) for g in clusters}
+            n = {cl: (fixed[cl] if cl in fixed else rest[cl][1]) for cl in clusters}
             out, c0 = {}, 0
-            for g in sorted(clusters):
-                out[g] = (c0, n[g])
-                c0 += n[g]
+            for cl in sorted(clusters):
+                out[cl] = (c0, n[cl])
+                c0 += n[cl]
             return out
-        units, G = inter // unit, len(clusters)
-        base, extra = divmod(units, G)
-        links = sorted(set(self.link[self.chip(g)] for g in clusters))
-        per_link = {L: sorted({self.chip(g) for g in clusters if self.link[self.chip(g)] == L},
+        units, n_cl = inter // unit, len(clusters)
+        base, extra = divmod(units, n_cl)
+        links = sorted(set(self.link[self.chip(cl)] for cl in clusters))
+        per_link = {L: sorted({self.chip(cl) for cl in clusters if self.link[self.chip(cl)] == L},
                               key=lambda k: (dist(k, self.mem[k]), k)) for L in links}
         order = []
         for c in range(self.NC):
             for i in range(max(len(v) for v in per_link.values())):
                 for L in links:
                     if i < len(per_link[L]):
-                        g = self.chips.index(per_link[L][i]) * self.NC + c
-                        if g in clusters:
-                            order.append(g)
-        order = [g for g in order if g not in last] + [g for g in order if g in last]
-        n = {g: unit * (base + (1 if g in order[:extra] else 0)) for g in clusters}
+                        cl = self.chips.index(per_link[L][i]) * self.NC + c
+                        if cl in clusters:
+                            order.append(cl)
+        order = [cl for cl in order if cl not in last] + [cl for cl in order if cl in last]
+        n = {cl: unit * (base + (1 if cl in order[:extra] else 0)) for cl in clusters}
         out, c0 = {}, 0
-        for g in sorted(clusters):
-            out[g] = (c0, n[g])
-            c0 += n[g]
+        for cl in sorted(clusters):
+            out[cl] = (c0, n[cl])
+            c0 += n[cl]
         return out
 
     # ---- nodes ----------------------------------------------------------------------------
@@ -366,14 +366,14 @@ class ChipletBuild(FabricBase):
         return added
 
     # ---- buffers --------------------------------------------------------------------------
-    def make_sym(self, nbytes, xb, dst_lead=0):
-        """Every cluster's symmetric buffer (`nbytes`), and the buffers the reduce needs where
+    def make_xch(self, nbytes, xb, dst_lead=0):
+        """Every cluster's exchange buffer (`nbytes`), and the buffers the reduce needs where
         no fixed address is: cluster 1's partial handed to cluster 0, the root's dst (the
         folded output) and its two pull slots, `xb` bytes each. `dst_lead`: bytes kept below
         dst in its buffer (a SIMD kernel's latch beat, for a reader of dst)."""
-        self.sym_bytes = int(nbytes)
+        self.xch_bytes = int(nbytes)
         # "AAAA_" sorts before every other handle: offset 0 of each cluster's static arena
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_sym", self.sym_bytes)
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_xch", self.xch_bytes)
                     for k in self.chips for c in range(self.NC)}
         self.p1 = {k: self.cx_chip(k).at(0).l1(f"{self.TAG}_p1", xb) for k in self.chips}
         self.dst_lead = int(dst_lead)
@@ -390,9 +390,9 @@ class ChipletBuild(FabricBase):
     def make_streams(self):
         wbuf = int(self.p.get("w_buffers", 3))
         # stream_name: the slabs' handle names (a layer's blocks each name their own)
-        self.ls = [LoadStream(self.cx(g), self.c(g), nbytes=self.chunk, nbuf=wbuf,
+        self.ls = [LoadStream(self.cx(cl), self.local(cl), nbytes=self.chunk, nbuf=wbuf,
                               name=getattr(self, "stream_name", "stream"))
-                   for g in range(self.G)]
+                   for cl in range(self.N_CL)]
 
     @staticmethod
     def chunk_trailer():
@@ -442,11 +442,11 @@ class ChipletBuild(FabricBase):
                 n_slots=n_slots, slot_bytes=self.slot_bytes, batch=self.ring_batch,
                 batch_routed=int(wr.get("batch_routed", 0)), head=self.ring_head,
                 batch_head=self.ring_batch_head)
-            gs = self.gs(k)
+            cl_k = self.clusters(k)
             if self.ring_trailer:
                 rings.plain_trailer = True
-            for g in gs:
-                self.ls[g].rings = rings
+            for cl in cl_k:
+                self.ls[cl].rings = rings
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
@@ -459,21 +459,21 @@ class ChipletBuild(FabricBase):
 
     # ---- the phases -----------------------------------------------------------------------
     def setup(self, extra=None):
-        """Every symmetric buffer zeroed (no flag reads X), the barrier state too with barriers,
+        """Every exchange buffer zeroed (no flag reads X), the barrier state too with barriers,
         the start stamp, and what each chip's window opens with: the start (edge) or the
         chip's first barrier, which every chip parks in before the root stamps the start and
         arrives last. `extra` {chip: [task]}: more of a chip's setup the start waits for.
         Returns {chip: go task}; the prefetchers follow it."""
         xdma = self.roles["xdma"]
         setup_end = {}
-        # sym_zero False: a workload whose every read of a symmetric buffer follows a write of it in the
+        # xch_zero False: a workload whose every read of an exchange buffer follows a write of it in the
         # same run skips the zeroing, so the buffer is live only from its first writer on
-        zero = getattr(self, "sym_zero", True)
+        zero = getattr(self, "xch_zero", True)
         for k in self.chips:
             prev = None
             for c in range(self.NC if zero else 0):
-                prev = self.node(k, c, xdma, f"sym_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
-                                 SnaxBingoKernelXdmaMemsetArgs(self.sym[(k, c)], self.sym_bytes,
+                prev = self.node(k, c, xdma, f"xch_zero_c{c}", "__snax_bingo_kernel_xdma_memset",
+                                 SnaxBingoKernelXdmaMemsetArgs(self.xch[(k, c)], self.xch_bytes,
                                                                SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO),
                                  prev)
             if self.sync == "barrier":
@@ -497,7 +497,7 @@ class ChipletBuild(FabricBase):
 
     def broadcast(self, name, src, nbytes, off, off_flag, after, clusters=None, value=1,
                   src_ready=None):
-        """The root's `src` (`nbytes`) at `off` of the symmetric buffer of every cluster in
+        """The root's `src` (`nbytes`) at `off` of the exchange buffer of every cluster in
         `clusters` (default all, by index): bcast_l1, one D2D multicast per cluster index
         (sequential: one multicast in flight) and a landed flag at `off_flag`, each cluster
         waiting on its own; pull, every cluster's DM core reading the root's copy. `after`
@@ -514,14 +514,14 @@ class ChipletBuild(FabricBase):
             for c in cls:
                 put = self.node(R, 0, dm, f"{name}_bput_c{c}", "__snax_bingo_kernel_idma_put_flagged",
                                 SnaxBingoKernelIdmaPutFlaggedArgs(
-                                    src, self.sv(R, c, off), nbytes, self.sv(R, c, off_flag),
+                                    src, self.xch_view(R, c, off), nbytes, self.xch_view(R, c, off_flag),
                                     value=value, bcast=True, also_here=True),
                                 [after[R]] + puts[-1:])
                 puts.append(put)
                 self.bcast_puts = list(puts)
                 for k in self.chips:
                     w = self.node(k, c, dm, f"{name}_wait_c{c}", "__snax_bingo_kernel_wait_flags",
-                                  SnaxBingoKernelWaitFlagsArgs(self.sv(k, c, off_flag), 1, value),
+                                  SnaxBingoKernelWaitFlagsArgs(self.xch_view(k, c, off_flag), 1, value),
                                   [after[k]] if k != R else [put])
                     if k != R:
                         self.dfg.bingo_add_order_edge(put, w)
@@ -539,29 +539,29 @@ class ChipletBuild(FabricBase):
             s = src if k == R else self.remote_of(src)
             for c in cls:
                 out[(k, c)] = self.node(k, c, dm, f"{name}_pull_c{c}", "__snax_bingo_kernel_idma_1d_copy",
-                                        SnaxBingoKernelIdma1dCopyArgs(s, self.sv(k, c, off), nbytes),
+                                        SnaxBingoKernelIdma1dCopyArgs(s, self.xch_view(k, c, off), nbytes),
                                         list(dict.fromkeys(deps[k])))
         return out
 
     def remote_of(self, src):
         """The root's copy of `src` as another chip names it: a staged symbol by its chip, a
-        root symmetric-buffer view by the root's address."""
+        root exchange-buffer view by the root's address."""
         if isinstance(src, BingoMemSymbol):
             return BingoMemSymbol(src.symbol_name, offset=src.offset, chip_id=self.ROOT)
         h, off = (src.base, src.offset) if hasattr(src, "base") else (src, 0)
         return remote(self.ROOT, f"((uint64_t)({h.get_c_var_name()}) + {off})")
 
     def reduce(self, parts, xb):
-        """`parts` {g: Port, FP16 [xb bytes] in cluster g's L1}: each chip's clusters added on its
-        cluster 0 (into OFF_LOC of its symmetric buffer), then the chips' sums folded into the
+        """`parts` {cl: Port, FP16 [xb bytes] in cluster cl's L1}: each chip's clusters added on its
+        cluster 0 (into OFF_LOC of its exchange buffer), then the chips' sums folded into the
         root's dst in the fold order: one ChainGather (reduce chain) or the root's pulls and
         SIMD adds (reduce root), in fold_order(). Sets self.reduce_end."""
         dm, xdma, simd = self.roles["dm"], self.roles["xdma"], self.roles["simd"]
         rows = xb // 64
         loc = {}
         for k in self.chips:
-            gs = self.gs(k)
-            ports = [parts[g] for g in gs]
+            cl_k = self.clusters(k)
+            ports = [parts[cl] for cl in cl_k]
             prev = None
             for i, pt in enumerate(ports[1:], start=1):
                 prev = self.node(k, i, dm, f"part_push_c{i}", "__snax_bingo_kernel_idma_1d_copy",
@@ -569,7 +569,7 @@ class ChipletBuild(FabricBase):
                                  list(pt.ends))
             loc[k] = self.node(k, 0, simd, "loc_add", "__snax_bingo_kernel_simd_stream_elementwise",
                                SnaxBingoKernelSimdAddF16Args(ports[0].handle, self.p1[k],
-                                                             self.sv(k, 0, self.OFF_LOC), rows, 32),
+                                                             self.xch_view(k, 0, self.OFF_LOC), rows, 32),
                                list(ports[0].ends) + ([prev] if prev is not None else []))
         self.loc_nodes = dict(loc)
         R, others = self.ROOT, self.order[1:]
@@ -578,7 +578,7 @@ class ChipletBuild(FabricBase):
             loc = {k: b[R] for k in self.chips}
         if self.reduce_impl == "chain":
             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                remote, R, 0, others, src=self.sx(0, self.OFF_LOC), dst=self.dst_expr(), size=xb,
+                remote, R, 0, others, src=self.xch_addr(0, self.OFF_LOC), dst=self.dst_expr(), size=xb,
                 junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.dst_buf])
             gth = self.node(R, 0, xdma, "y_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                             list(dict.fromkeys(loc[k] for k in self.chips)))
@@ -588,11 +588,11 @@ class ChipletBuild(FabricBase):
         for i, k in enumerate(others):
             slot = self.slots.view((i % 2) * xb)
             cp = self.node(R, 0, dm, f"y_pull{i}", "__snax_bingo_kernel_idma_1d_copy",
-                           SnaxBingoKernelIdma1dCopyArgs(remote(k, self.sx(0, self.OFF_LOC)),
+                           SnaxBingoKernelIdma1dCopyArgs(remote(k, self.xch_addr(0, self.OFF_LOC)),
                                                          slot, xb),
                            [loc[k]] + pulls[-1:] + ([adds[i - 2]] if i >= 2 else []))
             pulls.append(cp)
-            a_in = self.sv(R, 0, self.OFF_LOC) if i == 0 else self.dst
+            a_in = self.xch_view(R, 0, self.OFF_LOC) if i == 0 else self.dst
             add = self.node(R, 0, simd, f"y_add{i}", "__snax_bingo_kernel_simd_stream_elementwise",
                             SnaxBingoKernelSimdAddF16Args(a_in, slot, self.dst, rows, 32),
                             [cp, loc[R]] + adds[-1:])
@@ -621,16 +621,16 @@ class ChipletBuild(FabricBase):
 
     def run_checks(self, checks):
         """checks: (name, got symbol, golden array, bytes), compared byte for byte by the root's
-        host, one at a time; then the hold that keeps every symmetric buffer live to the end."""
-        g0 = self.cx_chip(self.ROOT)
+        host, one at a time; then the hold that keeps every exchange buffer live to the end."""
+        rcx = self.cx_chip(self.ROOT)
         prev = [self.report] + self.check_copies
         for name, got, golden, nb in checks:
             a = np.ascontiguousarray(golden)
             gh = self.st.put(f"{self.TAG}_gold_{name}", "uint8_t", a.view(np.uint8).reshape(-1))
-            prev = [vchecks.check_bytes(g0, f"Check_{self.TAG}_{name}", golden=gh, got=got,
+            prev = [vchecks.check_bytes(rcx, f"Check_{self.TAG}_{name}", golden=gh, got=got,
                                         nbytes=nb, after=prev, label=f"{self.TAG}_{name}")]
-        for (k, c), h in self.sym.items():
-            self.node(k, c, self.roles["dm"], f"sym_hold_c{c}", "__snax_bingo_kernel_wait_flags",
+        for (k, c), h in self.xch.items():
+            self.node(k, c, self.roles["dm"], f"xch_hold_c{c}", "__snax_bingo_kernel_wait_flags",
                       SnaxBingoKernelWaitFlagsArgs(h, 0, 0), prev if k == self.ROOT else [self.end])
 
     # ---- emission -------------------------------------------------------------------------
@@ -721,7 +721,7 @@ class ChipletBuild(FabricBase):
             output_file_name=args.output_offload_file_name, extra_include_header_list=extra,
             static_l1=static_l1, desc_list_in_narrow_spm=True,
             desc_list_in_image=bool(p.get("desc_in_image", False)))
-        self.check_symmetric()
+        self.check_xch_offsets()
         header = os.path.join(args.output_dir, args.output_offload_file_name)
         self.check_core_order(header, x_prefixes)
         self.check_barrier_order(header)
@@ -832,16 +832,16 @@ class ChipletBuild(FabricBase):
             raise ValueError(f"barriers out of program order on {len(bad)} chip(s): "
                              f"{dict(list(bad.items())[:3])}; {len(seen)} chips seen")
 
-    def check_symmetric(self):
-        """Every cluster's symmetric buffer at offset 0 of its static arena."""
+    def check_xch_offsets(self):
+        """Every cluster's exchange buffer at offset 0 of its static arena."""
         pl = getattr(self.dfg, "static_l1_placement", None)
         if not pl:
-            raise ValueError("the level-2 workloads need static_l1: the symmetric buffers' "
+            raise ValueError("the level-2 workloads need static_l1: the exchange buffers' "
                              "addresses")
-        bad = [(k, c, pl[id(h)][1]) for (k, c), h in self.sym.items()
+        bad = [(k, c, pl[id(h)][1]) for (k, c), h in self.xch.items()
                if id(h) not in pl or pl[id(h)][1] != 0]
         if bad:
-            raise ValueError(f"symmetric buffers not at offset 0: {bad[:4]}")
+            raise ValueError(f"exchange buffers not at offset 0: {bad[:4]}")
 
 
 L1, L3, HBM = MemLevel.L1, MemLevel.L3, MemLevel.HBM

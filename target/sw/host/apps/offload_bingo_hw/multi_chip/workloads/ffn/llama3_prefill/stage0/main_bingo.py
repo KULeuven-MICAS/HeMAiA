@@ -57,7 +57,7 @@ def gather_check(S, name, items):
         dst = BingoMemSymbol(sym, offset=j * CHK, chip_id=S.ROOT)
         S.check_copies.append(S.node(k, c, S.roles["dm"], f"chk_{name}_{j}", "__snax_bingo_kernel_idma_1d_copy",
                                      SnaxBingoKernelIdma1dCopyArgs(src, dst, CHK), [S.end]))
-    gold = np.concatenate([np.ascontiguousarray(g).view(np.uint8).reshape(-1)[:CHK] for *_, g in items])
+    gold = np.concatenate([np.ascontiguousarray(ref).view(np.uint8).reshape(-1)[:CHK] for *_, ref in items])
     return (name, BingoMemSymbol(sym, chip_id=S.ROOT), gold, len(items) * CHK)
 
 
@@ -106,27 +106,27 @@ class Stage0(cm.ChipletBuild):
         one = np.zeros(8, dtype=np.uint64)
         one[0] = 1
         self.h_one = st.put_hbm(f"{T}_one", one.view(np.int8), mem_chip=(m >> 4, m & 15))   # the flags' value
-        self.xbuf = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_x0", self.XB) for g in range(self.G)}
+        self.xbuf = {cl: self.cx(cl).l1(f"{T}_x0", self.XB) for cl in range(self.N_CL)}
 
     def build(self):
-        """The task graph (task names without their _k<chip> suffix; i a pass, b a row block of X, g a cluster):
+        """The task graph (task names without their _k<chip>_cl<c> suffix; i a pass, b a row block of X):
 
                                  S0_start                         the start stamp: root chip, cluster 0, DM core
                      _______________|________________
                     |                                |
-             x_hbm_bcast_i0  - - - - - - - - > x_wait_i0b0_g<g>   left: the root's host; right: every cluster g's
+             x_hbm_bcast_i0  - - - - - - - - > x_wait_i0b0        left: the root's host; right: every cluster's
                     |         (order edge)           |            DM core, one chain a cluster
-             x_hbm_bcast_i1                    x_wait_i0b1_g<g>
+             x_hbm_bcast_i1                    x_wait_i0b1
                     |                                |
                    ...                              ...
                     |                                |
-             P_x_bcast_done                    x_wait_i0b3_g<g>
+             P_x_bcast_done                    x_wait_i0b3
                     |________________________________|
                                     |
                                   S1_end  ->  pf_report, chk_x_<n>  ->  Check_pf_x  ->  Check_pf_x_land_last
 
         x_hbm_bcast_i<i>: the root's host queues its memory chip's push engine to multicast pass i's X, a tile (a row
-        block) at a time, into every chip's L3, each tile followed by its flag. x_wait_i0b<b>_g<g>: cluster g's DM core
+        block) at a time, into every chip's L3, each tile followed by its flag. x_wait_i0b<b>: each cluster's DM core
         spins on tile b's flag, then copies the tile into its L1. The order edges (from the first multicast to every
         wait) only dispatch the multicast ahead of the waits; the flag is the real dependency. P_x_bcast_done: a join
         point after the last multicast. After S1_end the root's host prints the window (pf_report), the checked
@@ -148,14 +148,14 @@ class Stage0(cm.ChipletBuild):
         # every cluster's DM core copies the first pass's blocks, one after the other, each behind its tile's flag (the
         # multicast's flag says the tile has landed: an order edge, not a dependency)
         ends = []
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
             prev = [start]
             for b in range(X_BLOCKS):
                 off = b * self.XT
-                t = self.node(k, c, dm, f"x_wait_i0b{b}_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
+                t = self.node(k, c, dm, f"x_wait_i0b{b}", "__snax_bingo_kernel_idma_fetch_flagged",
                               SnaxBingoKernelIdmaFetchFlaggedArgs(BingoMemSymbol(f"{T}_xland", offset=off),
-                                                                  self.xbuf[g].view(off), self.XT,
+                                                                  self.xbuf[cl].view(off), self.XT,
                                                                   BingoMemSymbol(f"{T}_xtflag", offset=64 * b), 1, 1),
                               prev)
                 self.dfg.bingo_add_order_edge(bc[0], t)
@@ -166,7 +166,7 @@ class Stage0(cm.ChipletBuild):
         x0 = self.x_img[:self.XB]
         items = []
         for k, c in checked(self.chips):
-            xb = self.xbuf[self.gs(k)[c]]
+            xb = self.xbuf[self.clusters(k)[c]]
             items += [(k, c, xb, x0), (k, c, xb.view(self.XB - CHK), x0[-CHK:])]
         last = self.chips[-1]
         self.run_checks([gather_check(self, "x", items),

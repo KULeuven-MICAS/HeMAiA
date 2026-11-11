@@ -51,7 +51,7 @@ A build runs `__init__` (params, data, golden, staging, rings, buffers), then `b
 | X | X from HBM: the multicast into every chip's L3 and each cluster's copy into L1 |
 | gate\|up and the A8 | the GEMMs over the weight stream, dequantise and SwiGLU, the D -> A reshape, the quantise and the A8 exchange |
 | the prefill | `build()`: the passes, the down slices, the ChainGathers into the root and the stores; `_passes_kernel` for the ablation's kernel-by-kernel rung |
-| checks | the window, the symmetric buffers, the golden checks (`_checks`), the hazard check |
+| checks | the window, the exchange buffers, the golden checks (`_checks`), the hazard check |
 
 ## Who uses it
 

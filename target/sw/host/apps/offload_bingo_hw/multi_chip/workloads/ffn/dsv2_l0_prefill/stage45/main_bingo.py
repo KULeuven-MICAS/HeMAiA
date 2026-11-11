@@ -10,7 +10,7 @@ the down slices over the weight stream, the ChainGathers into the root and the s
 The chip's A8 (both clusters' columns) is in every cluster's L1 before the window (copied from an image of it in its
 memory chip's HBM). A chip's two clusters split the down projection by output columns: each takes the chip's
 intermediate columns for its half of the outputs, slice by slice as its weight chunks land (the first slice one GEMM per
-post block), into an output slot of its symmetric buffer, so a slot holds the chip's whole partial; one ChainGather a
+post block), into an output slot of its exchange buffer, so a slot holds the chip's whole partial; one ChainGather a
 group of slices through every chip, each hop's xDMA adding its partial in transit, folds them into the root's fold slot,
 and the root stores each group to Y_raw in its L3 a gather later. The window ends with the last stores. Checks: Y_raw
 (its first and last 2 KiB) against the golden of the device's arithmetic in the fold order.
@@ -62,7 +62,7 @@ def gather_check(S, name, items):
         dst = BingoMemSymbol(sym, offset=j * CHK, chip_id=S.ROOT)
         S.check_copies.append(S.node(k, c, S.roles["dm"], f"chk_{name}_{j}", "__snax_bingo_kernel_idma_1d_copy",
                                      SnaxBingoKernelIdma1dCopyArgs(src, dst, CHK), [S.end]))
-    gold = np.concatenate([np.ascontiguousarray(g).view(np.uint8).reshape(-1)[:CHK] for *_, g in items])
+    gold = np.concatenate([np.ascontiguousarray(ref).view(np.uint8).reshape(-1)[:CHK] for *_, ref in items])
     return (name, BingoMemSymbol(sym, chip_id=S.ROOT), gold, len(items) * CHK)
 
 
@@ -75,17 +75,17 @@ def pack_b(d, q):
 
 
 def split_columns(S, p):
-    """{g: (first column, columns)} of the intermediate columns, in whole GEMM column blocks, the root chip's clusters
+    """{cl: (first column, columns)} of the intermediate columns, in whole GEMM column blocks, the root chip's clusters
     taking the smaller share (in the whole block its cluster 0 also runs every gather and stores Y); params root_cols:
     exactly that many on the root's clusters (one number for both, or one each). Sets S.kcols {chip: (first column,
     columns)}: a chip's two clusters' columns, which follow each other."""
     rc = p.get("root_cols", 0)
     rc = [int(v) for v in rc] if isinstance(rc, (list, tuple)) else [int(rc)] * S.NC
-    cols = S.split_columns(S.I, last=S.gs(S.ROOT), unit=BLK,
-                           fixed=dict(zip(S.gs(S.ROOT), rc)) if any(rc) else None)
+    cols = S.split_columns(S.I, last=S.clusters(S.ROOT), unit=BLK,
+                           fixed=dict(zip(S.clusters(S.ROOT), rc)) if any(rc) else None)
     S.kcols = {}
     for k in S.chips:
-        (a0, an), (b0, bn) = (cols[g] for g in S.gs(k))
+        (a0, an), (b0, bn) = (cols[cl] for cl in S.clusters(k))
         if b0 != a0 + an:
             raise ValueError(f"chip {k:02x}'s columns are not contiguous")
         S.kcols[k] = (a0, an + bn)
@@ -123,7 +123,7 @@ class Stage45(cm.ChipletBuild):
         # params dn_cols: output columns a down slice (whole pairs of column tiles)
         self.DNC = int(p.get("dn_cols", 512))
         # params chain_group: one ChainGather carries this many consecutive slices of a cluster (back to back in its
-        # output slots) into a fold slot of the root; out_slots: the output slots of each cluster's symmetric buffer the
+        # output slots) into a fold slot of the root; out_slots: the output slots of each cluster's exchange buffer the
         # slices go through (slice j into slot j mod out_slots), so the down GEMMs run that many slices ahead of the
         # serial gathers
         self.chain_group = int(p.get("chain_group", 1))
@@ -140,7 +140,7 @@ class Stage45(cm.ChipletBuild):
         (_dn_out_split); the golden Y, added in the fold order the ChainGathers add in; _stage(): each chip's A8 and
         every cluster's down chunks into HBM, Y_raw's place in the root's L3; make_streams(): each cluster's L1 weight
         slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
-        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's symmetric buffer, the root's fold
+        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's exchange buffer, the root's fold
         slots, every cluster's A8."""
         d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
         R, GS = self.ROWS, self.chain_group
@@ -191,9 +191,9 @@ class Stage45(cm.ChipletBuild):
             w = 0
             for k in self.chips:
                 kn = self.kcols[k][1]
-                for c, g in enumerate(self.gs(k)):
+                for c, cl in enumerate(self.clusters(k)):
                     out = S if c == 0 else self.D - S
-                    w = max(w, mt * kd * 2 * self.cols[g][1] // BLK + mt * (kn // 4) * out // BLK)
+                    w = max(w, mt * kd * 2 * self.cols[cl][1] // BLK + mt * (kn // 4) * out // BLK)
             return w
         S = min(range(u, self.D, u), key=lambda v: (worst(v), abs(v - self.D // 2)))
 
@@ -222,65 +222,65 @@ class Stage45(cm.ChipletBuild):
             self.h_a8[k] = st.put_hbm(f"{T}_s45a8_k{k:02x}", a8.reshape(-1), mem_chip=(m >> 4, m & 15))
         st.put_zeros(f"{T}_y", "uint8_t", self.YB, preload=True)
         self.img, self.chunk_off = {}, {}
-        for g in self.cols:
-            k = self.chip(g)
+        for cl in self.cols:
+            k = self.chip(cl)
             kc0, kn = self.kcols[k]
-            parts = [pack_b(d, d.dn_q[kc0:kc0 + kn, o0:o0 + w]) for o0, w in self.dn_sl[self.c(g)]]
+            parts = [pack_b(d, d.dn_q[kc0:kc0 + kn, o0:o0 + w]) for o0, w in self.dn_sl[self.local(cl)]]
             offs, off = [], 0
             for b in parts:
                 offs.append((off, b.size))
                 off += b.size
-            self.img[g] = st.put_hbm(f"{T}_w_g{g}", np.concatenate(parts).astype(np.int8),
+            self.img[cl] = st.put_hbm(f"{T}_w_cl{cl}", np.concatenate(parts).astype(np.int8),
                                      mem_chip=(self.mem[k] >> 4, self.mem[k] & 15))
-            self.chunk_off[g] = offs
+            self.chunk_off[cl] = offs
 
     def _buffers(self):
-        """Every cluster's symmetric buffer (out_slots output slots of a slice), the root clusters' fold buffers (two
+        """Every cluster's exchange buffer (out_slots output slots of a slice), the root clusters' fold buffers (two
         fold slots of chain_group slices), and every cluster's copy of its chip's A8."""
         T, R = self.TAG, self.ROOT
         self.SLICE = self.ROWS * max(w for v in self.dn_sl.values() for _, w in v) * 2
-        self.sym_bytes = self.out_slots * self.SLICE
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{T}_sym", self.sym_bytes)
+        self.xch_bytes = self.out_slots * self.SLICE
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{T}_xch", self.xch_bytes)
                     for k in self.chips for c in range(self.NC)}
         self.p1c = {c: self.cx_chip(R).at(c).l1(f"{T}_p1c", 2 * self.chain_group * self.SLICE) for c in range(self.NC)}
-        self.a8 = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_a8_0", self.ROWS * self.kcols[self.chip(g)][1])
-                   for g in range(self.G)}
+        self.a8 = {cl: self.cx(cl).l1(f"{T}_a8_0", self.ROWS * self.kcols[self.chip(cl)][1])
+                   for cl in range(self.N_CL)}
 
     def pre_window(self):
         """{chip: [task]} the start waits for: every cluster's copy of its chip's A8 from its memory chip's HBM."""
         pre = {k: [] for k in self.chips}
         self.a8_pre = {}
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
-            self.a8_pre[g] = self.node(k, c, self.roles["dm"], f"a8_pre_g{g}", "__snax_bingo_kernel_idma_1d_copy",
-                                       SnaxBingoKernelIdma1dCopyArgs(self.h_a8[k].address, self.a8[g],
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
+            self.a8_pre[cl] = self.node(k, c, self.roles["dm"], f"a8_pre", "__snax_bingo_kernel_idma_1d_copy",
+                                       SnaxBingoKernelIdma1dCopyArgs(self.h_a8[k].address, self.a8[cl],
                                                                      self.ROWS * self.kcols[k][1]), [])
-            pre[k].append(self.a8_pre[g])
+            pre[k].append(self.a8_pre[cl])
         return pre
 
-    def _load(self, g, jl):
-        """Down chunk jl of cluster g into the next slab: a ring load behind the chunk's push. Returns (the load, the
+    def _load(self, cl, jl):
+        """Down chunk jl of cluster cl into the next slab: a ring load behind the chunk's push. Returns (the load, the
         slab index, the slab)."""
-        k, c = self.chip(g), self.c(g)
-        ls = self.ls[g]
-        off, nb = self.chunk_off[g][jl]
+        k, c = self.chip(cl), self.local(cl)
+        ls = self.ls[cl]
+        off, nb = self.chunk_off[cl][jl]
         si, slab, war = ls.take(nb)
         ld, _ = ls.rings.load_chunk(lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
-                                    f"Ld_c{jl}_i0_g{g}", src=self.img[g].address + off, nbytes=nb, slab=slab, war=war,
+                                    f"Ld_c{jl}_i0", src=self.img[cl].address + off, nbytes=nb, slab=slab, war=war,
                                     dm=self.roles["dm"])
         return ld, si, slab
 
     def build(self):
-        """The task graph (task names without their _k<chip> suffix; g a cluster, c its index on its chip, j a down
+        """The task graph (task names without their _k<chip>_cl<c> suffix; c a cluster's index on its chip, j a down
         slice, s a fold slot); every cluster runs the same chain on its own output columns:
 
-          before the window     a8_pre_g<g>                        DM: the chip's A8, HBM -> L1
+          before the window     a8_pre                             DM: the chip's A8, HBM -> L1
                                      |
                                  S0_start  ---------->  weight_prefetch_k<chip>   host: its memory chip pushes the
                                      :                                            chunks into the L3 ring
-          every slice j         Ld_c<j>_i0_g<g>                    DM: the chunk, ring slot -> L1 slab, once landed
+          every slice j         Ld_c<j>_i0                         DM: the chunk, ring slot -> L1 slab, once landed
                                      |
-                                dn_c<j>_i0[b<b>]_g<g>              GEMM: A8 x the chunk, the chip's FP16 partial of
+                                dn_c<j>_i0[b<b>]                   GEMM: A8 x the chunk, the chip's FP16 partial of
                                      |                             the slice, into output slot j % out_slots
           every chain_group slices, per c, on the root chip:
                                 y_chain_j<j>                       cluster c's xDMA: one ChainGather through every
@@ -292,8 +292,8 @@ class Stage45(cm.ChipletBuild):
         The first slice's GEMM is one a post block of A8 rows (POST_BLOCKS), the others one GEMM each. A down GEMM
         waits for the gather that last read its output slot; a gather waits for its group's down GEMMs on every chip,
         the previous gather and the stores that last read its fold slot. A group's stores are made after the next
-        group's gathers, so the root's DM core stores one gather behind. After the checks every cluster's sym_hold keeps
-        its symmetric buffer live to the end; check_hazards() (in finish) proves the reused slots safe."""
+        group's gathers, so the root's DM core stores one gather behind. After the checks every cluster's xch_hold keeps
+        its exchange buffer live to the end; check_hazards() (in finish) proves the reused slots safe."""
         R, dm, xdma, gemm = self.ROOT, self.roles["dm"], self.roles["xdma"], self.roles["gemm"]
         # dep-tag relays of the gathers go to the SIMD cores first, idle in the down phase, each serving that one
         # gather, so a gather waits for its own slices' GEMMs only
@@ -303,13 +303,13 @@ class Stage45(cm.ChipletBuild):
         # ordering them, so no down GEMM waits for an earlier gather
         if self.p.get("gather_relay_only", False):
             self.dfg.relay_not_order_cores = [xdma]
-        # the symmetric buffers are not zeroed: every slot is written whole by its down GEMMs before it is read
-        self.sym_zero = False
+        # the exchange buffers are not zeroed: every slot is written whole by its down GEMMs before it is read
+        self.xch_zero = False
         self.setup(extra=self.pre_window())
         SL, others, GS = self.SLICE, self.order[1:], self.chain_group
         h = self.NDN // self.NC
         p1x = {c: f"((uint64_t)({self.p1c[c].get_c_var_name()}))" for c in range(self.NC)}
-        sym_reader, p1_reader, pending, last_st = {}, {}, [], {}
+        xch_reader, p1_reader, pending, last_st = {}, {}, [], {}
         self.dn, self.gathers, self.stores = {}, {}, {}
         last_red = None
 
@@ -329,45 +329,45 @@ class Stage45(cm.ChipletBuild):
                    for n, (off, o0, nb) in enumerate(runs)]
             last_st[c] = p1_reader[(c, s)] = self.stores[(c, (j - c * h) // GS)] = sts
 
-        lds = {g: self._load(g, 0) for g in range(self.G)}
+        lds = {cl: self._load(cl, 0) for cl in range(self.N_CL)}
         prev_dn = {}
         for jl in range(h):
             so = jl % self.out_slots            # the clusters' output slot
             dn = {}
-            for g in range(self.G):
-                k, c = self.chip(g), self.c(g)
-                ld, si, slab = lds[g]
+            for cl in range(self.N_CL):
+                k, c = self.chip(cl), self.local(cl)
+                ld, si, slab = lds[cl]
                 kn = self.kcols[k][1]
                 nt = self.dn_sl[c][jl][1] // BLK    # this slice's column tiles
                 kargs = dict(input_B_addr=slab, input_C_addr=0, K=kn // 4, N=nt, array_shape_idx=0, transpose_A=0,
                              transpose_B=0, accumPrevC=0, int32tofp16_enable=1, int4_b_enable=INT4_B_LAYOUT_PAIRED,
                              d_shift=self.d.k_dn)
-                war = sym_reader.get((k, c, so), [])
+                war = xch_reader.get((k, c, so), [])
                 if jl == 0:                     # one GEMM per post block of A8 rows, so the first slice starts sooner
                     mb = self.MT // POST_BLOCKS
-                    dn[g] = [self.node(k, c, gemm, f"dn_c{c * h}_i0b{b}_g{g}", "__snax_bingo_kernel_gemm_full",
+                    dn[cl] = [self.node(k, c, gemm, f"dn_c{c * h}_i0b{b}", "__snax_bingo_kernel_gemm_full",
                                        SnaxBingoKernelGemmFullArgs(
-                                           input_A_addr=self.a8[g].view(b * mb * 16 * kn),
-                                           output_D_addr=self.sym[(k, c)].view(so * SL + b * mb * nt * TILE), M=mb,
+                                           input_A_addr=self.a8[cl].view(b * mb * 16 * kn),
+                                           output_D_addr=self.xch[(k, c)].view(so * SL + b * mb * nt * TILE), M=mb,
                                            **kargs),
-                                       [ld, self.a8_pre[g]] + war)
+                                       [ld, self.a8_pre[cl]] + war)
                              for b in range(POST_BLOCKS)]
                 else:
-                    dn[g] = [self.node(k, c, gemm, f"dn_c{c * h + jl}_i0_g{g}", "__snax_bingo_kernel_gemm_full",
-                                       SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[g],
-                                                                   output_D_addr=self.sym[(k, c)].view(so * SL),
+                    dn[cl] = [self.node(k, c, gemm, f"dn_c{c * h + jl}_i0", "__snax_bingo_kernel_gemm_full",
+                                       SnaxBingoKernelGemmFullArgs(input_A_addr=self.a8[cl],
+                                                                   output_D_addr=self.xch[(k, c)].view(so * SL),
                                                                    M=self.MT, **kargs),
-                                       [ld, self.a8_pre[g]] + war)]
-                self.dn[(g, jl)] = dn[g][-1]
-                self.ls[g].release(si, dn[g])   # every GEMM that reads the slab
+                                       [ld, self.a8_pre[cl]] + war)]
+                self.dn[(cl, jl)] = dn[cl][-1]
+                self.ls[cl].release(si, dn[cl])   # every GEMM that reads the slab
                 if jl % GS:
                     # a gather waits for its group's last down GEMM on each chip only: each slice's GEMMs follow the
                     # previous slice's (order edges, no dependency tag), so the last implies the group
-                    for p in prev_dn[g]:
-                        self.dfg.bingo_add_order_edge(p, dn[g][0])
-                prev_dn[g] = dn[g]
+                    for p in prev_dn[cl]:
+                        self.dfg.bingo_add_order_edge(p, dn[cl][0])
+                prev_dn[cl] = dn[cl]
             if jl + 1 < h:
-                lds = {g: self._load(g, jl + 1) for g in range(self.G)}
+                lds = {cl: self._load(cl, jl + 1) for cl in range(self.N_CL)}
             while len(pending) > self.NC:       # a gather's stores follow the next gather (two fold slots)
                 store(*pending.pop(0))
             if (jl + 1) % GS:
@@ -378,17 +378,17 @@ class Stage45(cm.ChipletBuild):
                 j = c * h + j0
                 ordr = others[::-1] if self.chain_alt and c == 1 else others
                 ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                    cm.remote, R, c, ordr, src=self.sx(c, so0 * SL), dst=f"({p1x[c]} + {s * GS * SL})",
+                    cm.remote, R, c, ordr, src=self.xch_addr(c, so0 * SL), dst=f"({p1x[c]} + {s * GS * SL})",
                     size=(GS - 1) * SL + self.ROWS * self.dn_sl[c][jl][1] * 2,
                     junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD, holds=[self.p1c[c]])
-                ins = [t for g in range(self.G) if self.c(g) == c for t in dn[g]]
+                ins = [t for cl in range(self.N_CL) if self.local(cl) == c for t in dn[cl]]
                 after = ins + p1_reader.get((c, s), []) + ([last_red] if last_red is not None else [])
                 red = chain_gather(lambda n, kernel, a, deps, c=c: self.node(R, c, xdma, n, kernel, a, deps),
                                    f"y_chain_j{j}", ga, after)
                 self.gathers[(c, j0 // GS)] = last_red = red
                 for k in self.chips:
                     for o in range(so0, so0 + GS):
-                        sym_reader[(k, c, o)] = [red]
+                        xch_reader[(k, c, o)] = [red]
                 pending.append((c, j, red, s))
         while pending:
             store(*pending.pop(0))
@@ -406,10 +406,10 @@ class Stage45(cm.ChipletBuild):
         h, GS, bad = self.NDN // self.NC, self.chain_group, []
         for c in range(self.NC):
             for jl in range(h - self.out_slots):
-                for g in range(self.G):
-                    if self.c(g) == c and not nx.has_path(self.dfg, self.gathers[(c, jl // GS)],
-                                                          self.dn[(g, jl + self.out_slots)]):
-                        bad.append(f"output slot g{g}: slice {jl} gathered before slice {jl + self.out_slots}")
+                for cl in range(self.N_CL):
+                    if self.local(cl) == c and not nx.has_path(self.dfg, self.gathers[(c, jl // GS)],
+                                                          self.dn[(cl, jl + self.out_slots)]):
+                        bad.append(f"output slot cluster {cl}: slice {jl} gathered before slice {jl + self.out_slots}")
             for n in range(h // GS - 2):
                 for st in self.stores[(c, n)]:
                     if not nx.has_path(self.dfg, st, self.gathers[(c, n + 2)]):

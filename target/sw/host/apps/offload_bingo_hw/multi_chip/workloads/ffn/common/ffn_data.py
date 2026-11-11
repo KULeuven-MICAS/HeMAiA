@@ -21,9 +21,9 @@ THE GOLDEN is the device's own arithmetic (util/sim/common/hwmodel.py and fp.py;
 stage, for the tensor-parallel mapping the driver builds (ffn_prefill_mc.py):
 
     hq        = quant_i8(rmsnorm(x16) (.) gain, s_h)       on the root, staged
-    g16[g]    = d_port(hq @ Wgu[:, cols g], k_x) (.) s_gu   every cluster g its columns
-    a8[g]     = quant_i8(silu(gate) * up, s_a)              SwigluARow
-    part[g]   = d_port(a8[g] @ Wdn[rows g, :], k_dn)        the down projection, by rows
+    g16[cl]    = d_port(hq @ Wgu[:, cols cl], k_x) (.) s_gu   every cluster cl its columns
+    a8[cl]     = quant_i8(silu(gate) * up, s_a)              SwigluARow
+    part[cl]   = d_port(a8[cl] @ Wdn[rows cl, :], k_dn)        the down projection, by rows
     loc[k]    = part[k, 0] + part[k, 1]                     each chip folds its clusters (FP16)
     y_raw     = ((loc[root] + loc[o_0]) + loc[o_1]) + ...   the fold order over the chips
     y16       = y_raw (.) s_dn                              on the root
@@ -166,12 +166,12 @@ class FFNData:
     def golden(self, cols, chips, order):
         """{part, loc, y_raw, y16} for the mapping: per cluster, per chip, the fold, the output."""
         add16, mul16 = self.fp.add16, self.fp.mul16
-        part = {g: self.part(c0, n) for g, (c0, n) in enumerate(cols)}
+        part = {cl: self.part(c0, n) for cl, (c0, n) in enumerate(cols)}
         loc = {}
-        for k, gs in chips.items():
-            acc = part[gs[0]]
-            for g in gs[1:]:
-                acc = add16(acc, part[g])
+        for k, cl_k in chips.items():
+            acc = part[cl_k[0]]
+            for cl in cl_k[1:]:
+                acc = add16(acc, part[cl])
             loc[k] = acc
         y = loc[order[0]]
         for k in order[1:]:

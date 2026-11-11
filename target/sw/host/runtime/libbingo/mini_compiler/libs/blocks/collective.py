@@ -68,18 +68,18 @@ L1, L3 = MemLevel.L1, MemLevel.L3
 class Fabric(Protocol):
     """What a collective needs from the application.
 
-    Clusters are numbered globally (g); `chips` lists the chips in order, and a chip's
-    clusters are consecutive in g."""
+    Clusters are numbered globally (cl); `chips` lists the chips in order, and a chip's
+    clusters are consecutive in cl."""
     chips: list
     xchg_prefix: str                                        # hand-off arrays' name prefix
 
-    def chip(self, g: int) -> int: ...                      # the chip of cluster g
+    def chip(self, cl: int) -> int: ...                      # the chip of cluster cl
 
-    def c(self, g: int) -> int: ...                         # g's index on its chip
+    def local(self, cl: int) -> int: ...                    # g's index on its chip
 
-    def gs(self, k: int) -> list: ...                       # chip k's clusters, in order
+    def clusters(self, k: int) -> list: ...                 # chip k's clusters, in order
 
-    def add(self, block, name: str, at_g: int = None, at_chip: int = None, **binds): ...
+    def add(self, block, name: str, at_cl: int = None, at_chip: int = None, **binds): ...
 
     def xsym(self, name: str, nbytes: int) -> str: ...      # a staged array on every chip
 
@@ -89,8 +89,8 @@ class Fabric(Protocol):
 
 @dataclass
 class Collective:
-    """What a collective added: `out` {destination g: the stage holding its result}, `put`
-    {producer g: its stash}, `get` {destination g: its read (a collect, or the copy from its
+    """What a collective added: `out` {destination cl: the stage holding its result}, `put`
+    {producer cl: its stash}, `get` {destination cl: its read (a collect, or the copy from its
     chip's first destination)}."""
     impl: str
     out: Dict[int, object] = field(default_factory=dict)
@@ -125,8 +125,8 @@ def all_gather(fab: Fabric, name: str, parts: dict, part_spec: Callable, part_by
     """Every cluster in `dsts` gets the parts of every cluster of `chips` (default: all),
     back to back in global cluster order.
 
-    `parts` {g: port}; `part_spec(g)` the spec of g's part; `part_bytes` one count, or one
-    per cluster in order; `dst_spec_of(g)` what destination g receives."""
+    `parts` {cl: port}; `part_spec(cl)` the spec of cl's part; `part_bytes` one count, or one
+    per cluster in order; `dst_spec_of(cl)` what destination cl receives."""
     _impl("all_gather", impl, ("idma", "bcast"))
     if impl == "bcast":
         return _all_gather_bcast(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of,
@@ -139,11 +139,11 @@ def _all_gather_idma(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of,
                      chain, tree, hier) -> Collective:
     res = Collective("idma")
     chips = list(fab.chips) if chips is None else list(chips)
-    gl = [g for k in chips for g in fab.gs(k)]
-    pbl = [int(part_bytes)] * len(gl) if isinstance(part_bytes, (int, np.integer)) else \
+    cl_all = [cl for k in chips for cl in fab.clusters(k)]
+    pbl = [int(part_bytes)] * len(cl_all) if isinstance(part_bytes, (int, np.integer)) else \
         [int(v) for v in part_bytes]
-    pb = dict(zip(gl, pbl))
-    at = {g: sum(pbl[:i]) for i, g in enumerate(gl)}
+    pb = dict(zip(cl_all, pbl))
+    at = {cl: sum(pbl[:i]) for i, cl in enumerate(cl_all)}
     sym = _xsym(fab, name, sum(pbl))
     runs, run_bytes = {}, {}
     # `chain`: a chip's stashes in cluster order, each after the one before (an ordering
@@ -152,24 +152,24 @@ def _all_gather_idma(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of,
     # chip in the reader's cell instead of one per cluster.
     for k in chips:
         st_k = []
-        for g in fab.gs(k):
-            h = BingoMemSymbol(sym, at[g], chip_id=k)
-            x = parts[g]
+        for cl in fab.clusters(k):
+            h = BingoMemSymbol(sym, at[cl], chip_id=k)
+            x = parts[cl]
             if chain and st_k:
-                gp = fab.gs(k)[len(st_k) - 1]
-                x = fab.add(After(x=part_spec(g), after=_l3(part_spec(gp))),
-                            f"xord_{name}_g{g}", g, x=x, after=st_k[-1].out()).out()
-            st_k.append(fab.add(Stash(src=part_spec(g), nbytes=pb[g], dst=h),
-                                f"xput_{name}_g{g}", g, x=x))
-            res.put[g] = st_k[-1]
-        run_bytes[k] = sum(pb[g] for g in fab.gs(k))
+                cl_prev = fab.clusters(k)[len(st_k) - 1]
+                x = fab.add(After(x=part_spec(cl), after=_l3(part_spec(cl_prev))),
+                            f"xord_{name}", cl, x=x, after=st_k[-1].out()).out()
+            st_k.append(fab.add(Stash(src=part_spec(cl), nbytes=pb[cl], dst=h),
+                                f"xput_{name}", cl, x=x))
+            res.put[cl] = st_k[-1]
+        run_bytes[k] = sum(pb[cl] for cl in fab.clusters(k))
         runs[k] = fab.add(
-            Join(parts=[_l3(part_spec(g)) for g in fab.gs(k)],
+            Join(parts=[_l3(part_spec(cl)) for cl in fab.clusters(k)],
                  dst=PortSpec(RM, I8, (1, run_bytes[k]), mem_level=L3)),
             f"xrun_{name}_k{k:02x}", at_chip=k,
             **{f"x{i}": s.out() for i, s in enumerate(st_k)})
-    # A chip's clusters are consecutive in g, so its run is one contiguous range of the
-    # array: collecting the runs in chip order lays the parts out in g order.
+    # A chip's clusters are consecutive in cl, so its run is one contiguous range of the
+    # array: collecting the runs in chip order lays the parts out in cl order.
     #
     # `tree` (a group size): with more chips than that, a two-level gather. The chips, in
     # order, form groups of `tree`; each group's first chip (its first cluster) collects the
@@ -184,18 +184,18 @@ def _all_gather_idma(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of,
         src_chips, src_runs, src_bytes = [], {}, {}
         for i in range(0, len(chips), tree):
             grp = chips[i: i + tree]
-            lead, gl0 = grp[0], fab.gs(grp[0])[0]
+            lead, cl_lead = grp[0], fab.clusters(grp[0])[0]
             nb = sum(run_bytes[q] for q in grp)
-            raw = PortSpec(RM, I8, (1, nb), mem_level=L1, cluster=fab.c(gl0))
+            raw = PortSpec(RM, I8, (1, nb), mem_level=L1, cluster=fab.local(cl_lead))
             col = fab.add(Collect(parts=[PortSpec(RM, I8, (1, run_bytes[q]), mem_level=L3)
                                          for q in grp],
                                   nbytes=[run_bytes[q] for q in grp], dst=raw,
-                                  cluster=fab.c(gl0)),
-                          f"xgrp_{name}_k{lead:02x}", gl0,
+                                  cluster=fab.local(cl_lead)),
+                          f"xgrp_{name}_k{lead:02x}", cl_lead,
                           **{f"x{j}": runs[q].out() for j, q in enumerate(grp)})
             st = fab.add(Stash(src=raw, nbytes=nb,
-                               dst=BingoMemSymbol(tsym, at[gl0], chip_id=lead)),
-                         f"xgput_{name}_k{lead:02x}", gl0, x=col.out())
+                               dst=BingoMemSymbol(tsym, at[cl_lead], chip_id=lead)),
+                         f"xgput_{name}_k{lead:02x}", cl_lead, x=col.out())
             src_runs[lead] = fab.add(
                 Join(parts=[_l3(raw)], dst=PortSpec(RM, I8, (1, nb), mem_level=L3)),
                 f"xgrun_{name}_k{lead:02x}", at_chip=lead, x0=st.out())
@@ -208,27 +208,27 @@ def _all_gather_idma(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of,
     # halving them halves those waits; and the second cluster then waits on one local edge
     # instead of one per producing cluster.
     first_on = {}
-    for g in dsts:
-        k, spec = fab.chip(g), dst_spec_of(g)
+    for cl in dsts:
+        k, spec = fab.chip(cl), dst_spec_of(cl)
         if hier and k in first_on:
             # the destination as raw bytes (an A-layout row is a whole 16-row block, which
             # Pull will not cut), moved in one copy, then named again
-            g0, tot = first_on[k], sum(pbl)
+            cl0, tot = first_on[k], sum(pbl)
             raw = lambda c: PortSpec(RM, I8, (1, tot), mem_level=L1, cluster=c)
-            src = fab.add(View(src=dst_spec_of(g0), dst=raw(fab.c(g0))),
-                          f"xraw_{name}_g{g}", g0, x=res.out[g0].out())
-            cp = fab.add(Pull(rows=1, cols=tot, layout=RM, dtype=I8, src=fab.c(g0),
-                              dst=fab.c(g)), f"xget_{name}_g{g}", g, x0=src.out())
-            res.get[g] = cp
-            res.out[g] = fab.add(View(src=raw(fab.c(g)), dst=spec), f"xnam_{name}_g{g}", g,
+            src = fab.add(View(src=dst_spec_of(cl0), dst=raw(fab.local(cl0))),
+                          f"xraw_{name}", cl0, x=res.out[cl0].out())
+            cp = fab.add(Pull(rows=1, cols=tot, layout=RM, dtype=I8, src=fab.local(cl0),
+                              dst=fab.local(cl)), f"xget_{name}", cl, x0=src.out())
+            res.get[cl] = cp
+            res.out[cl] = fab.add(View(src=raw(fab.local(cl)), dst=spec), f"xnam_{name}", cl,
                                  x=cp.out())
             continue
-        first_on.setdefault(k, g)
-        res.out[g] = res.get[g] = fab.add(
+        first_on.setdefault(k, cl)
+        res.out[cl] = res.get[cl] = fab.add(
             Collect(parts=[PortSpec(RM, I8, (1, src_bytes[q]), mem_level=L3)
                            for q in src_chips],
-                    nbytes=[src_bytes[q] for q in src_chips], dst=spec, cluster=fab.c(g)),
-            f"xget_{name}_g{g}", g,
+                    nbytes=[src_bytes[q] for q in src_chips], dst=spec, cluster=fab.local(cl)),
+            f"xget_{name}", cl,
             **{f"x{i}": src_runs[q].out() for i, q in enumerate(src_chips)})
     return res
 
@@ -262,9 +262,9 @@ class BcastPut(Block):
         return {"y": _l3(self.src)}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        g = ctx.at(self.cluster)
+        cx = ctx.at(self.cluster)
         x = bound["x"]
-        nd = g.node("BcastPut", ctx.dm, "__snax_bingo_kernel_idma_bcast_put",
+        nd = cx.node("BcastPut", ctx.dm, "__snax_bingo_kernel_idma_bcast_put",
                     SnaxBingoKernelIdmaBcastPutArgs(x.handle, self.dst, self.nbytes, self.flag,
                                                     self.value), list(x.ends))
         return BlockResult(outputs={"y": Port(self.outputs["y"], self.dst, (nd,), name="y")},
@@ -298,10 +298,10 @@ class FlagFetch(Block):
         return {"y": self.dst}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        g = ctx.at(self.cluster)
+        cx = ctx.at(self.cluster)
         a = bound["after"]
-        buf = g.l1(f"{self.name}_y", self.nbytes)
-        nd = g.node("FlagFetch", ctx.dm, "__snax_bingo_kernel_idma_fetch_flagged",
+        buf = cx.l1(f"{self.name}_y", self.nbytes)
+        nd = cx.node("FlagFetch", ctx.dm, "__snax_bingo_kernel_idma_fetch_flagged",
                     SnaxBingoKernelIdmaFetchFlaggedArgs(self.src, buf, self.nbytes, self.flags,
                                                         self.n_flags, self.value),
                     list(a.ends))
@@ -314,35 +314,35 @@ def _all_gather_bcast(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of
                       chips) -> Collective:
     res = Collective("bcast")
     chips = list(fab.chips) if chips is None else list(chips)
-    gl = [g for k in chips for g in fab.gs(k)]
-    pbl = [int(part_bytes)] * len(gl) if isinstance(part_bytes, (int, np.integer)) else \
+    cl_all = [cl for k in chips for cl in fab.clusters(k)]
+    pbl = [int(part_bytes)] * len(cl_all) if isinstance(part_bytes, (int, np.integer)) else \
         [int(v) for v in part_bytes]
-    pb = dict(zip(gl, pbl))
-    at = {g: sum(pbl[:i]) for i, g in enumerate(gl)}
-    missing = [g for g in dsts if g not in pb]
+    pb = dict(zip(cl_all, pbl))
+    at = {cl: sum(pbl[:i]) for i, cl in enumerate(cl_all)}
+    missing = [cl for cl in dsts if cl not in pb]
     if missing:
         raise ValueError(f"all_gather {name!r}, impl bcast: destinations {missing} hold no "
                          f"part; every destination must be a producer.")
     sym = _xsym(fab, name, sum(pbl))
-    fsym = _xsym(fab, f"{name}_f", FLAG_PITCH * len(gl))
-    for i, g in enumerate(gl):
-        res.put[g] = fab.add(BcastPut(src=part_spec(g), nbytes=pb[g],
-                                      dst=BingoMemSymbol(sym, at[g]),
+    fsym = _xsym(fab, f"{name}_f", FLAG_PITCH * len(cl_all))
+    for i, cl in enumerate(cl_all):
+        res.put[cl] = fab.add(BcastPut(src=part_spec(cl), nbytes=pb[cl],
+                                      dst=BingoMemSymbol(sym, at[cl]),
                                       flag=BingoMemSymbol(fsym, FLAG_PITCH * i),
-                                      cluster=fab.c(g)),
-                             f"xbput_{name}_g{g}", g, x=parts[g])
-    for g in dsts:
-        res.out[g] = res.get[g] = fab.add(
+                                      cluster=fab.local(cl)),
+                             f"xbput_{name}", cl, x=parts[cl])
+    for cl in dsts:
+        res.out[cl] = res.get[cl] = fab.add(
             FlagFetch(src=BingoMemSymbol(sym, 0), nbytes=sum(pbl),
-                      flags=BingoMemSymbol(fsym, 0), n_flags=len(gl),
-                      after=_l3(part_spec(g)), dst=dst_spec_of(g), cluster=fab.c(g)),
-            f"xbget_{name}_g{g}", g, after=res.put[g].out())
+                      flags=BingoMemSymbol(fsym, 0), n_flags=len(cl_all),
+                      after=_l3(part_spec(cl)), dst=dst_spec_of(cl), cluster=fab.local(cl)),
+            f"xbget_{name}", cl, after=res.put[cl].out())
 
     def order():
-        for g in dsts:
-            rd = res.get[g].result.nodes[0]
-            for p in gl:
-                if p != g:
+        for cl in dsts:
+            rd = res.get[cl].result.nodes[0]
+            for p in cl_all:
+                if p != cl:
                     fab.dfg.bingo_add_order_edge(res.put[p].result.nodes[-1], rd)
     fab.pipe.raw(order, f"xborder_{name}")
     return res
@@ -352,25 +352,25 @@ def _all_gather_bcast(fab, name, parts, part_spec, part_bytes, dsts, dst_spec_of
 # send: one cluster's parts to another cluster
 # ======================================================================================
 
-def send(fab: Fabric, name: str, g_src: int, parts: list, part_spec: PortSpec,
+def send(fab: Fabric, name: str, cl_src: int, parts: list, part_spec: PortSpec,
          part_bytes: int, g_dst: int, dst_spec: PortSpec, *, impl: str = "idma"):
     """Cluster g_src's `parts` (ports of `part_spec`, `part_bytes` each) into cluster g_dst's
     L1, back to back. Returns the destination's read: its output is the result."""
     _impl("send", impl, ("idma",))
     # stashed into g_src's chip's copy of a staged array, read by g_dst's DM core in one copy
     # (local write, remote read, as for every hand-off)
-    k = fab.chip(g_src)
+    k = fab.chip(cl_src)
     tot = part_bytes * len(parts)
     sym = _xsym(fab, name, tot)
     st = [fab.add(Stash(src=part_spec, nbytes=part_bytes,
                         dst=BingoMemSymbol(sym, i * part_bytes, chip_id=k)),
-                  f"xput_{name}_{i}", g_src, x=pt)
+                  f"xput_{name}_{i}", cl_src, x=pt)
           for i, pt in enumerate(parts)]
     run = fab.add(Join(parts=[_l3(part_spec)] * len(parts),
                        dst=PortSpec(RM, I8, (1, tot), mem_level=L3)),
                   f"xrun_{name}", at_chip=k, **{f"x{i}": s.out() for i, s in enumerate(st)})
     return fab.add(Collect(parts=[PortSpec(RM, I8, (1, tot), mem_level=L3)], nbytes=[tot],
-                           dst=dst_spec, cluster=fab.c(g_dst)),
+                           dst=dst_spec, cluster=fab.local(g_dst)),
                    f"xget_{name}", g_dst, x0=run.out())
 
 
@@ -378,7 +378,7 @@ def send(fab: Fabric, name: str, g_src: int, parts: list, part_spec: PortSpec,
 # scatter: one cluster's buffer, one part per destination
 # ======================================================================================
 
-def scatter(fab: Fabric, name: str, g_src: int, port, spec: PortSpec, part_bytes: list,
+def scatter(fab: Fabric, name: str, cl_src: int, port, spec: PortSpec, part_bytes: list,
             dsts: List[int], dst_spec_of: Callable, *, impl: str = "idma") -> Collective:
     """Cluster g_src's buffer, one part per destination: `part_bytes[i]` bytes at the offset
     of the parts before it, in `dsts` order, to destination dsts[i]."""
@@ -386,20 +386,20 @@ def scatter(fab: Fabric, name: str, g_src: int, port, spec: PortSpec, part_bytes
     # g_src stashes the whole buffer into its chip's copy of a staged array, and each
     # destination reads its part
     res = Collective("idma")
-    k0 = fab.chip(g_src)
+    k0 = fab.chip(cl_src)
     pb = [int(v) for v in part_bytes]
     sym = _xsym(fab, name, sum(pb))
     s = fab.add(Stash(src=spec, nbytes=sum(pb), dst=BingoMemSymbol(sym, chip_id=k0)),
-                f"xput_{name}", g_src, x=port)
-    res.put[g_src] = s
+                f"xput_{name}", cl_src, x=port)
+    res.put[cl_src] = s
     at = 0
-    for g, n in zip(dsts, pb):
+    for cl, n in zip(dsts, pb):
         part = fab.add(View(src=_l3(spec), dst=PortSpec(RM, I8, (1, n), mem_level=L3),
                             offset=at),
-                       f"xpart_{name}_g{g}", at_chip=k0, x=s.out())
-        res.out[g] = res.get[g] = fab.add(
+                       f"xpart_{name}", at_chip=k0, x=s.out())
+        res.out[cl] = res.get[cl] = fab.add(
             Collect(parts=[PortSpec(RM, I8, (1, n), mem_level=L3)], nbytes=[n],
-                    dst=dst_spec_of(g), cluster=fab.c(g)),
-            f"xget_{name}_g{g}", g, x0=part.out())
+                    dst=dst_spec_of(cl), cluster=fab.local(cl)),
+            f"xget_{name}", cl, x0=part.out())
         at += n
     return res

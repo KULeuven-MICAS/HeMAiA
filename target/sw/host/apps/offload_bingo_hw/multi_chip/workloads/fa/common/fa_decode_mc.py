@@ -181,13 +181,13 @@ class DecodeTileSource(fa.FreshTileSource):
     """FreshTileSource with a wait per key tile: cached tile j behind its own multicast flag, the last tile behind the
     new piece's (FaDecode.tile_wait), each wait right before the tile's loads on the in-order DM core."""
 
-    def __init__(self, fb, g, nt):
-        super().__init__(fb, g, 0, nt)
+    def __init__(self, fb, cl, nt):
+        super().__init__(fb, cl, 0, nt)
         self.waits = {}
 
     def fetch(self, kind, j):
         if j not in self.waits:
-            self.waits[j] = self.fb.tile_wait(self.g, j)
+            self.waits[j] = self.fb.tile_wait(self.cl, j)
         self.wait = self.waits[j]
         return super().fetch(kind, j)
 
@@ -201,7 +201,7 @@ class FaDecode(fs.FaStages):
                   reduce="chain", sync="edge", y_block_chains=True, stop="full")
     # switches of a multi-chunk prefill (or of an x / key / output path the decode does not take)
     UNSUPPORTED = ("y_halves", "chunk_pipeline", "wo_cols", "o_land", "wo_prefetch", "wo_split_rows", "wo_row_pipe",
-                   "y_chain_l3", "y_dst_shared", "sym_per_block", "keys_by_chunk", "kx_per_chunk",
+                   "y_chain_l3", "y_dst_shared", "xch_per_block", "keys_by_chunk", "kx_per_chunk",
                    "kx_after_chains", "kx_mid_double", "kc_xs_late", "chains_after_sweep", "x_rest_early",
                    "x_resident", "x_device", "owner_bcast", "kv_balance", "kv_clusters", "kv_wkva_first", "x_pf_split",
                    "x_bcast_after_prefetch", "prefetch_after_x", "s4_early", "s4_split_x", "split_loads", "chunks",
@@ -354,17 +354,17 @@ class FaDecode(fs.FaStages):
             raise ValueError(f"the constants' layout ({self.C_BYTES} B) is not their image ({nconst} B)")
 
     def _buffers(self):
-        """Every cluster's symmetric buffer (the query cluster's holds its partial y), the sweep's geometry, the query
+        """Every cluster's exchange buffer (the query cluster's holds its partial y), the sweep's geometry, the query
         clusters' constants, the owner's key constants."""
         d, T = self.d, self.TAG
-        self.sym_bytes = self.YB
-        self.sym_zero = False
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{T}_sym", self.sym_bytes)
+        self.xch_bytes = self.YB
+        self.xch_zero = False
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{T}_xch", self.xch_bytes)
                     for k in self.chips for c in range(self.NC)}
         self.sweep_cfg = fa.FaSweepCfg(bc=self.bc, nt=self.NT, nq=self.NQ, br=BR, k_s=d.k_s, k_o=d.k_o, a_exp=d.a_exp,
                                        a_n_f32bits=d.a_n_bits)
-        self.consts = {g: self.cx_chip(self.chip(g)).at(self.c(g)).l1(f"{T}_consts", self.C_BYTES)
-                       for g in range(self.G) if self.c(g) == self.qc}
+        self.consts = {cl: self.cx(cl).l1(f"{T}_consts", self.C_BYTES)
+                       for cl in range(self.N_CL) if self.local(cl) == self.qc}
         self.kvc = {(k, c): self.cx_chip(k).at(c).l1(f"{T}_kvc", self.KC_BYTES)
                     for k in self.chips for c in self.kv_cls(k)}
         self._bufs, self._dst, self._slot, self._root_wait = {}, {}, {}, {}
@@ -382,10 +382,10 @@ class FaDecode(fs.FaStages):
                 self.kvc_pe[(k, self.qc)] = self.cx_chip(k).at(self.qc).l1(f"{self.TAG}_kvcpe", self.KC_BYTES)
             for (kk, c), buf in list(self.kvc.items()) + list(self.kvc_pe.items()):
                 if kk == k:
-                    g = j * self.NC + c
-                    pre[k] = [self.dm_copy(g, f"kvc_ld_g{g}", self.h_kc[k].address, buf, self.KC_BYTES, pre[k])]
-            g = j * self.NC + self.qc
-            pre[k] = [self.dm_copy(g, f"const_ld_g{g}", self.h_c[k].address, self.consts[g], self.C_BYTES, pre[k])]
+                    cl = j * self.NC + c
+                    pre[k] = [self.dm_copy(cl, f"kvc_ld", self.h_kc[k].address, buf, self.KC_BYTES, pre[k])]
+            cl = j * self.NC + self.qc
+            pre[k] = [self.dm_copy(cl, f"const_ld", self.h_c[k].address, self.consts[cl], self.C_BYTES, pre[k])]
         return pre
 
     def _root_ring_split(self, go):
@@ -414,20 +414,20 @@ class FaDecode(fs.FaStages):
         q, o, c, lt = self.NEW, self.owner, self.kc, 0
         self.kvc_put = {}
         for j, k in enumerate(self.chips):
-            g = j * self.NC + c
-            g0, g1 = self.kvg[k]
-            nb = (g1 - g0) * TILE16
+            cl = j * self.NC + c
+            gr0, gr1 = self.kvg[k]
+            nb = (gr1 - gr0) * TILE16
             l1 = lambda name, size, k=k: self.cx_chip(k).at(c).l1(f"{T}_kc_{name}", size)    # noqa: E731
             xb, ob, wb = l1("x", self.XB), l1("o", nb), l1("wkva", self._src(k, 0)[1])
             w = self.x_wait(k, c, 0, go)
             ldx = self.node(k, c, dm, f"kx_ld_q{q}", "__snax_bingo_kernel_idma_1d_copy",
                             SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc"), xb, self.XB), [w])
-            ld, _, _ = self.load(g, 0, "Ld_wkvc", dst=wb)
-            gm = self.gmm(g, f"gkvc_q{q}", xb, wb, ob, 1, HIDDEN // 4, g1 - g0, d.k_x, [ld, ldx])
+            ld, _, _ = self.load(cl, 0, "Ld_wkvc", dst=wb)
+            gm = self.gmm(cl, f"gkvc_q{q}", xb, wb, ob, 1, HIDDEN // 4, gr1 - gr0, d.k_x, [ld, ldx])
             on = lambda name, off, k=k: BingoMemSymbol(name, offset=off, chip_id=None if o == k else o)   # noqa: E731
             self.kvc_put[(q, k)] = self.node(k, c, dm, f"kvc_put_q{q}", "__snax_bingo_kernel_idma_put_flagged",
                                              SnaxBingoKernelIdmaPutFlaggedArgs(
-                                                 ob, on(f"{T}_kvraw", lt * self.KVD + g0 * TILE16), nb,
+                                                 ob, on(f"{T}_kvraw", lt * self.KVD + gr0 * TILE16), nb,
                                                  on(f"{T}_kvrflag", (lt * len(self.chips) + j) * 64), value=1), [gm])
         puts = [self.kvc_put[(q, k)] for k in self.chips]
         w = self.node(o, c, dm, f"kvr_wait_q{q}", "__snax_bingo_kernel_wait_flags",
@@ -465,11 +465,11 @@ class FaDecode(fs.FaStages):
                                 SnaxBingoKernelIdmaPutFlaggedArgs(src, src, KVP, BingoMemSymbol(f"{T}_kvflag"), value=1,
                                                                   bcast=True), prev + [cw])]
 
-    def tile_wait(self, g, j):
-        """The sweep's wait before key tile j on cluster g: a cached tile's multicast flag; the last tile, on the owner
+    def tile_wait(self, cl, j):
+        """The sweep's wait before key tile j on cluster cl: a cached tile's multicast flag; the last tile, on the owner
         its piece's flag(s) (the owner's own waits), elsewhere the owner's multicast flag. The multicasts are ordering
         edges; the flags prove the landing."""
-        k, c, dm, T = self.chip(g), self.c(g), self.roles["dm"], self.TAG
+        k, c, dm, T = self.chip(cl), self.local(cl), self.roles["dm"], self.TAG
         if j < self.NT - 1:
             w = self.node(k, c, dm, f"c_wait_j{j}", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_cflag", offset=j * 64), 1, 1),
@@ -557,34 +557,35 @@ class FaDecode(fs.FaStages):
         self.stage_new_key(go)
         # stage 4 (every query cluster)
         q8, dm = {}, self.roles["dm"]
-        gq = [j * self.NC + self.qc for j in range(len(self.chips))]
-        for g in gq:
-            k, c = self.chip(g), self.c(g)
+        qcl = [j * self.NC + self.qc for j in range(len(self.chips))]
+        for cl in qcl:
+            k, c = self.chip(cl), self.local(cl)
             w = self.x_wait(k, c, 0, go)
             x = self.node(k, c, dm, "x_copy_i0", "__snax_bingo_kernel_idma_1d_copy",
-                          SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc"), self.bufs(g, 0)["xrows"], self.XB),
+                          SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"{T}_xsrc"), self.bufs(cl, 0)["xrows"],
+                                                        self.XB),
                           [go[k], w])
-            q8[g] = self.proj_of(0)(g, 0, x)
+            q8[cl] = self.proj_of(0)(cl, 0, x)
         # stages 2 and 3 on the owner's key cluster
         self.stage_new_piece(go, self.cache_mc)
         # stage 5 (every query cluster)
         nt, plan = d._plans[0]
-        early = 2 if len(self.ls[gq[0]].slabs) >= 4 else 1
+        early = 2 if len(self.ls[qcl[0]].slabs) >= 4 else 1
         self.sw_of = {}
-        for g in gq:
-            k, c = self.chip(g), self.c(g)
-            self.sw_of[g] = fa.fa_sweep(self.at(k, c), fa.dataclasses.replace(self.sweep_cfg, nt=nt),
-                                        self.bufs(g, 0)["swp"], DecodeTileSource(self, g, nt), q8[g], self.roles,
-                                        name="s0_", early=early, mask=self.mask_of(g, plan), mask_c=self.mask_c,
+        for cl in qcl:
+            k, c = self.chip(cl), self.local(cl)
+            self.sw_of[cl] = fa.fa_sweep(self.at(k, c), fa.dataclasses.replace(self.sweep_cfg, nt=nt),
+                                        self.bufs(cl, 0)["swp"], DecodeTileSource(self, cl, nt), q8[cl], self.roles,
+                                        name="s0_", early=early, mask=self.mask_of(cl, plan), mask_c=self.mask_c,
                                         ot8=self.ot8_bits(), sm_batch=self.sm_batch, prologue=self.sm_prologue,
                                         geom_core=self.sm_geom)
         # stages 6 and 7
-        for g in gq:
-            post = self.stage_post_a(g, 0, self.sw_of[g])
-            self.stage_post_b(g, 0, post[1], [])
+        for cl in qcl:
+            post = self.stage_post_a(cl, 0, self.sw_of[cl])
+            self.stage_post_b(cl, 0, post[1], [])
         # stage 8: a chain a W_O block into the collector, each block's row of y into HBM
-        red, stores, sym_free = {}, {}, {}
-        self._block_chains(0, [self.qc], {self.qc: []}, None, red, stores, sym_free)
+        red, stores, xch_free = {}, {}, {}
+        self._block_chains(0, [self.qc], {self.qc: []}, None, red, stores, xch_free)
         # every y store behind the last chain too: no write into a memory chip beside a chain
         for st in self._y_stores:
             if not self.dfg.has_edge(self._chains[-1], st):
@@ -620,12 +621,12 @@ class FaDecode(fs.FaStages):
             got = self.stash(f"y_h{h}", R, 0, self.h_yhbm.address + h * half * 2, half * 2, list(self._y_stores))
             checks.append((f"y_h{h}", got, y, half * 2))
         if self.checks_kind == "stages":
-            g = self.chips.index(far) * self.NC + self.qc
+            cl = self.chips.index(far) * self.NC + self.qc
             hd = self.head[far]
-            checks.insert(0, ("q8", self.stash("q8", far, self.qc, self.bufs(g, 0)["q8"][0], D_QK * BR, []),
+            checks.insert(0, ("q8", self.stash("q8", far, self.qc, self.bufs(cl, 0)["q8"][0], D_QK * BR, []),
                               d.q8_a(hd, 0).view(np.uint8), D_QK * BR))
             ot, nb = self.xt_ref(hd, 0)
-            checks.insert(1, ("xt", self.stash("xt", far, self.qc, self.sw_of[g]["xt"][0], nb, []), ot, nb))
+            checks.insert(1, ("xt", self.stash("xt", far, self.qc, self.sw_of[cl]["xt"][0], nb, []), ot, nb))
         self.run_checks(checks)
 
     def finish(self, app_name, **kw):

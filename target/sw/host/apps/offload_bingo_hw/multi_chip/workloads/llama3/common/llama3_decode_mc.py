@@ -323,7 +323,7 @@ class DBuild(ABuild):
         # first tiles start while the later parts land
         self.P = int(p.get("cache_parts", 2))
         self.slot = {}
-        self.sym_zero = False                                # no symmetric L1 buffer: x and o land in L3
+        self.xch_zero = False                                # no exchange buffer: x and o land in L3
 
     def mem_handles(self):
         """The data and the memory; no task yet. ABuild.mem_handles is not run, as ABuild.__init__ is not: the data
@@ -362,10 +362,10 @@ class DBuild(ABuild):
         self.group, self.head = {}, {}
         for m, (ka, kb) in enumerate(pairs):
             for n, (k, c) in enumerate(((ka, 0), (ka, 1), (kb, 0), (kb, 1))):
-                g = self.chips.index(k) * self.NC + c
+                cl = self.chips.index(k) * self.NC + c
                 self.group[k] = m
-                self.head[g] = m * d.GQ + n
-        self.kind = {g: "K" if self.c(g) == 0 else "V" for g in range(self.G)}
+                self.head[cl] = m * d.GQ + n
+        self.kind = {cl: "K" if self.local(cl) == 0 else "V" for cl in range(self.N_CL)}
         self.kv_half, self.kv_mate = {}, {}
         for ka, kb in pairs:
             self.kv_half[ka], self.kv_half[kb] = 0, 1
@@ -431,7 +431,7 @@ class DBuild(ABuild):
         if self.y_to_hbm:
             self.h_yhbm = st.put_hbm(f"{T}_yhbm", np.zeros(self.YB, dtype=np.uint8), mem_chip=root_mem)
         st.put_zeros(f"{T}_yrow", "uint8_t", self.YB)
-        st.put_zeros(f"{T}_yflag", "uint8_t", self.G * 64)
+        st.put_zeros(f"{T}_yflag", "uint8_t", self.N_CL * 64)
         # o: every head's o8 row (a_row) gathered in the root's L3 and multicast to the same place on every chip
         self.OB = OAR * HD
         st.put_zeros(f"{T}_oland", "uint8_t", d.NH * self.OB)
@@ -462,17 +462,17 @@ class DBuild(ABuild):
         # tables at the token's position, the new key tile's mask)
         self.img, self.chunk_off, self.cst = {}, {}, {}
         masks = (d.dec_bias.astype(np.int32) if self.mask_c else d.dec_mask)
-        for g in range(self.G):
-            k, h = self.chip(g), self.head[g]
+        for cl in range(self.N_CL):
+            k, h = self.chip(cl), self.head[cl]
             m = self.group[k]
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
-            wkv, fkv = (d.wk_q, d.k_f[m]) if self.kind[g] == "K" else (d.wv_q, d.v_f[m])
+            wkv, fkv = (d.wk_q, d.k_f[m]) if self.kind[cl] == "K" else (d.wv_q, d.v_f[m])
             qcol = lambda cc: self.perm[cc * QC:(cc + 1) * QC]
-            kcol = qcol if self.kind[g] == "K" else (lambda cc: np.arange(cc * QC, (cc + 1) * QC))
+            kcol = qcol if self.kind[cl] == "K" else (lambda cc: np.arange(cc * QC, (cc + 1) * QC))
             parts = [self._pack_b(d.wq_q[:, h * HD + qcol(cc)]) for cc in range(self.NQC)]
-            parts += [self._pack_b(wkv[:, m * HD + kcol(cc)]) for cc in self.kv_cc(g)]
+            parts += [self._pack_b(wkv[:, m * HD + kcol(cc)]) for cc in self.kv_cc(cl)]
             for s in range(self.NWS):
-                o0 = self.WOC * g + s * 32
+                o0 = self.WOC * cl + s * 32
                 parts.append(self._pack_b(d.wo_q[:, o0:o0 + 32]))
             offs, off = [], 0
             for b in parts:
@@ -480,14 +480,14 @@ class DBuild(ABuild):
                     raise ValueError(f"a weight chunk of {b.size} B; params w_chunk_bytes is {self.chunk}")
                 offs.append((off, b.size))
                 off += b.size
-            self.img[g] = st.put_hbm(f"{T}_w_g{g}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
-            self.chunk_off[g] = offs
+            self.img[cl] = st.put_hbm(f"{T}_w_cl{cl}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
+            self.chunk_off[cl] = offs
             f16 = lambda a: np.asarray(a, dtype=np.float16).reshape(-1).view(np.int8)
             blob = np.concatenate([f16(d.q_f[h][self.perm]),
-                                   f16(np.concatenate([fkv[kcol(cc)] for cc in self.kv_cc(g)])),
+                                   f16(np.concatenate([fkv[kcol(cc)] for cc in self.kv_cc(cl)])),
                                    f16(d.cos_rep[self.ctx][self.perm]), f16(d.sin_sgn[self.ctx][self.perm]),
                                    np.ascontiguousarray(masks).reshape(-1).view(np.int8)])
-            self.cst[g] = (st.put_hbm(f"{T}_c_g{g}", blob, mem_chip=loc), blob.nbytes)
+            self.cst[cl] = (st.put_hbm(f"{T}_c_cl{cl}", blob, mem_chip=loc), blob.nbytes)
         self.C_QF, self.C_KVF = 0, 2 * HD
         self.C_COS = self.C_KVF + 2 * self.NKVC * QC
         self.C_SIN = self.C_COS + 2 * HD
@@ -501,31 +501,31 @@ class DBuild(ABuild):
         self.xa, self.q16, self.rt, self.rs, self.a16q, self.q8 = {}, {}, {}, {}, {}, {}
         self.kv16, self.a16k, self.vr, self.vtt, self.va = {}, {}, {}, {}, {}
         self.oar, self.ofull, self.ywo = {}, {}, {}
-        for g in range(self.G):
-            l1 = self.l1_of(g)
-            self.kbuf[g] = l1("kt", self.NT * self.TILE_B)       # every key tile, A layout
-            self.vbuf[g] = l1("vt", self.NT * self.TILE_B)       # every value tile, V^T in the A layout
-            self.consts[g] = l1("consts", self.cst[g][1])
-            self.xa[g] = l1("x", self.XB)                        # the token's row, a_row
-            self.q16[g] = l1("q16", 2 * HD)                      # q: the GEMVs' rows, dequantised and rotated in place
+        for cl in range(self.N_CL):
+            l1 = self.l1_of(cl)
+            self.kbuf[cl] = l1("kt", self.NT * self.TILE_B)      # every key tile, A layout
+            self.vbuf[cl] = l1("vt", self.NT * self.TILE_B)      # every value tile, V^T in the A layout
+            self.consts[cl] = l1("consts", self.cst[cl][1])
+            self.xa[cl] = l1("x", self.XB)                       # the token's row, a_row
+            self.q16[cl] = l1("q16", 2 * HD)                     # q: the GEMVs' rows, dequantised and rotated in place
             # RoPE scratch, q's and k's each their own (their RoPE may run in either order): x cos, chunk by chunk;
             # the pair's other chunk x sin
-            self.rt[g] = {sd: l1(f"rt{sd}", 2 * HD) for sd in ("q", "k")}
-            self.rs[g] = {sd: l1(f"rs{sd}", 2 * HD) for sd in ("q", "k")}
-            self.a16q[g] = l1("a16q", BR * HD * 2)               # q in row 0 of a 16-row FP16 A tile
-            self.q8[g] = l1("q8", BR * HD)                       # the sweep's query tile
-            self.kv16[g] = l1("kv16", 2 * NC)                    # the chip's half of k or v, the GEMVs' row
-            if self.kind[g] == "K":
-                self.a16k[g] = l1("a16k", BR * NC * 2)           # k's half in row 0 of a 16-row FP16 A tile
+            self.rt[cl] = {sd: l1(f"rt{sd}", 2 * HD) for sd in ("q", "k")}
+            self.rs[cl] = {sd: l1(f"rs{sd}", 2 * HD) for sd in ("q", "k")}
+            self.a16q[cl] = l1("a16q", BR * HD * 2)              # q in row 0 of a 16-row FP16 A tile
+            self.q8[cl] = l1("q8", BR * HD)                      # the sweep's query tile
+            self.kv16[cl] = l1("kv16", 2 * NC)                   # the chip's half of k or v, the GEMVs' row
+            if self.kind[cl] == "K":
+                self.a16k[cl] = l1("a16k", BR * NC * 2)          # k's half in row 0 of a 16-row FP16 A tile
             else:
                 for n in range(self.NKVC):
-                    self.vr[g, n] = l1(f"vr{n}", self.bc * QC * 2)    # v's chunk in row 0 of a zeroed [bc, 32] block
-                    self.vtt[g, n] = l1(f"vtt{n}", QC * self.bc * 2)  # transposed
-                    self.va[g, n] = l1(f"va{n}", QC * self.bc * 2)    # in the A layout
-            self.sweep_bufs[g] = fa_sweep_alloc(lambda name, nb, l1=l1: l1(name, nb), self._sweep_cfg())
-            self.oar[g] = l1("oar", self.OB)                     # the head's o8 row, a_row
-            self.ofull[g] = l1("ofull", self.d.NH * self.OB)     # every head's: W_O's A operand
-            self.ywo[g] = l1("ywo", 2 * self.WOC)                # the cluster's columns of y
+                    self.vr[cl, n] = l1(f"vr{n}", self.bc * QC * 2)   # v's chunk in row 0 of a zeroed [bc, 32] block
+                    self.vtt[cl, n] = l1(f"vtt{n}", QC * self.bc * 2)  # transposed
+                    self.va[cl, n] = l1(f"va{n}", QC * self.bc * 2)   # in the A layout
+            self.sweep_bufs[cl] = fa_sweep_alloc(lambda name, nb, l1=l1: l1(name, nb), self._sweep_cfg())
+            self.oar[cl] = l1("oar", self.OB)                    # the head's o8 row, a_row
+            self.ofull[cl] = l1("ofull", self.d.NH * self.OB)    # every head's: W_O's A operand
+            self.ywo[cl] = l1("ywo", 2 * self.WOC)               # the cluster's columns of y
 
     def _sweep_cfg(self):
         d = self.d
@@ -533,70 +533,70 @@ class DBuild(ABuild):
                           a_n_f32bits=d.a_n_bits, d_qk=self.HD, d_v=self.HD)
 
     # ---- helpers ----------------------------------------------------------------------------------------------------
-    def gemv(self, g, name, x, w, out, n, k_shift, deps):
+    def gemv(self, cl, name, x, w, out, n, k_shift, deps):
         """One weight chunk of n columns: the token's a_row x . w (paired INT4) into the FP16 row out."""
-        return self.nd(g, "gemm", name, "__snax_bingo_kernel_gemv",
+        return self.nd(cl, "gemm", name, "__snax_bingo_kernel_gemv",
                        SnaxBingoKernelGemvArgs(x, w, out, K=self.H, N=n, d_shift=k_shift, a_blk=8, w4=True), deps)
 
-    def memset(self, g, name, buf, nb, deps=()):
-        return self.nd(g, "xdma", name, "__snax_bingo_kernel_xdma_memset",
+    def memset(self, cl, name, buf, nb, deps=()):
+        return self.nd(cl, "xdma", name, "__snax_bingo_kernel_xdma_memset",
                        SnaxBingoKernelXdmaMemsetArgs(buf, nb, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), list(deps))
 
-    def row_to_a(self, g, name, src, dst, cols, deps):
+    def row_to_a(self, cl, name, src, dst, cols, deps):
         """An FP16 row of `cols` values into row 0 of a 16-row FP16 A tile: its 8-byte atoms (4 values, one A block's
         row) 4 * BR * 2 bytes apart, on the xDMA."""
         blk = 4 * BR * 2
         atoms = cols // 4
         if atoms % LANES:
             raise ValueError(f"row_to_a: {cols} values are not whole xDMA beats of {LANES} atoms")
-        return self.xd(g, name, SnaxBingoKernelXdma6dArgs(src, dst, ATOM, blk, [LANES * ATOM], [atoms // LANES],
+        return self.xd(cl, name, SnaxBingoKernelXdma6dArgs(src, dst, ATOM, blk, [LANES * ATOM], [atoms // LANES],
                                                           [LANES * blk], [atoms // LANES]), deps)
 
-    def a_to_row(self, g, name, src, dst, cols, deps):
+    def a_to_row(self, cl, name, src, dst, cols, deps):
         """Rows 0 and 1 of a 16-row INT8 A tile of `cols` columns into a_row: the first 8-byte word of every 64-byte
         block, on the xDMA (the GEMV takes row 0 of each word)."""
         blk = 4 * BR
         words = cols // 4
         if words % LANES:
             raise ValueError(f"a_to_row: {cols} columns are not whole xDMA beats of {LANES} words")
-        return self.xd(g, name, SnaxBingoKernelXdma6dArgs(src, dst, blk, ATOM, [LANES * blk], [words // LANES],
+        return self.xd(cl, name, SnaxBingoKernelXdma6dArgs(src, dst, blk, ATOM, [LANES * blk], [words // LANES],
                                                           [LANES * ATOM], [words // LANES]), deps)
 
-    def rope_row(self, g, side, x, ca, cb, la_, lb, deps):
+    def rope_row(self, cl, side, x, ca, cb, la_, lb, deps):
         """RoPE of one row's chunk pair in place (rope_pairs chunks): chunk ca of the head (the pairs' first
         dimensions) at x + 64 la_, chunk cb (their second) at x + 64 lb; a = a cos_a + b sin_a, b = b cos_b + a sin_b
         (sin signed), the tables the constants' rows at the token's position. Returns the two adds."""
-        cst, rt, rs, n = self.consts[g], self.rt[g][side], self.rs[g][side], QC
+        cst, rt, rs, n = self.consts[cl], self.rt[cl][side], self.rs[cl][side], QC
         cos = lambda cc: cst.view(self.C_COS + 2 * QC * cc)
         sin = lambda cc: cst.view(self.C_SIN + 2 * QC * cc)
         xa, xb = x.view(2 * QC * la_), x.view(2 * QC * lb)
         dep = list(deps)
-        ta = self.mul(g, f"{side}rc{ca}", xa, cos(ca), rt.view(2 * QC * la_), n, dep)
-        sa = self.mul(g, f"{side}rs{ca}", xb, sin(ca), rs.view(2 * QC * la_), n, dep)
-        tb = self.mul(g, f"{side}rc{cb}", xb, cos(cb), rt.view(2 * QC * lb), n, dep)
-        sb = self.mul(g, f"{side}rs{cb}", xa, sin(cb), rs.view(2 * QC * lb), n, dep)
-        ra = self.add(g, f"{side}ra{ca}", rt.view(2 * QC * la_), rs.view(2 * QC * la_), xa, n, [ta, sa, sb])
-        rb = self.add(g, f"{side}ra{cb}", rt.view(2 * QC * lb), rs.view(2 * QC * lb), xb, n, [tb, sb, sa])
+        ta = self.mul(cl, f"{side}rc{ca}", xa, cos(ca), rt.view(2 * QC * la_), n, dep)
+        sa = self.mul(cl, f"{side}rs{ca}", xb, sin(ca), rs.view(2 * QC * la_), n, dep)
+        tb = self.mul(cl, f"{side}rc{cb}", xb, cos(cb), rt.view(2 * QC * lb), n, dep)
+        sb = self.mul(cl, f"{side}rs{cb}", xa, sin(cb), rs.view(2 * QC * lb), n, dep)
+        ra = self.add(cl, f"{side}ra{ca}", rt.view(2 * QC * la_), rs.view(2 * QC * la_), xa, n, [ta, sa, sb])
+        rb = self.add(cl, f"{side}ra{cb}", rt.view(2 * QC * lb), rs.view(2 * QC * lb), xb, n, [tb, sb, sa])
         return ra, rb
 
-    def loads(self, g, js):
-        """The loads of cluster g's weight chunks js that fit its slabs now: the first w_buffers of them."""
-        return {n: self._load(g, 0, js[n]) for n in range(min(len(self.ls[g].slabs), len(js)))}
+    def loads(self, cl, js):
+        """The loads of cluster cl's weight chunks js that fit its slabs now: the first w_buffers of them."""
+        return {n: self._load(cl, 0, js[n]) for n in range(min(len(self.ls[cl].slabs), len(js)))}
 
-    def chunks(self, g, name, js, x, outs, k_shift, deps, then=None, lds=None):
-        """Cluster g's weight chunks js, chunk n a GEMV of x into the row outs[n] behind its load; the first w_buffers
+    def chunks(self, cl, name, js, x, outs, k_shift, deps, then=None, lds=None):
+        """Cluster cl's weight chunks js, chunk n a GEMV of x into the row outs[n] behind its load; the first w_buffers
         loads made here unless given (lds), each later one right after the GEMV that frees its slab. then(n, gemv)
         makes what follows chunk n's GEMV. Returns the GEMVs."""
-        ls, nb = self.ls[g], len(self.ls[g].slabs)
-        lds = dict(lds) if lds is not None else self.loads(g, js)
+        ls, nb = self.ls[cl], len(self.ls[cl].slabs)
+        lds = dict(lds) if lds is not None else self.loads(cl, js)
         gms = []
         for n, j in enumerate(js):
             ld, si, slab = lds[n]
-            gm = self.gemv(g, f"{name}{n}", x, slab, outs[n], 32, k_shift, [ld] + list(deps))
+            gm = self.gemv(cl, f"{name}{n}", x, slab, outs[n], 32, k_shift, [ld] + list(deps))
             ls.release(si, gm)
             gms.append(gm)
             if n + nb < len(js):
-                lds[n + nb] = self._load(g, 0, js[n + nb])
+                lds[n + nb] = self._load(cl, 0, js[n + nb])
             if then is not None:
                 then(n, gm)
         return gms
@@ -647,17 +647,17 @@ class DBuild(ABuild):
             ls.strict = True
         # ---- before the window: the constants into L1; the new tile and the zero-padded operands zeroed -----------
         pre = {k: [] for k in self.chips}
-        for g in range(self.G):
-            k = self.chip(g)
-            h, nb = self.cst[g]
-            pre[k].append(self.copy(g, f"const_ld_g{g}", h.address, self.consts[g], nb, []))
-            z = [(self.kbuf[g].view(L16), self.TILE_B), (self.vbuf[g].view(L16), self.TILE_B),
-                 (self.a16q[g], BR * HD * 2)]
-            z += ([(self.a16k[g], BR * NC * 2)] if self.kind[g] == "K" else
-                  [(self.vr[g, n], self.bc * QC * 2) for n in range(self.NKVC)])
+        for cl in range(self.N_CL):
+            k = self.chip(cl)
+            h, nb = self.cst[cl]
+            pre[k].append(self.copy(cl, f"const_ld", h.address, self.consts[cl], nb, []))
+            z = [(self.kbuf[cl].view(L16), self.TILE_B), (self.vbuf[cl].view(L16), self.TILE_B),
+                 (self.a16q[cl], BR * HD * 2)]
+            z += ([(self.a16k[cl], BR * NC * 2)] if self.kind[cl] == "K" else
+                  [(self.vr[cl, n], self.bc * QC * 2) for n in range(self.NKVC)])
             prev = []
             for i, (buf, n) in enumerate(z):
-                prev = [self.memset(g, f"zero{i}", buf, n, prev)]
+                prev = [self.memset(cl, f"zero{i}", buf, n, prev)]
             pre[k] += prev
         go = self.setup(extra=pre)
         self.dfg.relay_one_consumer_cores = [xdma]
@@ -677,196 +677,205 @@ class DBuild(ABuild):
             self.edge(self.ucast[k], self.prefetch[k])
         # ---- x into every cluster's L1 ---------------------------------------------------------------------------------
         xf = {}
-        for g in range(self.G):
-            xf[g] = self.nd(g, "dm", f"x_wait_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
-                            SnaxBingoKernelIdmaFetchFlaggedArgs(self.l3("xland"), self.xa[g], self.XB, self.l3("xtflag"),
-                                                                1, 1), [go[self.chip(g)]])
-            self.dfg.bingo_add_order_edge(self.x_put, xf[g])
+        for cl in range(self.N_CL):
+            xf[cl] = self.nd(cl, "dm", f"x_wait", "__snax_bingo_kernel_idma_fetch_flagged",
+                            SnaxBingoKernelIdmaFetchFlaggedArgs(self.l3("xland"), self.xa[cl], self.XB,
+                                                                self.l3("xtflag"), 1, 1), [go[self.chip(cl)]])
+            self.dfg.bingo_add_order_edge(self.x_put, xf[cl])
         # ---- q: the GEMVs, the column factors, RoPE, the query tile ---------------------------------------------------
         q8t = {}
-        for g in range(self.G):
-            cst, q16 = self.consts[g], self.q16[g]
+        for cl in range(self.N_CL):
+            cst, q16 = self.consts[cl], self.q16[cl]
             dq, rot = {}, []
 
-            def deq(n, gm, g=g, cst=cst, q16=q16, dq=dq, rot=rot):
+            def deq(n, gm, cl=cl, cst=cst, q16=q16, dq=dq, rot=rot):
                 # each chunk dequantised behind its GEMV; a chunk pair's RoPE behind its second chunk
-                dq[n] = self.mul(g, f"dqq{n}", q16.view(2 * QC * n), cst.view(self.C_QF + 2 * QC * n), q16.view(2 * QC * n),
-                                 QC, [gm])
+                dq[n] = self.mul(cl, f"dqq{n}", q16.view(2 * QC * n), cst.view(self.C_QF + 2 * QC * n),
+                                 q16.view(2 * QC * n), QC, [gm])
                 if n % 2:
-                    rot.extend(self.rope_row(g, "q", q16, n - 1, n, n - 1, n, [dq[n - 1], dq[n]]))
-            self.chunks(g, "gq", list(range(self.NQC)), self.xa[g], [q16.view(2 * QC * n) for n in range(self.NQC)],
-                        d.k_x, [xf[g]], then=deq)
-            sc = self.row_to_a(g, "q2a", q16, self.a16q[g], HD, rot)
-            q8t[g] = self.quant(g, "q8", self.a16q[g], self.q8[g], BR * HD * 2, d.s_q.inv, [sc])
+                    rot.extend(self.rope_row(cl, "q", q16, n - 1, n, n - 1, n, [dq[n - 1], dq[n]]))
+            self.chunks(cl, "gq", list(range(self.NQC)), self.xa[cl], [q16.view(2 * QC * n) for n in range(self.NQC)],
+                        d.k_x, [xf[cl]], then=deq)
+            sc = self.row_to_a(cl, "q2a", q16, self.a16q[cl], HD, rot)
+            q8t[cl] = self.quant(cl, "q8", self.a16q[cl], self.q8[cl], BR * HD * 2, d.s_q.inv, [sc])
         # ---- the cache: each chip's half from its memory chip into its tiles and relayed to its mate, part by part ----
         relay = {}
         for p in range(self.P):
             t0 = p * self.PT
             for k in self.chips:
                 hh, mt = self.kv_half[k], self.kv_mate[k]
-                for g in self.gs(k):
-                    c = self.c(g)
-                    w = self.nd(g, "dm", f"kvc_wait{p}", "__snax_bingo_kernel_wait_flags",
+                for cl in self.clusters(k):
+                    c = self.local(cl)
+                    w = self.nd(cl, "dm", f"kvc_wait{p}", "__snax_bingo_kernel_wait_flags",
                                 SnaxBingoKernelWaitFlagsArgs(self.l3("kvcflag", p * 64), 1, 1), [])
                     self.dfg.bingo_add_order_edge(self.ucast[k], w)
                     # cluster 0 relays the part's K halves, cluster 1 its V halves, into the mate's L3 behind a flag each
                     off = p * self.PB + c * self.PT * self.HB
-                    relay[k, p, c] = self.nd(g, "dm", f"kv_relay{p}", "__snax_bingo_kernel_idma_put_flagged",
+                    relay[k, p, c] = self.nd(cl, "dm", f"kv_relay{p}", "__snax_bingo_kernel_idma_put_flagged",
                                              SnaxBingoKernelIdmaPutFlaggedArgs(
                                                  self.l3("kvc", off), self.l3("kvm", off, mt), self.PT * self.HB,
                                                  self.l3("kvmflag", (2 * p + c) * 64, mt), value=1), [w])
-                    self._cache_copies(g, "own", self.l3("kvc", p * self.PB), t0, hh, [w])
+                    self._cache_copies(cl, "own", self.l3("kvc", p * self.PB), t0, hh, [w])
             for k in self.chips:
                 hh, mt = self.kv_half[k], self.kv_mate[k]
-                for g in self.gs(k):
-                    w = self.nd(g, "dm", f"kvm_wait{p}", "__snax_bingo_kernel_wait_flags",
+                for cl in self.clusters(k):
+                    w = self.nd(cl, "dm", f"kvm_wait{p}", "__snax_bingo_kernel_wait_flags",
                                 SnaxBingoKernelWaitFlagsArgs(self.l3("kvmflag", 2 * p * 64), 2, 1), [])
                     for c in range(self.NC):
                         self.dfg.bingo_add_order_edge(relay[mt, p, c], w)
-                    ck, cv = self._cache_copies(g, "mate", self.l3("kvm", p * self.PB), t0, 1 - hh, [w])
+                    ck, cv = self._cache_copies(cl, "mate", self.l3("kvm", p * self.PB), t0, 1 - hh, [w])
                     for j in range(t0, t0 + self.PT):
-                        self.tile_ready[(g, "K", j)], self.tile_ready[(g, "V", j)] = ck, cv
+                        self.tile_ready[(cl, "K", j)], self.tile_ready[(cl, "V", j)] = ck, cv
         # ---- the token's k / v: the chip's half, into the new tile, then traded within the pair --------------------
         own_q = {}
-        for g in range(self.G):
-            cst, kv16 = self.consts[g], self.kv16[g]
-            hh = self.kv_half[self.chip(g)]
+        for cl in range(self.N_CL):
+            cst, kv16 = self.consts[cl], self.kv16[cl]
+            hh = self.kv_half[self.chip(cl)]
             js = [self.NQC + n for n in range(self.NKVC)]
-            if self.kind[g] == "K":
+            if self.kind[cl] == "K":
                 dq = {}
 
-                def deqk(n, gm, g=g, cst=cst, kv16=kv16, dq=dq):
-                    dq[n] = self.mul(g, f"dqk{n}", kv16.view(2 * QC * n), cst.view(self.C_KVF + 2 * QC * n),
+                def deqk(n, gm, cl=cl, cst=cst, kv16=kv16, dq=dq):
+                    dq[n] = self.mul(cl, f"dqk{n}", kv16.view(2 * QC * n), cst.view(self.C_KVF + 2 * QC * n),
                                      kv16.view(2 * QC * n), QC, [gm])
-                self.chunks(g, "gk", js, self.xa[g], [kv16.view(2 * QC * n) for n in range(self.NKVC)], d.k_x, [],
+                self.chunks(cl, "gk", js, self.xa[cl], [kv16.view(2 * QC * n) for n in range(self.NKVC)], d.k_x, [],
                             then=deqk)
-                c0 = self.kv_cc(g)[0]
-                rot = self.rope_row(g, "k", kv16, c0, c0 + 1, 0, 1, [dq[0], dq[1]])
-                sc = self.row_to_a(g, "k2a", kv16, self.a16k[g], NC, list(rot))
-                own_q[g] = self.quant(g, "k8", self.a16k[g], self.kbuf[g].view(L16 + hh * self.KRUN), BR * NC * 2,
+                c0 = self.kv_cc(cl)[0]
+                rot = self.rope_row(cl, "k", kv16, c0, c0 + 1, 0, 1, [dq[0], dq[1]])
+                sc = self.row_to_a(cl, "k2a", kv16, self.a16k[cl], NC, list(rot))
+                own_q[cl] = self.quant(cl, "k8", self.a16k[cl], self.kbuf[cl].view(L16 + hh * self.KRUN), BR * NC * 2,
                                       d.s_k.inv, [sc])
             else:
                 tas = {}
 
-                def deqv(n, gm, g=g, cst=cst, tas=tas):
+                def deqv(n, gm, cl=cl, cst=cst, tas=tas):
                     # each chunk's row (row 0 of its zeroed [bc, 32] block) dequantised, transposed and reshaped into V^T's
                     # A layout behind its GEMV; the quantisations after both, so the SIMD core takes the second chunk's
                     # dequantisation while the xDMA reshapes the first
-                    vr, vt, va = self.vr[g, n], self.vtt[g, n], self.va[g, n]
-                    dqv = self.mul(g, f"dqv{n}", vr, cst.view(self.C_KVF + 2 * QC * n), vr, QC, [gm])
-                    tr = self.nd(g, "xdma", f"vtr{n}", "__snax_bingo_kernel_xdma_transpose_2d",
+                    vr, vt, va = self.vr[cl, n], self.vtt[cl, n], self.va[cl, n]
+                    dqv = self.mul(cl, f"dqv{n}", vr, cst.view(self.C_KVF + 2 * QC * n), vr, QC, [gm])
+                    tr = self.nd(cl, "xdma", f"vtr{n}", "__snax_bingo_kernel_xdma_transpose_2d",
                                  SnaxBingoKernelXdmaTranspose2dArgs(vr, vt, self.bc, QC, 2), [dqv])
-                    tas[n] = self.xd(g, f"vta{n}", convert_args("row_major", "A", QC, self.bc, self.mesh, 2, vt, va), [tr])
-                self.chunks(g, "gv", js, self.xa[g], [self.vr[g, n] for n in range(self.NKVC)], d.k_x, [], then=deqv)
-                for n, cc in enumerate(self.kv_cc(g)):
-                    own_q[g] = self.quant(g, f"vq{n}", self.va[g, n], self.vbuf[g].view(L16 + cc * QC * self.bc),
+                    tas[n] = self.xd(cl, f"vta{n}", convert_args("row_major", "A", QC, self.bc, self.mesh, 2, vt, va),
+                                     [tr])
+                self.chunks(cl, "gv", js, self.xa[cl], [self.vr[cl, n] for n in range(self.NKVC)], d.k_x, [], then=deqv)
+                for n, cc in enumerate(self.kv_cc(cl)):
+                    own_q[cl] = self.quant(cl, f"vq{n}", self.va[cl, n], self.vbuf[cl].view(L16 + cc * QC * self.bc),
                                           QC * self.bc * 2, d.s_v.inv, [tas[n]])
         kput, vput = {}, {}
         for k in self.chips:
-            g0, g1 = self.gs(k)
+            cl0, cl1 = self.clusters(k)
             hh = self.kv_half[k]
-            kput[k] = self.copy(g0, "kx_put", self.kbuf[g0].view(L16 + hh * self.KRUN), self.l3("kvx"), self.KRUN,
-                                [own_q[g0]])
-            vput[k] = self.copy(g1, "vx_put", self.vbuf[g1].view(L16 + hh * self.HB), self.l3("kvx", self.KRUN), self.HB,
-                                [own_q[g1]])
+            kput[k] = self.copy(cl0, "kx_put", self.kbuf[cl0].view(L16 + hh * self.KRUN), self.l3("kvx"), self.KRUN,
+                                [own_q[cl0]])
+            vput[k] = self.copy(cl1, "vx_put", self.vbuf[cl1].view(L16 + hh * self.HB), self.l3("kvx", self.KRUN),
+                                self.HB, [own_q[cl1]])
         for k in self.chips:
-            g0, g1 = self.gs(k)
+            cl0, cl1 = self.clusters(k)
             hh, mt = self.kv_half[k], self.kv_mate[k]
-            self.copy(g1, "kx_get", self.l3("kvx"), self.kbuf[g1].view(L16 + hh * self.KRUN), self.KRUN, [kput[k]])
-            self.copy(g0, "vx_get", self.l3("kvx", self.KRUN), self.vbuf[g0].view(L16 + hh * self.HB), self.HB, [vput[k]])
-            for g in (g0, g1):
-                kr = self.copy(g, "kx_rget", self.l3("kvx", 0, mt), self.kbuf[g].view(L16 + (1 - hh) * self.KRUN),
+            self.copy(cl1, "kx_get", self.l3("kvx"), self.kbuf[cl1].view(L16 + hh * self.KRUN), self.KRUN, [kput[k]])
+            self.copy(cl0, "vx_get", self.l3("kvx", self.KRUN), self.vbuf[cl0].view(L16 + hh * self.HB), self.HB,
+                      [vput[k]])
+            for cl in (cl0, cl1):
+                kr = self.copy(cl, "kx_rget", self.l3("kvx", 0, mt), self.kbuf[cl].view(L16 + (1 - hh) * self.KRUN),
                                self.KRUN, [kput[mt]])
-                vr = self.copy(g, "vx_rget", self.l3("kvx", self.KRUN, mt), self.vbuf[g].view(L16 + (1 - hh) * self.HB),
+                vr = self.copy(cl, "vx_rget", self.l3("kvx", self.KRUN, mt),
+                               self.vbuf[cl].view(L16 + (1 - hh) * self.HB),
                                self.HB, [vput[mt]])
-                self.tile_ready[(g, "K", self.LAST)], self.tile_ready[(g, "V", self.LAST)] = kr, vr
+                self.tile_ready[(cl, "K", self.LAST)], self.tile_ready[(cl, "V", self.LAST)] = kr, vr
         # ---- W_O's first chunks, behind the trade on the DM core ------------------------------------------------------
         wo_js = [self.WO0 + s for s in range(self.NWS)]
-        wl = {g: self.loads(g, wo_js) for g in range(self.G)}
+        wl = {cl: self.loads(cl, wo_js) for cl in range(self.N_CL)}
         # ---- the sweep: the cached tiles, then the new key's -----------------------------------------------------------
         sw = {}
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
-            mk = self.consts[g].view(self.C_MASK)
-            sw[g] = fa_sweep(self.at(k, c), self._sweep_cfg(), self.sweep_bufs[g], L1Tiles(self, g), {0: (self.q8[g], [q8t[g]])},
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
+            mk = self.consts[cl].view(self.C_MASK)
+            sw[cl] = fa_sweep(self.at(k, c), self._sweep_cfg(), self.sweep_bufs[cl], L1Tiles(self, cl),
+                              {0: (self.q8[cl], [q8t[cl]])},
                              self.roles, name="s_", early=1, mask=lambda j, u, mk=mk: mk if j == self.LAST else None,
                              mask_c=self.mask_c, ot8=self.ot8_bits(), geom_core=self.sm_geom)
         # ---- o: every head's row into the root, its multicast, every cluster's copy -----------------------------------
-        rg = [g for g in range(self.G) if self.chip(g) == R]
+        rcl = [cl for cl in range(self.N_CL) if self.chip(cl) == R]
         far = lambda k: None if k == R else R
         comp, puts = {}, {}
-        for g in range(self.G):
-            k, h = self.chip(g), self.head[g]
-            comp[g] = self.a_to_row(g, "o2r", sw[g]["xt"][0], self.oar[g], HD, [sw[g]["tr"][0]])
-            puts[g] = self.nd(g, "dm", "o_put", "__snax_bingo_kernel_idma_put_flagged",
-                              SnaxBingoKernelIdmaPutFlaggedArgs(self.oar[g], self.l3("oland", h * self.OB, far(k)), self.OB,
-                                                                self.l3("oflag", h * 64, far(k)), value=1), [comp[g]])
+        for cl in range(self.N_CL):
+            k, h = self.chip(cl), self.head[cl]
+            comp[cl] = self.a_to_row(cl, "o2r", sw[cl]["xt"][0], self.oar[cl], HD, [sw[cl]["tr"][0]])
+            puts[cl] = self.nd(cl, "dm", "o_put", "__snax_bingo_kernel_idma_put_flagged",
+                              SnaxBingoKernelIdmaPutFlaggedArgs(self.oar[cl], self.l3("oland", h * self.OB, far(k)),
+                                                                self.OB,
+                                                                self.l3("oflag", h * 64, far(k)), value=1), [comp[cl]])
         ow = self.node(R, 0, dm, "o_wait", "__snax_bingo_kernel_wait_flags",
-                       SnaxBingoKernelWaitFlagsArgs(self.l3("oflag"), d.NH, 1), [puts[g] for g in rg])
-        for g in range(self.G):
-            if g not in rg:
-                self.dfg.bingo_add_order_edge(puts[g], ow)
+                       SnaxBingoKernelWaitFlagsArgs(self.l3("oflag"), d.NH, 1), [puts[cl] for cl in rcl])
+        for cl in range(self.N_CL):
+            if cl not in rcl:
+                self.dfg.bingo_add_order_edge(puts[cl], ow)
         # one multicast source at a time: x's has ended once every cluster holds x, which every o row follows
         mc = self.node(R, 0, dm, "o_bput", "__snax_bingo_kernel_idma_put_flagged",
                        SnaxBingoKernelIdmaPutFlaggedArgs(self.l3("oland"), self.l3("oland"), d.NH * self.OB,
                                                          self.l3("omflag"), value=1, bcast=True), [ow, self.x_put])
         get = {}
-        for g in range(self.G):
-            if g in rg:
+        for cl in range(self.N_CL):
+            if cl in rcl:
                 after = [ow]
             else:
-                w = self.nd(g, "xdma", "om_wait", "__snax_bingo_kernel_wait_flags",
-                            SnaxBingoKernelWaitFlagsArgs(self.l3("omflag"), 1, 1), [comp[g]])
+                w = self.nd(cl, "xdma", "om_wait", "__snax_bingo_kernel_wait_flags",
+                            SnaxBingoKernelWaitFlagsArgs(self.l3("omflag"), 1, 1), [comp[cl]])
                 self.dfg.bingo_add_order_edge(mc, w)
                 after = [w]
-            get[g] = self.nd(g, "xdma", "o_get", "__snax_bingo_kernel_xdma_1d_copy",
-                             SnaxBingoKernelXdma1dCopyArgs(self.l3("oland"), self.ofull[g], d.NH * self.OB), after)
+            get[cl] = self.nd(cl, "xdma", "o_get", "__snax_bingo_kernel_xdma_1d_copy",
+                             SnaxBingoKernelXdma1dCopyArgs(self.l3("oland"), self.ofull[cl], d.NH * self.OB), after)
         # ---- W_O by columns, y into the root's row, the root's write into HBM ------------------------------------------
         ylast = {}
-        for g in range(self.G):
-            gms = self.chunks(g, "gwo", wo_js, self.ofull[g], [self.ywo[g].view(64 * s) for s in range(self.NWS)], d.k_wo,
-                              [get[g]], lds=wl[g])
-            ylast[g] = gms[-1]
+        for cl in range(self.N_CL):
+            gms = self.chunks(cl, "gwo", wo_js, self.ofull[cl], [self.ywo[cl].view(64 * s) for s in range(self.NWS)],
+                              d.k_wo, [get[cl]], lds=wl[cl])
+            ylast[cl] = gms[-1]
         yput = {}
-        for g in range(self.G):
-            k = self.chip(g)
-            yput[g] = self.nd(g, "dm", "y_put", "__snax_bingo_kernel_idma_put_flagged",
-                              SnaxBingoKernelIdmaPutFlaggedArgs(self.ywo[g], self.l3("yrow", 2 * self.WOC * g, far(k)),
-                                                                2 * self.WOC, self.l3("yflag", g * 64, far(k)), value=1),
-                              [ylast[g]])
+        for cl in range(self.N_CL):
+            k = self.chip(cl)
+            yput[cl] = self.nd(cl, "dm", "y_put", "__snax_bingo_kernel_idma_put_flagged",
+                              SnaxBingoKernelIdmaPutFlaggedArgs(self.ywo[cl], self.l3("yrow", 2 * self.WOC * cl,
+                                                                                      far(k)),
+                                                                2 * self.WOC, self.l3("yflag", cl * 64, far(k)),
+                                                                value=1),
+                              [ylast[cl]])
         yw = self.node(R, 0, dm, "y_wait", "__snax_bingo_kernel_wait_flags",
-                       SnaxBingoKernelWaitFlagsArgs(self.l3("yflag"), self.G, 1), [yput[g] for g in rg])
-        for g in range(self.G):
-            if g not in rg:
-                self.dfg.bingo_add_order_edge(yput[g], yw)
+                       SnaxBingoKernelWaitFlagsArgs(self.l3("yflag"), self.N_CL, 1), [yput[cl] for cl in rcl])
+        for cl in range(self.N_CL):
+            if cl not in rcl:
+                self.dfg.bingo_add_order_edge(yput[cl], yw)
         yh = self.y_out(yw)
         # ---- the append: each chip's halves of the new key and value into its cache in HBM, behind the y puts -------
         app = {}
         for k in self.chips:
-            g0, g1 = self.gs(k)
+            cl0, cl1 = self.clusters(k)
             hh = self.kv_half[k]
             base = self.h_kv[k].address + self.APP
-            app[k] = [self.copy(g0, "k_app", self.kbuf[g0].view(L16 + hh * self.KRUN), base, self.KRUN, [kput[k]]),
-                      self.copy(g1, "v_app", self.vbuf[g1].view(L16 + hh * self.HB), base + self.HB, self.HB, [vput[k]])]
+            app[k] = [self.copy(cl0, "k_app", self.kbuf[cl0].view(L16 + hh * self.KRUN), base, self.KRUN, [kput[k]]),
+                      self.copy(cl1, "v_app", self.vbuf[cl1].view(L16 + hh * self.HB), base + self.HB, self.HB,
+                                [vput[k]])]
         self.end_window([self.probe(k, f"fin{k:02x}", app[k] + ([yh] if k == R else [])) for k in self.chips])
         self._link_report()
         self._checks()
 
-    def _cache_copies(self, g, tag, src, t0, half, deps):
-        """A cache part's K and V halves `half` (src: [K halves | V halves], each tile's 4 KiB) into cluster g's tiles
+    def _cache_copies(self, cl, tag, src, t0, half, deps):
+        """A cache part's K and V halves `half` (src: [K halves | V halves], each tile's 4 KiB) into cluster cl's tiles
         t0 ..: the K half a 1 KiB run of every 16-key block, the V half its contiguous half of V^T. Returns both."""
         rk = self.PT * self.bc // BR
-        ck = self.copy2d(g, f"kc_{tag}{t0}", src, self.kbuf[g].view(t0 * self.TILE_B + half * self.KRUN), self.KRUN,
+        ck = self.copy2d(cl, f"kc_{tag}{t0}", src, self.kbuf[cl].view(t0 * self.TILE_B + half * self.KRUN), self.KRUN,
                          self.KRUN, 2 * self.KRUN, rk, deps)
-        cv = self.copy2d(g, f"vc_{tag}{t0}", BingoMemSymbol(src.symbol_name, offset=src.offset + self.PT * self.HB),
-                         self.vbuf[g].view(t0 * self.TILE_B + half * self.HB), self.HB, self.HB, self.TILE_B, self.PT, deps)
+        cv = self.copy2d(cl, f"vc_{tag}{t0}", BingoMemSymbol(src.symbol_name, offset=src.offset + self.PT * self.HB),
+                         self.vbuf[cl].view(t0 * self.TILE_B + half * self.HB), self.HB, self.HB, self.TILE_B, self.PT,
+                         deps)
         return ck, cv
 
     def _link_report(self):
         """The bytes each memory link carries in the window: the weights and the cache halves of the chips behind it."""
         per = {}
         for k in self.chips:
-            w = sum(n for g in self.gs(k) for _, n in self.chunk_off[g])
+            w = sum(n for cl in self.clusters(k) for _, n in self.chunk_off[cl])
             per.setdefault(self.link[k], [0, 0])
             per[self.link[k]][0] += w
             per[self.link[k]][1] += self.P * self.PB
@@ -889,23 +898,23 @@ class DBuild(ABuild):
         checks = []
         if self.checks_kind == "stages":
             m0, mate = self.group[R], self.kv_mate[R]
-            g0, g1 = 0, 1
+            cl0, cl1 = 0, 1
             gm = self.chips.index(mate) * self.NC + 1
-            h0 = self.head[g0]
+            h0 = self.head[cl0]
             q = np.zeros((BR, self.HD), dtype=np.int8)
             q[0] = d.q8[h0][self.ctx][self.perm]
             kt16, vt16 = self._ktile(m0, self.LAST), self._vtile(m0, self.LAST)
             ktc, vtc = self._ktile(m0, self.CT - 1), self._vtile(m0, self.CT - 1)
             orow = lay.to_a(d.dec_ot8[h0], mesh).astype(np.int8).reshape(-1, 4 * BR)[:, :ATOM].reshape(-1)
             blk = BR * self.HD
-            stage = [("q8", R, 0, self.q8[g0], lay.to_a(q, mesh).astype(np.int8)),
-                     ("k16_c0", R, 0, self.kbuf[g0].view(L16), kt16[:blk]),
-                     ("k16_c1", R, 1, self.kbuf[g1].view(L16), kt16[:blk]),
-                     ("v16_c0", R, 0, self.vbuf[g0].view(L16), vt16),
-                     ("v16_c1", R, 1, self.vbuf[g1].view(L16), vt16),
+            stage = [("q8", R, 0, self.q8[cl0], lay.to_a(q, mesh).astype(np.int8)),
+                     ("k16_c0", R, 0, self.kbuf[cl0].view(L16), kt16[:blk]),
+                     ("k16_c1", R, 1, self.kbuf[cl1].view(L16), kt16[:blk]),
+                     ("v16_c0", R, 0, self.vbuf[cl0].view(L16), vt16),
+                     ("v16_c1", R, 1, self.vbuf[cl1].view(L16), vt16),
                      ("kc_mate", mate, 1, self.kbuf[gm].view(self.CT * self.TILE_B - blk), ktc[-blk:]),
                      ("vc_mate", mate, 1, self.vbuf[gm].view((self.CT - 1) * self.TILE_B), vtc),
-                     ("o8row", R, 0, self.oar[g0], orow)]
+                     ("o8row", R, 0, self.oar[cl0], orow)]
             for nm, k, c, src, img in stage:
                 img = np.ascontiguousarray(img).view(np.uint8)
                 checks.append((nm, self.stash(nm, k, c, src, img.size, []), img, img.size))

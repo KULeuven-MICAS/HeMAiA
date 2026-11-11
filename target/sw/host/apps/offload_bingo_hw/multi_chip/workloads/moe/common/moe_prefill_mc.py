@@ -268,7 +268,7 @@ class MBuild(cm.ChipletBuild):
         self.chain_path = chain_path_param(p, self.chips, self.ROOT)
         # params chain_halves {west: [...], east: [...]}: each slice's reduce of a cluster as two ChainGathers at once
         # over disjoint chips -- west (hex chip ids in data order, ending at the root) into p1c, and east (ending at its
-        # collector) into the collector's own slot of the symmetric output buffer (the same local address on every
+        # collector) into the collector's own slot of the exchange buffer (the same local address on every
         # chip, so the root's tasks can name it), its own partial first copied aside -- then one hop that adds the
         # east sum to p1c into the root's own slot, which the root stores. No gather runs in place: the chain kernel
         # marks its destination with a sentinel before it arms, which in place would overwrite the collector's own
@@ -401,12 +401,12 @@ class MBuild(cm.ChipletBuild):
         sa = p.get("shared_after")
         self.shared_after = None if sa is None else [int(x) for x in sa]
         # params shared_down_early (an expert slot): the shared MLP's down projection of every output slice runs right
-        # after that slot's gate|up (where the arrays wait for the stream), through the symmetric buffer's slots,
+        # after that slot's gate|up (where the arrays wait for the stream), through the exchange buffer's slots,
         # dequantised and parked in the chip's L3; each slice of the down phase then starts from a copy of its part
         # instead of a GEMM. Its weight chunks are taken from the ring there, in that order
         sde = p.get("shared_down_early")
         self.sd_early = None if sde is None else int(sde)
-        # params out_slots (default 2): the slots of the symmetric output buffer the down phase's slices rotate through,
+        # params out_slots (default 2): the slots of the exchange buffer the down phase's slices rotate through,
         # so slice j + out_slots waits for slice j's ChainGather (and the root's store) to have read its slot. The
         # root's p1c keeps two slots: the serial chains read them in turn
         self.NOUT = int(p.get("out_slots", 2))
@@ -552,11 +552,11 @@ class MBuild(cm.ChipletBuild):
         # The shared gate|up keeps each of its weight chunks in an L1 slab for every row block of X
         # (loaded at the first block, released after the last), so a cluster needs a slab per shared
         # chunk: with fewer, a later chunk's load overwrites one still to be read.
-        for g in range(self.G):
-            n_sh = len(self.chunks(self.ch(self.chip(g), self.c(g))[0][1]))
-            if n_sh > len(self.ls[g].slabs):
-                raise ValueError(f"cluster {g} holds {n_sh} shared gate|up chunks in "
-                                 f"{len(self.ls[g].slabs)} slabs: params w_buffers >= {n_sh}")
+        for cl in range(self.N_CL):
+            n_sh = len(self.chunks(self.ch(self.chip(cl), self.local(cl))[0][1]))
+            if n_sh > len(self.ls[cl].slabs):
+                raise ValueError(f"cluster {cl} holds {n_sh} shared gate|up chunks in "
+                                 f"{len(self.ls[cl].slabs)} slabs: params w_buffers >= {n_sh}")
         self.make_rings()
         self._buffers()
 
@@ -856,8 +856,8 @@ class MBuild(cm.ChipletBuild):
         # gate|up chunks slot by slot, then per output slice the shared down chunk and each slot's
         self.img, self.chunk_off = {}, {}
         sh_mp = d.sh
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
             (sc0, sn), ex = self.ch(k, c)
             loc = (self.mem[k] >> 4, self.mem[k] & 15)
             parts, offs = [], []
@@ -887,36 +887,36 @@ class MBuild(cm.ChipletBuild):
             for b in parts:
                 if b.size > self.chunk:
                     raise ValueError(f"a weight chunk of {b.size} B; params w_chunk_bytes is {self.chunk}")
-            self.img[g] = st.put_hbm(f"{T}_w_g{g}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
-            self.chunk_off[g] = offs
+            self.img[cl] = st.put_hbm(f"{T}_w_cl{cl}", np.concatenate(parts).astype(np.int8), mem_chip=loc)
+            self.chunk_off[cl] = offs
 
     def _buffers(self):
         d, T = self.d, self.T
         # route dist: the 8-token tiles each cluster routes, spread evenly over the clusters (each cluster's a run of
         # consecutive tiles in one row block of X, routed as one, at most SOFTMAX_ROWS rows)
         ntile = T // 8
-        self.rt_tiles = {g: [i for i in range(ntile) if i * self.G // ntile == g] for g in range(self.G)}
+        self.rt_tiles = {cl: [i for i in range(ntile) if i * self.N_CL // ntile == cl] for cl in range(self.N_CL)}
         if self.route_root_last:
             # the same spread, rotated by one chip so the root's clusters get the last tiles
-            self.rt_tiles = {g: [] for g in range(self.G)}
+            self.rt_tiles = {cl: [] for cl in range(self.N_CL)}
             for i in range(ntile):
-                self.rt_tiles[(i * self.G // ntile + self.NC) % self.G].append(i)
+                self.rt_tiles[(i * self.N_CL // ntile + self.NC) % self.N_CL].append(i)
         if self.route_dist and (max(len(v) for v in self.rt_tiles.values()) * 8 > SOFTMAX_ROWS or any(
                 v and (v != list(range(v[0], v[0] + len(v))) or 8 * v[0] // self.XR != 8 * v[-1] // self.XR)
                 for v in self.rt_tiles.values())):
-            raise ValueError(f"params route dist: {ntile} tiles over {self.G} clusters, each cluster's consecutive, in "
-                             f"one row block of X, {SOFTMAX_ROWS // 8} at most")
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_sym", self.NOUT * self.SL)
+            raise ValueError(f"params route dist: {ntile} tiles over {self.N_CL} clusters, each cluster's consecutive, "
+                             f"in one row block of X, {SOFTMAX_ROWS // 8} at most")
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_xch", self.NOUT * self.SL)
                     for k in self.chips for c in range(self.NC)}
-        self.sym_zero = False                    # the shared down GEMM writes each slot whole first
+        self.xch_zero = False                    # the shared down GEMM writes each slot whole first
         self.p1c = {c: self.cx_chip(self.ROOT).at(c).l1(f"{self.TAG}_p1c", 2 * self.chain_group * self.SL)
                     for c in range(self.NC)}
         if self.halves:                                     # params chain_halves: the east collector's partial, set aside
             E = self.halves[1][-1]
             self.esrc = {c: self.cx_chip(E).at(c).l1(f"{self.TAG}_esrc", self.SL) for c in range(self.NC)}
         B = {}
-        for g in range(self.G):
-            k, c = self.chip(g), self.c(g)
+        for cl in range(self.N_CL):
+            k, c = self.chip(cl), self.local(cl)
             l1 = lambda name, nb: self.cx_chip(k).at(c).l1(f"{self.TAG}_{name}", nb)
             (_, sn), ex = self.ch(k, c)
             rows = [md.pad8(d.cnt[e]) for e in self.held[k]]
@@ -926,7 +926,7 @@ class MBuild(cm.ChipletBuild):
             brow = max(prow)
             gt = max(self.XR, brow) // 8 * 2 * self.BPC * D_BLOCK
             nmax = max(n for _, n in ex.values()) // BLK
-            b = B[g] = dict(
+            b = B[cl] = dict(
                 xblk=None if self.x_in_xe else [l1(f"xblk{i}", self.XR * self.PX) for i in range(2)],
                 # slot s gathers its rows into xe[s % 2], so each holds the most rows of its slots; params
                 # shared_after, x_in_xe: X's row blocks are copied into both too
@@ -953,8 +953,8 @@ class MBuild(cm.ChipletBuild):
                 b["a16sh"] = l1("a16sh", (self.XR if self.sh_qb else T) // 8 * (sn // BLK) * D_BLOCK + D_BLOCK)
                 if self.sh_qb and self.sh_stage_pitch(k, c):
                     b["shq_st"] = l1("shq_st", T * self.sh_stage_pitch(k, c))
-            if self.route_dist and self.rt_tiles[g]:       # route dist: the cluster's tiles
-                nr = 8 * len(self.rt_tiles[g])
+            if self.route_dist and self.rt_tiles[cl]:      # route dist: the cluster's tiles
+                nr = 8 * len(self.rt_tiles[cl])
                 if self.route_tile_buf:
                     b["rx"] = l1("rx", nr * self.PX)
                 b["rw"] = l1("rw", self.H * 64)
@@ -962,7 +962,7 @@ class MBuild(cm.ChipletBuild):
                 b["lg"] = l1("lg", nr * 64 * 2)
                 b["pin"] = l1("pin", nr * 128)
                 b["pp"] = l1("pp", nr * 128)
-            if g == 0 and not self.route_dist:             # the root's cluster 0: the router
+            if cl == 0 and not self.route_dist:            # the root's cluster 0: the router
                 b["rw"] = l1("rw", self.H * 64)
                 b["rws"] = l1("rws", 4 * D_BLOCK)
                 b["lg"] = [l1(f"lg{i}", self.XR * 64 * 2) for i in range(2)]
@@ -981,8 +981,8 @@ class MBuild(cm.ChipletBuild):
                            for i in range(self.n_sc)]
         self.B = B
         self._hres_reader = {}
-        self.sc_next = {g: 0 for g in range(self.G)}
-        self.sc_reader = {g: [None] * self.n_sc for g in range(self.G)}
+        self.sc_next = {cl: 0 for cl in range(self.N_CL)}
+        self.sc_reader = {cl: [None] * self.n_sc for cl in range(self.N_CL)}
 
     # ---- helpers ----------------------------------------------------------------------------
     def args_phase(self, name):
@@ -1038,63 +1038,63 @@ class MBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] args phases: " + "; ".join(f"{q} {nm}" for q, nm in enumerate(self.phase_names))
               + f"; root cluster 0 tasks a phase {dict(sorted(counts.items(), key=str))}")
 
-    def _resid_add(self, g, jl, y, after):
-        """params resid: the residual's slice jl of cluster g's outputs added into the chip's partial y (after the
+    def _resid_add(self, cl, jl, y, after):
+        """params resid: the residual's slice jl of cluster cl's outputs added into the chip's partial y (after the
         shared down projection's dequantisation), a piece at a time through the cluster's hres buffer. Returns
         the last add."""
-        k, c = self.chip(g), self.c(g)
+        k, c = self.chip(cl), self.local(cl)
         dm, simd = self.roles["dm"], self.roles["simd"]
-        pc, hb = self.resid["piece"], self.B[g]["hres"]
+        pc, hb = self.resid["piece"], self.B[cl]["hres"]
         prev = after
         for o in range(0, self.SL, pc):
-            war = [self._hres_reader[g]] if self._hres_reader.get(g) is not None else []
+            war = [self._hres_reader[cl]] if self._hres_reader.get(cl) is not None else []
             src = self.resid["src"]
-            ld = self.node(k, c, dm, f"res_ld_j{jl}o{o}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+            ld = self.node(k, c, dm, f"res_ld_j{jl}o{o}", "__snax_bingo_kernel_idma_1d_copy",
                            SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(src.symbol_name,
                                                                         offset=src.offset + self.y_off(c, jl) + o,
                                                                         chip_id=getattr(src, "chip_id", None)),
                                                          hb, pc), war)
-            prev = self.node(k, c, simd, f"res_add_j{jl}o{o}_g{g}", "__snax_bingo_kernel_simd_stream_elementwise",
+            prev = self.node(k, c, simd, f"res_add_j{jl}o{o}", "__snax_bingo_kernel_simd_stream_elementwise",
                              SnaxBingoKernelSimdAddF16Args(y.view(o), hb, y.view(o), pc // 64, 32), [ld, prev])
-            self._hres_reader[g] = prev
+            self._hres_reader[cl] = prev
         return prev
 
-    def _load(self, g, j, deps=(), tag=""):
-        """Weight chunk j of cluster g from its ring into the next slab (tag: in the names of a chunk loaded again).
+    def _load(self, cl, j, deps=(), tag=""):
+        """Weight chunk j of cluster cl from its ring into the next slab (tag: in the names of a chunk loaded again).
         Returns (load, slab index, slab, its scale tile as the dequantisation reads it)."""
-        k, c = self.chip(g), self.c(g)
-        ls = self.ls[g]
-        off, nb, soff = self.chunk_off[g][j]
+        k, c = self.chip(cl), self.local(cl)
+        ls = self.ls[cl]
+        off, nb, soff = self.chunk_off[cl][j]
         si, slab, war = ls.take(nb)
         ld, _ = ls.rings.load_chunk(
             lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
-            f"Ld_w{j}{tag}_g{g}", src=self.img[g].address + off, nbytes=nb, slab=slab, war=war,
+            f"Ld_w{j}{tag}", src=self.img[cl].address + off, nbytes=nb, slab=slab, war=war,
             deps=deps, dm=self.roles["dm"], trailer=True)
         if not self.scale_out:
             return ld, si, slab, Scale(slab.view(soff))
-        i = self.sc_next[g]
-        self.sc_next[g] = (i + 1) % self.n_sc
-        buf, rd = self.B[g]["sc"][i], self.sc_reader[g][i]
-        cp = self.node(k, c, self.roles["dm"], f"sc_w{j}{tag}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+        i = self.sc_next[cl]
+        self.sc_next[cl] = (i + 1) % self.n_sc
+        buf, rd = self.B[cl]["sc"][i], self.sc_reader[cl][i]
+        cp = self.node(k, c, self.roles["dm"], f"sc_w{j}{tag}", "__snax_bingo_kernel_idma_1d_copy",
                        SnaxBingoKernelIdma1dCopyArgs(slab.view(soff), buf, nb - soff - (64 if self.plain_trailer else 0)),
                        [ld] + ([rd] if rd is not None else []))
         return ld, si, slab, Scale(buf, cp, i)
 
-    def _scale_read(self, g, sc, reader):
+    def _scale_read(self, cl, sc, reader):
         """`reader` is the last task that reads scale tile `sc` (params scale_out: its buffer's next copy waits for it)."""
         if sc.buf is not None:
-            self.sc_reader[g][sc.buf] = reader
+            self.sc_reader[cl][sc.buf] = reader
 
-    def _release(self, g, si, gemm, deq, sc):
+    def _release(self, cl, si, gemm, deq, sc):
         """Slab si is free after its readers: the dequantisation `deq`, which reads the scale tile from the slab and
         follows its GEMM, or with params scale_out the chunk's GEMM `gemm` and the copy of its scale tile. `gemm` a
         list: the chunk's GEMMs of every row block, each a reader."""
         gms = list(gemm) if isinstance(gemm, (list, tuple)) else [gemm]
         if sc.copy is None:
-            self.ls[g].release(si, [deq] + gms if isinstance(gemm, (list, tuple)) else deq)
+            self.ls[cl].release(si, [deq] + gms if isinstance(gemm, (list, tuple)) else deq)
         else:
-            self.ls[g].release(si, gms)
-            self.ls[g]._extra[si].append(sc.copy)
+            self.ls[cl].release(si, gms)
+            self.ls[cl]._extra[si].append(sc.copy)
 
     def gemm(self, k, c, name, a, a_pitch, b, dst, M, K, N, k_shift, deps, int4=1):
         """One GEMM (gemm_full); returns the task its output is ready after."""
@@ -1125,15 +1125,15 @@ class MBuild(cm.ChipletBuild):
             # every routing cluster's router weights and their factors, ahead of the window on its DM core; its
             # router GEMM and factors wait for them on the chip (only the root's setup holds the start stamp,
             # whose dependency cell would otherwise collect every chip's). x_hbm: inside the window (below)
-            for g in (() if self.x_hbm else range(self.G)):
-                if self.rt_tiles[g]:
-                    k, c, bg = self.chip(g), self.c(g), self.B[g]
-                    self.rw_ld[g] = (self.node(k, c, dm, "rw_load", "__snax_bingo_kernel_idma_1d_copy",
+            for cl in (() if self.x_hbm else range(self.N_CL)):
+                if self.rt_tiles[cl]:
+                    k, c, bg = self.chip(cl), self.local(cl), self.B[cl]
+                    self.rw_ld[cl] = (self.node(k, c, dm, "rw_load", "__snax_bingo_kernel_idma_1d_copy",
                                                SnaxBingoKernelIdma1dCopyArgs(self.h_rw, bg["rw"], self.H * 64)),
                                      self.node(k, c, dm, "rws_load", "__snax_bingo_kernel_idma_1d_copy",
                                                SnaxBingoKernelIdma1dCopyArgs(self.h_rws, bg["rws"], 4 * D_BLOCK)))
                     if k == R:
-                        pre[k] += list(self.rw_ld[g])
+                        pre[k] += list(self.rw_ld[cl])
         else:
             pre[R] = [self.node(R, 0, dm, "rw_load", "__snax_bingo_kernel_idma_1d_copy",
                                 SnaxBingoKernelIdma1dCopyArgs(self.h_rw, B0["rw"], self.H * 64)),
@@ -1148,7 +1148,7 @@ class MBuild(cm.ChipletBuild):
             # SIMD's output at 768. The root's clusters, or (route dist) every chip's, which all route
             for k in (self.chips if self.route_dist else [R]):
                 for c in range(self.NC):
-                    wz = self.B[self.gs(k)[c]]["wz"]
+                    wz = self.B[self.clusters(k)[c]]["wz"]
                     wz_init = self.node(k, c, dm, "wz_init", "__snax_bingo_kernel_idma_1d_copy",
                                         SnaxBingoKernelIdma1dCopyArgs(zero, wz, 1024))
                     # one column tile: INT8 B with the paired layout, which takes whole pairs only
@@ -1164,19 +1164,19 @@ class MBuild(cm.ChipletBuild):
                                               SnaxBingoKernelSimdSoftmaxF16F16Args(wz, wz.view(768), 2, 64),
                                               [warm[-1]]))
         go = self.setup(extra=pre)
-        G, XR = self.G, self.XR
+        N_CL, XR = self.N_CL, self.XR
         if self.x_hbm:
             if not self.route_dist:
                 raise ValueError("params x_hbm: needs route dist")
             self.rw_bcast, self.x_bcast = self.hbm_bcasts(go)
             # every routing cluster's router weights and factors into L1 once the multicast has landed them
-            for g in range(G):
-                if self.rt_tiles[g]:
-                    k, c, bg = self.chip(g), self.c(g), self.B[g]
+            for cl in range(N_CL):
+                if self.rt_tiles[cl]:
+                    k, c, bg = self.chip(cl), self.local(cl), self.B[cl]
                     w = self.node(k, c, dm, "rw_wait", "__snax_bingo_kernel_wait_flags",
                                   SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{Tg}_rwflag"), 1, 1), [go[k]])
                     self.dfg.bingo_add_order_edge(self.rw_bcast, w)
-                    self.rw_ld[g] = (self.node(k, c, dm, "rw_load", "__snax_bingo_kernel_idma_1d_copy",
+                    self.rw_ld[cl] = (self.node(k, c, dm, "rw_load", "__snax_bingo_kernel_idma_1d_copy",
                                                SnaxBingoKernelIdma1dCopyArgs(self.h_rw, bg["rw"], self.H * 64), [w]),
                                      self.node(k, c, dm, "rws_load", "__snax_bingo_kernel_idma_1d_copy",
                                                SnaxBingoKernelIdma1dCopyArgs(self.h_rws, bg["rws"], 4 * D_BLOCK), [w]))
@@ -1195,28 +1195,28 @@ class MBuild(cm.ChipletBuild):
         # each block's put is created with the block, so the root's DM core copies a block for the router
         # right after putting it, before the next put
         puts = []
-        xblk_reader = {g: [[], []] for g in range(G)}
-        sg_gms = {}                                         # (g, chunk) -> its shared gate|up GEMMs, every X block
-        gb_reader = {g: [None, None] for g in range(G)}
-        self.gcount = {g: 0 for g in range(G)}
+        xblk_reader = {cl: [[], []] for cl in range(N_CL)}
+        sg_gms = {}                                         # (cl, chunk) -> its shared gate|up GEMMs, every X block
+        gb_reader = {cl: [None, None] for cl in range(N_CL)}
+        self.gcount = {cl: 0 for cl in range(N_CL)}
         sh_ld = {}
-        last_sw = {g: None for g in range(G)}
+        last_sw = {cl: None for cl in range(N_CL)}
         lg_reader, rtr_mul = [None, None], []
         rt_sm, blk_sm = [], []
         rt_tile = {}                                        # route dist: tile -> (cluster, its top 6)
 
-        def next_g(g):
-            i = self.gcount[g] % 2
-            self.gcount[g] += 1
-            return i, self.B[g]["gbuf"][i]
+        def next_g(cl):
+            i = self.gcount[cl] % 2
+            self.gcount[cl] += 1
+            return i, self.B[cl]["gbuf"][i]
 
-        def root_copy(g, b):
-            """The root's own copy of row block b into cluster g's block buffer, from its source."""
-            c = self.c(g)
-            return self.node(R, c, dm, f"x_copy_b{b}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
+        def root_copy(cl, b):
+            """The root's own copy of row block b into cluster cl's block buffer, from its source."""
+            c = self.local(cl)
+            return self.node(R, c, dm, f"x_copy_b{b}", "__snax_bingo_kernel_idma_2d_copy",
                              SnaxBingoKernelIdma2dCopyArgs(self.xsrc(b * XR * self.H),
-                                                           self.B[g]["xblk"][b % 2], self.H, self.H, self.PX, XR),
-                             [go[R]] + xblk_reader[g][b % 2])
+                                                           self.B[cl]["xblk"][b % 2], self.H, self.H, self.PX, XR),
+                             [go[R]] + xblk_reader[cl][b % 2])
 
         def put(b, nblk=1):
             pc = (b % 2) if self.x_puts_split else (1 if (self.x_put_c1 or self.x_puts_first) else 0)
@@ -1231,33 +1231,33 @@ class MBuild(cm.ChipletBuild):
             """row block b's landed flag (params x_put_once: the one flag of the whole put)"""
             return 0 if self.x_put_once else b * 64
 
-        def route_tile(g, ts, a, deps):
-            """route dist: cluster g's tiles ts (consecutive, 8 tokens each, named by the first) from their rows at
+        def route_tile(cl, ts, a, deps):
+            """route dist: cluster cl's tiles ts (consecutive, 8 tokens each, named by the first) from their rows at
             `a`: the router GEMM, its factors, the softmax and the top 6 into the cluster's route table"""
-            k, c = self.chip(g), self.c(g)
-            bg = self.B[g]
+            k, c = self.chip(cl), self.local(cl)
+            bg = self.B[cl]
             i, n = ts[0], len(ts)
             rg = self.gemm(k, c, f"rt_t{i}", a, self.PX, bg["rw"], bg["lg"], n, self.H // 8, 4, d.k_x,
-                           list(deps) + [self.rw_ld[g][0]], int4=0)
+                           list(deps) + [self.rw_ld[cl][0]], int4=0)
             mt = self.node(k, c, simd, f"rt_deq_t{i}", "__snax_bingo_kernel_simd_mul_tiles",
                            SnaxBingoKernelSimdMulTilesArgs(bg["lg"], bg["rws"], bg["pin"], n, 4, dst_pitch=128),
-                           [rg, self.rw_ld[g][1]])
+                           [rg, self.rw_ld[cl][1]])
             sm = self.node(k, c, simd, f"rt_softmax_t{i}", "__snax_bingo_kernel_simd_softmax_f16_f16",
                            SnaxBingoKernelSimdSoftmaxF16F16Args(bg["pin"], bg["pp"], 8 * n, 64), [mt])
             tk = self.node(k, c, xdma, f"rt_topk_t{i}", "__snax_bingo_kernel_moe_topk_rows",
                            SnaxBingoKernelMoeTopkRowsArgs(bg["pp"], 128, 64, md.TOP_K, 0, 8 * n,
                                                           bg["rt"].view(8 * i * ROUTE_B)), [sm])
             for t in ts:
-                rt_tile[t] = (g, tk)
+                rt_tile[t] = (cl, tk)
             return rg
 
         def route_up(i):
             """route dist: tile i's entries and flag into the root's landing area"""
-            g, tk = rt_tile[i]
-            k, c, o = self.chip(g), self.c(g), 8 * i * ROUTE_B
+            cl, tk = rt_tile[i]
+            k, c, o = self.chip(cl), self.local(cl), 8 * i * ROUTE_B
             rt_ups[i] = self.node(k, c, dm, f"rt_up_t{i}", "__snax_bingo_kernel_idma_put_flagged",
                                   SnaxBingoKernelIdmaPutFlaggedArgs(
-                                      self.B[g]["rt"].view(o), BingoMemSymbol(f"{Tg}_rland", offset=o, chip_id=R),
+                                      self.B[cl]["rt"].view(o), BingoMemSymbol(f"{Tg}_rland", offset=o, chip_id=R),
                                       8 * ROUTE_B, BingoMemSymbol(f"{Tg}_rup", offset=64 * i, chip_id=R), value=1),
                                   [tk])
             w = rt_wait.get(8 * i // XR)
@@ -1314,69 +1314,70 @@ class MBuild(cm.ChipletBuild):
         fd_prev = {}
         rput_to = {}                                        # params x_cast unicast: (block, chip) -> its put
 
-        def fetch_dispatch(g):
-            """dispatch_blocks: cluster g fetches each block's table as the root sends it and
+        def fetch_dispatch(cl):
+            """dispatch_blocks: cluster cl fetches each block's table as the root sends it and
             turns it into its chip's row lists"""
-            k, c = self.chip(g), self.c(g)
-            bg = self.B[g]
+            k, c = self.chip(cl), self.local(cl)
+            bg = self.B[cl]
             caps = [md.pad8(d.cnt[e]) for e in self.held[k]]
             cnts = [int(d.cnt[e]) for e in self.held[k]]
-            prev = fd_prev.get(g, [])
+            prev = fd_prev.get(cl, [])
             for b in range(self.XB):
                 o = b * XR * ROUTE_B
-                f = self.node(k, c, dm, f"rt_fetch_b{b}_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
+                f = self.node(k, c, dm, f"rt_fetch_b{b}", "__snax_bingo_kernel_idma_fetch_flagged",
                               SnaxBingoKernelIdmaFetchFlaggedArgs(
                                   BingoMemSymbol(f"{Tg}_rland", offset=o), bg["rt"].view(o), XR * ROUTE_B,
                                   BingoMemSymbol(f"{Tg}_rflag", offset=64 * b), 1, 1),
                               [rput_to.get((b, k), rputs[b])] if k == R else [go[k]])
                 if k != R:
                     self.dfg.bingo_add_order_edge(rput_to.get((b, k), rputs[b]), f)
-                prev = [self.node(k, c, xdma, f"rt_dispatch_b{b}_g{g}", "__snax_bingo_kernel_moe_dispatch",
+                prev = [self.node(k, c, xdma, f"rt_dispatch_b{b}", "__snax_bingo_kernel_moe_dispatch",
                                   SnaxBingoKernelMoeDispatchArgs(bg["rt"], T, md.TOP_K, self.held[k], bg["lists"],
                                                                  caps, cnts, pad_row=T, t0=b * XR, t1=(b + 1) * XR,
                                                                  state_addr=bg["dst"]), [f] + prev)]
-            fd_prev[g] = prev
-            disp_early[g] = prev[0]
+            fd_prev[cl] = prev
+            disp_early[cl] = prev[0]
 
         sh_qlast = {}                                       # sh_quant_blocks: each cluster's last shared quantise
         sh_cp = {}                                          # sh_quant_blocks: each cluster's last staged chunk's copy
 
-        def sh_a16(g, b, b0):
+        def sh_a16(cl, b, b0):
             """Where block b's SwiGLU output of the chunk at column b0 goes (sh_quant_blocks: one block's buffer)."""
-            nsh = self.ch(self.chip(g), self.c(g))[0][1] // BLK
-            return self.B[g]["a16sh"].view(((0 if self.sh_qb else b * (XR // 8) * nsh) + b0 // BLK) * D_BLOCK)
+            nsh = self.ch(self.chip(cl), self.local(cl))[0][1] // BLK
+            return self.B[cl]["a16sh"].view(((0 if self.sh_qb else b * (XR // 8) * nsh) + b0 // BLK) * D_BLOCK)
 
-        def sh_quant_block(g, j, b, b0, n, sw):
+        def sh_quant_block(cl, j, b, b0, n, sw):
             """sh_quant_blocks: block b's columns b0 .. b0 + n of the cluster's shared MLP into its A8; the next SwiGLU
             into the buffer follows it. Returns the task that block's next writer waits for."""
             if not self.sh_qb:
                 return sw
-            k, c = self.chip(g), self.c(g)
+            k, c = self.chip(cl), self.local(cl)
             sn = self.ch(k, c)[0][1]
             coff = 0 if c == 0 else BLK * self.shb[k][0]
-            after = [sh_cp[g]] if g in sh_cp else []      # the staging rows read, and every copy before this one done
+            after = [sh_cp[cl]] if cl in sh_cp else []    # the staging rows read, and every copy before this one done
             pq = self.sh_stage_pitch(k, c)
             if (coff + b0) % SIMD_BEAT and pq:
-                dst, pitch = self.B[g]["shq_st"].view(b * XR * pq), pq
+                dst, pitch = self.B[cl]["shq_st"].view(b * XR * pq), pq
             else:
-                dst, pitch = self.B[g]["a8sh"].view(self.beat_aligned(b * XR * self.PS + coff + b0, "q_sh")), self.PS
-            q = self.node(k, c, simd, f"q_sh_c{j}_b{b}_g{g}", "__snax_bingo_kernel_simd_quant_rows",
-                          SnaxBingoKernelSimdQuantRowsArgs(sh_a16(g, b, b0), XR, n // BLK, (sn // BLK) * D_BLOCK,
+                dst, pitch = self.B[cl]["a8sh"].view(self.beat_aligned(b * XR * self.PS + coff + b0, "q_sh")), self.PS
+            q = self.node(k, c, simd, f"q_sh_c{j}_b{b}", "__snax_bingo_kernel_simd_quant_rows",
+                          SnaxBingoKernelSimdQuantRowsArgs(sh_a16(cl, b, b0), XR, n // BLK, (sn // BLK) * D_BLOCK,
                                                            d.sh["inv_a"], dst, pitch), [sw] + after)
-            sh_qlast[g] = q
+            sh_qlast[cl] = q
             return q
 
-        def sh_quant_chunk_end(g, j, b0, n):
+        def sh_quant_chunk_end(cl, j, b0, n):
             """sh_quant_blocks: a chunk quantised into the staging rows, every row block of it, copied into its
             columns of the A8 by the DM core; the copy then stands for every quantise of the cluster so far."""
-            k, c = self.chip(g), self.c(g)
+            k, c = self.chip(cl), self.local(cl)
             coff = 0 if c == 0 else BLK * self.shb[k][0]
             pq = self.sh_stage_pitch(k, c) if self.sh_qb else 0
             if not pq or not (coff + b0) % SIMD_BEAT:
                 return
-            sh_cp[g] = sh_qlast[g] = self.node(k, c, dm, f"q_sh_cp_c{j}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
-                                               SnaxBingoKernelIdma2dCopyArgs(self.B[g]["shq_st"], self.B[g]["a8sh"].view(coff + b0),
-                                                                             n, pq, self.PS, T), [sh_qlast[g]])
+            sh_cp[cl] = sh_qlast[cl] = self.node(k, c, dm, f"q_sh_cp_c{j}", "__snax_bingo_kernel_idma_2d_copy",
+                                               SnaxBingoKernelIdma2dCopyArgs(self.B[cl]["shq_st"],
+                                                                             self.B[cl]["a8sh"].view(coff + b0),
+                                                                             n, pq, self.PS, T), [sh_qlast[cl]])
 
         rt_ups, rt_wait, disp_early = {}, {}, {}
         x_last = {}                                         # each root DM core's last X put
@@ -1390,9 +1391,9 @@ class MBuild(cm.ChipletBuild):
                 puts.append(put(b))
         if self.route_tile_buf:
             # every cluster's tile first: its rows straight from the chip's X (the root: its source)
-            for g in range(G):
-                k, c = self.chip(g), self.c(g)
-                ts = self.rt_tiles[g]
+            for cl in range(N_CL):
+                k, c = self.chip(cl), self.local(cl)
+                ts = self.rt_tiles[cl]
                 for i in ts[:1]:
                     bt = 8 * i // XR
                     if self.x_hbm:
@@ -1412,83 +1413,84 @@ class MBuild(cm.ChipletBuild):
                         self.dfg.bingo_add_order_edge(puts[bt], w)
                         src, deps = self.xland(8 * i * self.H), [w]
                     xc = self.node(k, c, dm, f"rt_xcopy_t{i}", "__snax_bingo_kernel_idma_2d_copy",
-                                   SnaxBingoKernelIdma2dCopyArgs(src, self.B[g]["rx"], self.H, self.H, self.PX, 8 * len(ts)),
+                                   SnaxBingoKernelIdma2dCopyArgs(src, self.B[cl]["rx"], self.H, self.H, self.PX,
+                                                                 8 * len(ts)),
                                    deps)
-                    route_tile(g, ts, self.B[g]["rx"], [xc])
+                    route_tile(cl, ts, self.B[cl]["rx"], [xc])
         if self.per_kernel:
             # params barrier_at kernel, K1: the route whole -- every cluster's upload, the root's table out to every
             # chip, every cluster's row lists -- before any row block of X
-            for g in range(G):
-                for i in self.rt_tiles[g]:
+            for cl in range(N_CL):
+                for i in self.rt_tiles[cl]:
                     route_up(i)
             root_collect()
-            for g in range(G):
-                fetch_dispatch(g)
+            for cl in range(N_CL):
+                fetch_dispatch(cl)
             self.barrier({k: [] for k in self.chips})
         for b in range(self.XB):
             early = {0: root_copy(0, b)} if self.x_local else {}
             if not (self.x_puts_first or self.x_hbm):
                 puts.append(put(b))
-            for g in range(G):
-                k, c = self.chip(g), self.c(g)
-                bg = self.B[g]
+            for cl in range(N_CL):
+                k, c = self.chip(cl), self.local(cl)
+                bg = self.B[cl]
                 xb = bg["xblk"][b % 2]
                 if self.stop == "route":
                     # the route alone: each cluster's upload and the table, no row block, no shared MLP
                     if b == min(1, self.XB - 1):
-                        for i in self.rt_tiles[g]:
+                        for i in self.rt_tiles[cl]:
                             route_up(i)
                         if self.route_early:
-                            if g == 0:
+                            if cl == 0:
                                 root_collect()
-                            fetch_dispatch(g)
+                            fetch_dispatch(cl)
                     continue
-                if (self.route_root_light and g == 0 and not self.ch(k, c)[0][1]
-                        and not any(8 * i // XR == b for i in self.rt_tiles[g])):
+                if (self.route_root_light and cl == 0 and not self.ch(k, c)[0][1]
+                        and not any(8 * i // XR == b for i in self.rt_tiles[cl])):
                     continue                                # route_root_light: a block the root cluster 0 does not use
                 if k == R and (self.x_put_c1 or self.x_local or self.x_puts_first):
-                    xc = early[g] if g in early else root_copy(g, b)
+                    xc = early[cl] if cl in early else root_copy(cl, b)
                 else:
                     if self.x_hbm:                          # the block's tiles' flags
-                        w = self.node(k, c, dm, f"x_wait_b{b}_g{g}", "__snax_bingo_kernel_wait_flags",
+                        w = self.node(k, c, dm, f"x_wait_b{b}", "__snax_bingo_kernel_wait_flags",
                                       SnaxBingoKernelWaitFlagsArgs(
                                           BingoMemSymbol(f"{Tg}_xtflag", offset=64 * (b * XR // 8)), XR // 8, 1), [go[k]])
                     else:
-                        w = self.node(k, c, dm, f"x_wait_b{b}_g{g}", "__snax_bingo_kernel_wait_flags",
+                        w = self.node(k, c, dm, f"x_wait_b{b}", "__snax_bingo_kernel_wait_flags",
                                       SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{Tg}_xflag", offset=xf(b)), 1, 1),
                                       [go[k]] + ([puts[b]] if k == R else []))
                     if k != R or self.x_hbm:
                         self.dfg.bingo_add_order_edge(puts[b], w)
-                    xc = self.node(k, c, dm, f"x_copy_b{b}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
+                    xc = self.node(k, c, dm, f"x_copy_b{b}", "__snax_bingo_kernel_idma_2d_copy",
                                    SnaxBingoKernelIdma2dCopyArgs(self.xland(b * XR * self.H),
                                                                  xb, self.H, self.H, self.PX, XR),
-                                   [w] + xblk_reader[g][b % 2])
-                xblk_reader[g][b % 2] = []
+                                   [w] + xblk_reader[cl][b % 2])
+                xblk_reader[cl][b % 2] = []
                 (sc0, sn), _ = self.ch(k, c)
                 if b == 0:                                  # the shared gate|up chunks, held for every block
                     nsj = len(self.chunks(sn)) if self.shared_after is None else min(1, len(self.chunks(sn)))
-                    sh_ld[g] = [self._load(g, j) for j in range(nsj)]
+                    sh_ld[cl] = [self._load(cl, j) for j in range(nsj)]
                 if self.route_tile_buf and not self.per_kernel:
                     b1 = min(1, self.XB - 1)
                     if b == b1:                             # the cluster's upload, behind its first row blocks' copies
-                        for i in self.rt_tiles[g]:
+                        for i in self.rt_tiles[cl]:
                             route_up(i)
                         if self.route_early:
-                            if g == 0:
+                            if cl == 0:
                                 root_collect()
-                            fetch_dispatch(g)
-                for i in (self.rt_tiles[g][:1] if self.route_dist and not self.route_tile_buf else ()):
+                            fetch_dispatch(cl)
+                for i in (self.rt_tiles[cl][:1] if self.route_dist and not self.route_tile_buf else ()):
                     if 8 * i // XR != b:
                         continue
                     # route dist: this cluster's tiles, rows 8 i.. of X, in block b
-                    rg = route_tile(g, self.rt_tiles[g], xb.view((8 * i - b * XR) * self.PX), [xc])
-                    xblk_reader[g][b % 2].append(rg)
-                if g == 0 and not self.route_dist:          # the router: logits, their factors, row-major
+                    rg = route_tile(cl, self.rt_tiles[cl], xb.view((8 * i - b * XR) * self.PX), [xc])
+                    xblk_reader[cl][b % 2].append(rg)
+                if cl == 0 and not self.route_dist:         # the router: logits, their factors, row-major
                     li = b % 2
                     lg = B0["lg"][li]
                     rg = self.gemm(k, c, f"rt_b{b}", xb, self.PX, B0["rw"], lg, XR // 8, self.H // 8, 4, d.k_x,
                                    [xc] + ([lg_reader[li]] if lg_reader[li] is not None else []), int4=0)
-                    xblk_reader[g][b % 2].append(rg)
+                    xblk_reader[cl][b % 2].append(rg)
                     mt = self.node(k, c, simd, f"rt_deq_b{b}", "__snax_bingo_kernel_simd_mul_tiles",
                                    SnaxBingoKernelSimdMulTilesArgs(lg, B0["rws"], B0["pin"].view(b * XR * 128),
                                                                    XR // 8, 4, dst_pitch=128), [rg])
@@ -1501,24 +1503,25 @@ class MBuild(cm.ChipletBuild):
                                                                                     SOFTMAX_ROWS, 64),
                                                [mt] + rt_sm[-1:]))
                     blk_sm.append(rt_sm[-1])
-                for j, (b0, n) in enumerate(self.chunks(sn)[:len(sh_ld[g])]):
-                    ld, si, slab, sc = sh_ld[g][j]
-                    gi, gb = next_g(g)
-                    gm = self.gemm(k, c, f"sg_c{j}_b{b}_g{g}", xb, self.PX, slab, gb, XR // 8, self.H // 8,
+                for j, (b0, n) in enumerate(self.chunks(sn)[:len(sh_ld[cl])]):
+                    ld, si, slab, sc = sh_ld[cl][j]
+                    gi, gb = next_g(cl)
+                    gm = self.gemm(k, c, f"sg_c{j}_b{b}", xb, self.PX, slab, gb, XR // 8, self.H // 8,
                                    2 * n // BLK, d.k_x,
-                                   [xc, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
-                    xblk_reader[g][b % 2].append(gm)
-                    sg_gms.setdefault((g, j), []).append(gm)
+                                   [xc, ld] + ([gb_reader[cl][gi]] if gb_reader[cl][gi] is not None else []))
+                    xblk_reader[cl][b % 2].append(gm)
+                    sg_gms.setdefault((cl, j), []).append(gm)
                     nsh = sn // BLK
-                    sw = self.node(k, c, simd, f"ssw_c{j}_b{b}_g{g}", "__snax_bingo_kernel_simd_deq_swiglu",
+                    sw = self.node(k, c, simd, f"ssw_c{j}_b{b}", "__snax_bingo_kernel_simd_deq_swiglu",
                                    SnaxBingoKernelSimdDeqSwigluArgs(
-                                       gb, sc.addr, self.B[g]["sg"], sh_a16(g, b, b0),
-                                       XR // 8, n // BLK, nsh * D_BLOCK), [gm] + sc.deps + ([last_sw[g]] if last_sw[g] else []))
-                    gb_reader[g][gi] = sw
-                    last_sw[g] = sh_quant_block(g, j, b, b0, n, sw)
-                    self._scale_read(g, sc, sw)
+                                       gb, sc.addr, self.B[cl]["sg"], sh_a16(cl, b, b0),
+                                       XR // 8, n // BLK, nsh * D_BLOCK),
+                                       [gm] + sc.deps + ([last_sw[cl]] if last_sw[cl] else []))
+                    gb_reader[cl][gi] = sw
+                    last_sw[cl] = sh_quant_block(cl, j, b, b0, n, sw)
+                    self._scale_read(cl, sc, sw)
                     if b == self.XB - 1:
-                        self._release(g, si, sg_gms[(g, j)], sw, sc)
+                        self._release(cl, si, sg_gms[(cl, j)], sw, sc)
 
         if self.x_hbm:
             # the root's prefetcher drives the multicast's engine: it pushes once X has landed
@@ -1591,10 +1594,10 @@ class MBuild(cm.ChipletBuild):
             self.route_put = rputs[-1]
             if not self.route_dist:
                 disp[0] = root_disp[-1]
-            for g in range(0 if self.route_dist else 1, G):
-                if g not in disp_early:
-                    fetch_dispatch(g)
-                disp[g] = disp_early[g]
+            for cl in range(0 if self.route_dist else 1, N_CL):
+                if cl not in disp_early:
+                    fetch_dispatch(cl)
+                disp[cl] = disp_early[cl]
         rput = None if self.dispatch_blocks else self.node(
             R, 0, dm, "rt_bput", "__snax_bingo_kernel_idma_put_flagged",
             SnaxBingoKernelIdmaPutFlaggedArgs(B0["rt"], BingoMemSymbol(f"{Tg}_rland"), T * ROUTE_B,
@@ -1602,13 +1605,13 @@ class MBuild(cm.ChipletBuild):
                                               also_here=True), topks)
         if rput is not None:
             self.route_put = rput
-        for g in (() if self.dispatch_blocks else range(G)):
-            k, c = self.chip(g), self.c(g)
-            bg = self.B[g]
-            if g == 0:
+        for cl in (() if self.dispatch_blocks else range(N_CL)):
+            k, c = self.chip(cl), self.local(cl)
+            bg = self.B[cl]
+            if cl == 0:
                 have = topks
             else:
-                have = self.node(k, c, dm, f"rt_fetch_g{g}", "__snax_bingo_kernel_idma_fetch_flagged",
+                have = self.node(k, c, dm, f"rt_fetch", "__snax_bingo_kernel_idma_fetch_flagged",
                                  SnaxBingoKernelIdmaFetchFlaggedArgs(BingoMemSymbol(f"{Tg}_rland"), bg["rt"], T * ROUTE_B,
                                                                      BingoMemSymbol(f"{Tg}_rflag"), 1, 1),
                                  [rput] if k == R else [go[k]])
@@ -1616,68 +1619,68 @@ class MBuild(cm.ChipletBuild):
                     self.dfg.bingo_add_order_edge(rput, have)
             caps = [md.pad8(d.cnt[e]) for e in self.held[k]]
             cnts = [int(d.cnt[e]) for e in self.held[k]]
-            disp[g] = self.node(k, c, xdma, f"rt_dispatch_g{g}", "__snax_bingo_kernel_moe_dispatch",
+            disp[cl] = self.node(k, c, xdma, f"rt_dispatch", "__snax_bingo_kernel_moe_dispatch",
                                 SnaxBingoKernelMoeDispatchArgs(bg["rt"], T, md.TOP_K, self.held[k], bg["lists"],
-                                                               caps, cnts, pad_row=T), have if g == 0 else [have])
+                                                               caps, cnts, pad_row=T), have if cl == 0 else [have])
         if self.stop == "route":
             self.end_window(list(disp.values()))
             self._checks()
             return
 
         # ---- the shared MLP's quantise; the experts' gate|up and quantise; the A8 exchange -------
-        qa = {}                                             # (g, slot or "sh") -> quantise
-        ex_copy = {}                                        # (g, slot or "sh") -> the copy into the other cluster
-        a16_reader = {g: ([None, None] if self.a16_pairs else None) for g in range(G)}
-        a16_used = {g: 0 for g in range(G)}               # a16_pairs: pairs so far, the buffer in turn
+        qa = {}                                             # (cl, slot or "sh") -> quantise
+        ex_copy = {}                                        # (cl, slot or "sh") -> the copy into the other cluster
+        a16_reader = {cl: ([None, None] if self.a16_pairs else None) for cl in range(N_CL)}
+        a16_used = {cl: 0 for cl in range(N_CL)}          # a16_pairs: pairs so far, the buffer in turn
         root_gat = {}
         # params x_in_xe: the row blocks' last readers (one GEMM core, in order) hold the buffers first
-        xe_reader = {g: [list(xblk_reader[g][i]) if self.x_in_xe else [] for i in range(2)] for g in range(G)}
-        pend = {g: [] for g in range(G)}                    # exchange copies created one slot later
-        held_ex = {g: [] for g in range(G)}                 # barrier_at kernel: every exchange, after the gate|up
+        xe_reader = {cl: [list(xblk_reader[cl][i]) if self.x_in_xe else [] for i in range(2)] for cl in range(N_CL)}
+        pend = {cl: [] for cl in range(N_CL)}               # exchange copies created one slot later
+        held_ex = {cl: [] for cl in range(N_CL)}            # barrier_at kernel: every exchange, after the gate|up
 
-        def quant_sh(g):
-            k, c = self.chip(g), self.c(g)
+        def quant_sh(cl):
+            k, c = self.chip(cl), self.local(cl)
             (sc0, sn), _ = self.ch(k, c)
             if not sn:
                 return None
-            bg = self.B[g]
+            bg = self.B[cl]
             coff = 0 if c == 0 else BLK * self.shb[k][0]
             if self.sh_qb:                                  # quantised block by block already
-                qa[(g, "sh")] = sh_qlast[g]
-                return sh_qlast[g], coff, sn
-            q = self.node(k, c, simd, f"q_sh_g{g}", "__snax_bingo_kernel_simd_quant_rows",
+                qa[(cl, "sh")] = sh_qlast[cl]
+                return sh_qlast[cl], coff, sn
+            q = self.node(k, c, simd, f"q_sh", "__snax_bingo_kernel_simd_quant_rows",
                           SnaxBingoKernelSimdQuantRowsArgs(bg["a16sh"], T, sn // BLK, (sn // BLK) * D_BLOCK,
                                                            d.sh["inv_a"], bg["a8sh"].view(self.beat_aligned(coff, "q_sh")), self.PS),
-                          [last_sw[g]])
-            qa[(g, "sh")] = q
+                          [last_sw[cl]])
+            qa[(cl, "sh")] = q
             return q, coff, sn
 
-        def exchange(g, key, src, coff, ncols, rows, pitch, q):
-            k, c = self.chip(g), self.c(g)
-            other = self.gs(k)[1 - c]
+        def exchange(cl, key, src, coff, ncols, rows, pitch, q):
+            k, c = self.chip(cl), self.local(cl)
+            other = self.clusters(k)[1 - c]
             dst = (self.B[other]["a8sh"] if key == "sh" else self.B[other]["a8e"][key]).view(coff)
             # sh_quant_blocks: after the other cluster's last quantise, whose odd chunk writes past its columns
             after = [sh_qlast[other]] if key == "sh" and self.sh_qb and other in sh_qlast else []
-            ex_copy[(g, key)] = self.node(k, c, dm, f"a8_copy_{key}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
+            ex_copy[(cl, key)] = self.node(k, c, dm, f"a8_copy_{key}", "__snax_bingo_kernel_idma_2d_copy",
                                           SnaxBingoKernelIdma2dCopyArgs(src.view(coff), dst, ncols, pitch, pitch, rows),
                                           [q] + after)
 
-        def finish_sh(g):
-            r = quant_sh(g)
+        def finish_sh(cl):
+            r = quant_sh(cl)
             if r is not None:
                 q, coff, sn = r
-                pend[g].append(("sh", self.B[g]["a8sh"], coff, sn, T, self.PS, q))
+                pend[cl].append(("sh", self.B[cl]["a8sh"], coff, sn, T, self.PS, q))
 
-        def shared_pass(g, j):
-            """params shared_after: shared gate|up chunk j of cluster g over every X row block, the blocks
+        def shared_pass(cl, j):
+            """params shared_after: shared gate|up chunk j of cluster cl over every X row block, the blocks
             copied again from the chip's X landing (the root's from its source) into the expert row buffers,
             which the slots before have finished with and the slots after gather into behind it"""
-            k, c = self.chip(g), self.c(g)
-            bg = self.B[g]
+            k, c = self.chip(cl), self.local(cl)
+            bg = self.B[cl]
             sn = self.ch(k, c)[0][1]
             b0, n = self.chunks(sn)[j]
             nsh = sn // BLK
-            ld, si, slab, sc = self._load(g, j)
+            ld, si, slab, sc = self._load(cl, j)
             sw = gm = None
             gms = []                                        # every X block's GEMM reads the chunk's slab
             for b in range(self.XB):
@@ -1685,30 +1688,31 @@ class MBuild(cm.ChipletBuild):
                 # x_hbm: the root's X is its landing too (the multicast fills every chip's); its source holds X only
                 # when the root starts with it
                 src = self.xsrc(b * XR * self.H) if k == R and not self.x_hbm else self.xland(b * XR * self.H)
-                xc = self.node(k, c, dm, f"x_copy_p{j}_b{b}_g{g}", "__snax_bingo_kernel_idma_2d_copy",
+                xc = self.node(k, c, dm, f"x_copy_p{j}_b{b}", "__snax_bingo_kernel_idma_2d_copy",
                                SnaxBingoKernelIdma2dCopyArgs(src, xb, self.H, self.H, self.PX, XR),
-                               list(xe_reader[g][b % 2]))
+                               list(xe_reader[cl][b % 2]))
                 if k == R:
                     root_gat[c] = xc                        # l3_overlay: the root cluster's last read of X
-                gi, gb = next_g(g)
-                gm = self.gemm(k, c, f"sg_c{j}_b{b}_g{g}", xb, self.PX, slab, gb, XR // 8, self.H // 8,
+                gi, gb = next_g(cl)
+                gm = self.gemm(k, c, f"sg_c{j}_b{b}", xb, self.PX, slab, gb, XR // 8, self.H // 8,
                                2 * n // BLK, d.k_x,
-                               [xc, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
-                xe_reader[g][b % 2] = [gm]
+                               [xc, ld] + ([gb_reader[cl][gi]] if gb_reader[cl][gi] is not None else []))
+                xe_reader[cl][b % 2] = [gm]
                 gms.append(gm)
-                sw = self.node(k, c, simd, f"ssw_c{j}_b{b}_g{g}", "__snax_bingo_kernel_simd_deq_swiglu",
+                sw = self.node(k, c, simd, f"ssw_c{j}_b{b}", "__snax_bingo_kernel_simd_deq_swiglu",
                                SnaxBingoKernelSimdDeqSwigluArgs(
-                                   gb, sc.addr, bg["sg"], sh_a16(g, b, b0),
-                                   XR // 8, n // BLK, nsh * D_BLOCK), [gm] + sc.deps + ([last_sw[g]] if last_sw[g] else []))
-                gb_reader[g][gi] = sw
-                last_sw[g] = sh_quant_block(g, j, b, b0, n, sw)
-            sh_quant_chunk_end(g, j, b0, n)
-            self._scale_read(g, sc, sw)
-            self._release(g, si, gms, sw, sc)
+                                   gb, sc.addr, bg["sg"], sh_a16(cl, b, b0),
+                                   XR // 8, n // BLK, nsh * D_BLOCK),
+                                   [gm] + sc.deps + ([last_sw[cl]] if last_sw[cl] else []))
+                gb_reader[cl][gi] = sw
+                last_sw[cl] = sh_quant_block(cl, j, b, b0, n, sw)
+            sh_quant_chunk_end(cl, j, b0, n)
+            self._scale_read(cl, sc, sw)
+            self._release(cl, si, gms, sw, sc)
 
-        def sh_passes(g):
-            """{slot: [shared chunks whose pass follows that slot's gate|up]} of cluster g"""
-            nj = len(self.chunks(self.ch(self.chip(g), self.c(g))[0][1]))
+        def sh_passes(cl):
+            """{slot: [shared chunks whose pass follows that slot's gate|up]} of cluster cl"""
+            nj = len(self.chunks(self.ch(self.chip(cl), self.local(cl))[0][1]))
             if self.shared_after is None or nj <= 1:
                 return {}
             if len(self.shared_after) < nj - 1 or any(not 0 <= x < self.EPC for x in self.shared_after):
@@ -1720,51 +1724,51 @@ class MBuild(cm.ChipletBuild):
 
         sde_last = {}                                       # params shared_down_early: each cluster's last two parks
 
-        def sd_early_pass(g):
-            """params shared_down_early: cluster g's shared down GEMM of every output slice, through the symmetric
+        def sd_early_pass(cl):
+            """params shared_down_early: cluster cl's shared down GEMM of every output slice, through the exchange
             buffer's two slots, dequantised, parked in L3"""
-            k, c = self.chip(g), self.c(g)
-            other = self.gs(k)[1 - c]
-            if (g, "sh") not in qa or (other, "sh") not in ex_copy:
+            k, c = self.chip(cl), self.local(cl)
+            other = self.clusters(k)[1 - c]
+            if (cl, "sh") not in qa or (other, "sh") not in ex_copy:
                 raise ValueError(f"params shared_down_early={self.sd_early}: the shared MLP's A8 of chip {k:02x} is not "
                                  "complete by then (its exchange follows the slot after its last gate|up chunk)")
-            bg, nt = self.B[g], self.SW // BLK
+            bg, nt = self.B[cl], self.SW // BLK
             (_, sn), ex = self.ch(k, c)
             base = len(self.chunks(sn)) + sum(len(self.chunks(ex[x][1])) for x in self.held[k])
             st = {}
             for jl in range(self.NSLC):
-                y = self.sym[(k, c)].view((jl % 2) * self.SL)
-                ld, si, slab, sc = self._load(g, base + jl * (1 + self.EPC))
-                gm = self.gemm(k, c, f"sde_j{jl}_g{g}", bg["a8sh"], self.PS, slab, y, T // 8, BLK * self.shk[k] // 8,
-                               nt, d.k_dn_sh, [ld, qa[(g, "sh")], ex_copy[(other, "sh")]]
+                y = self.xch[(k, c)].view((jl % 2) * self.SL)
+                ld, si, slab, sc = self._load(cl, base + jl * (1 + self.EPC))
+                gm = self.gemm(k, c, f"sde_j{jl}", bg["a8sh"], self.PS, slab, y, T // 8, BLK * self.shk[k] // 8,
+                               nt, d.k_dn_sh, [ld, qa[(cl, "sh")], ex_copy[(other, "sh")]]
                                + ([st[jl - 2]] if jl >= 2 else []))
-                dq = self.node(k, c, simd, f"sde_deq_j{jl}_g{g}", "__snax_bingo_kernel_simd_mul_tiles",
+                dq = self.node(k, c, simd, f"sde_deq_j{jl}", "__snax_bingo_kernel_simd_mul_tiles",
                                SnaxBingoKernelSimdMulTilesArgs(y, sc.addr, y, T // 8, nt), [gm] + sc.deps)
-                self._scale_read(g, sc, dq)
-                self._release(g, si, gm, dq, sc)
-                st[jl] = self.node(k, c, dm, f"sde_st_j{jl}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+                self._scale_read(cl, sc, dq)
+                self._release(cl, si, gm, dq, sc)
+                st[jl] = self.node(k, c, dm, f"sde_st_j{jl}", "__snax_bingo_kernel_idma_1d_copy",
                                    SnaxBingoKernelIdma1dCopyArgs(y, self.sdpark(c, jl), self.SL), [dq])
-            sde_last[g] = [st[jl] for jl in range(self.NSLC)]
+            sde_last[cl] = [st[jl] for jl in range(self.NSLC)]
 
         if self.stop == "shared":
             # the shared MLP's gate|up alone after the route: every chunk's pass now, no expert slot between them
-            for g in range(G):
-                for _, js in sorted(sh_passes(g).items()):
+            for cl in range(N_CL):
+                for _, js in sorted(sh_passes(cl).items()):
                     for j in js:
-                        shared_pass(g, j)
-            self.end_window([last_sw[g] for g in range(G) if last_sw[g] is not None] + list(disp.values()))
+                        shared_pass(cl, j)
+            self.end_window([last_sw[cl] for cl in range(N_CL) if last_sw[cl] is not None] + list(disp.values()))
             self._checks()
             return
         quant = self.stop != "gateup"                       # stop gateup: no quantise, no exchange
-        passes = {g: sh_passes(g) for g in range(G)}
-        for g in range(G):
-            if not passes[g] and quant:
-                finish_sh(g)
-        npass = {g: 0 for g in range(G)}                    # each cluster's expert gate|up passes: pass p in xe[p % 2]
+        passes = {cl: sh_passes(cl) for cl in range(N_CL)}
+        for cl in range(N_CL):
+            if not passes[cl] and quant:
+                finish_sh(cl)
+        npass = {cl: 0 for cl in range(N_CL)}               # each cluster's expert gate|up passes: pass p in xe[p % 2]
         for s in range(self.EPC):
-            for g in range(G):
-                k, c = self.chip(g), self.c(g)
-                bg = self.B[g]
+            for cl in range(N_CL):
+                k, c = self.chip(cl), self.local(cl)
+                bg = self.B[cl]
                 e = self.held[k][s]
                 rows = md.pad8(d.cnt[e])
                 _, ex = self.ch(k, c)
@@ -1781,13 +1785,13 @@ class MBuild(cm.ChipletBuild):
                 for r, (r0, mr) in enumerate(blocks):
                     # params expert_rows: rows r0 .. r0 + mr - 1 of the slot, its names and gate|up phase its own (r)
                     rs = "" if len(blocks) == 1 else f"r{r}"
-                    xi = npass[g] % 2
-                    npass[g] += 1
+                    xi = npass[cl] % 2
+                    npass[cl] += 1
                     xe = bg["xe"][xi]
-                    gat = self.node(k, c, dm, f"gather_s{s}{rs}_g{g}", "__snax_bingo_kernel_idma_gather_rows",
+                    gat = self.node(k, c, dm, f"gather_s{s}{rs}", "__snax_bingo_kernel_idma_gather_rows",
                                     SnaxBingoKernelIdmaGatherRowsArgs(self.xland(), self.H, lists.view(ids0 + 2 * r0), mr, xe,
                                                                       self.PX),
-                                    [disp[g]] + list(xe_reader[g][xi])
+                                    [disp[cl]] + list(xe_reader[cl][xi])
                                     # the root's clusters never wait for the X flag: its X has landed after the last put
                                     + (list(x_last.values()) if k == R and (self.x_put_c1 or self.x_local or self.x_puts_first)
                                        else []))
@@ -1797,73 +1801,74 @@ class MBuild(cm.ChipletBuild):
                     pass_gms = []
                     for j, (b0, n) in enumerate(chs):
                         jj = len(self.chunks(self.ch(k, c)[0][1])) + sum(len(self.chunks(ex[x][1])) for x in self.held[k][:s]) + j
-                        ld, si, slab, sc = self._load(g, jj, tag=f"r{r}" if r else "")
-                        gi, gb = next_g(g)
-                        gm = self.gemm(k, c, f"gu_s{s}{rs}c{j}_g{g}", xe, self.PX, slab, gb, mr // 8, self.H // 8,
+                        ld, si, slab, sc = self._load(cl, jj, tag=f"r{r}" if r else "")
+                        gi, gb = next_g(cl)
+                        gm = self.gemm(k, c, f"gu_s{s}{rs}c{j}", xe, self.PX, slab, gb, mr // 8, self.H // 8,
                                        2 * n // BLK, d.k_x,
-                                       [gat, ld] + ([gb_reader[g][gi]] if gb_reader[g][gi] is not None else []))
+                                       [gat, ld] + ([gb_reader[cl][gi]] if gb_reader[cl][gi] is not None else []))
                         pass_gms.append(gm)
                         ne = en // BLK
                         if self.a16_pairs:
-                            p0, bi = chs[j - j % 2][0], a16_used[g] % len(bg["a16c"])   # the pair's first column, its buffer
+                            # the pair's first column, its buffer
+                            p0, bi = chs[j - j % 2][0], a16_used[cl] % len(bg["a16c"])
                             dst, stride = bg["a16c"][bi].view(((b0 - p0) // BLK) * D_BLOCK), 2 * self.BPC * D_BLOCK
-                            war = [a16_reader[g][bi]] if (j % 2 == 0 and a16_reader[g][bi] is not None) else []
+                            war = [a16_reader[cl][bi]] if (j % 2 == 0 and a16_reader[cl][bi] is not None) else []
                         else:
                             dst, stride = a16.view((b0 // BLK) * D_BLOCK), ne * D_BLOCK
-                            war = [a16_reader[g]] if (j == 0 and a16_reader[g] is not None) else []
-                        sw = self.node(k, c, simd, f"esw_s{s}{rs}c{j}_g{g}", "__snax_bingo_kernel_simd_deq_swiglu",
+                            war = [a16_reader[cl]] if (j == 0 and a16_reader[cl] is not None) else []
+                        sw = self.node(k, c, simd, f"esw_s{s}{rs}c{j}", "__snax_bingo_kernel_simd_deq_swiglu",
                                        SnaxBingoKernelSimdDeqSwigluArgs(gb, sc.addr, bg["sg"], dst, mr // 8, n // BLK, stride),
-                                       [gm] + sc.deps + war + ([last_sw[g]] if last_sw[g] else []))
-                        gb_reader[g][gi] = sw
-                        last_sw[g] = sw
-                        self._scale_read(g, sc, sw)
-                        self._release(g, si, gm, sw, sc)
+                                       [gm] + sc.deps + war + ([last_sw[cl]] if last_sw[cl] else []))
+                        gb_reader[cl][gi] = sw
+                        last_sw[cl] = sw
+                        self._scale_read(cl, sc, sw)
+                        self._release(cl, si, gm, sw, sc)
                         if quant and self.a16_pairs and (j % 2 == 1 or j == len(chs) - 1):
                             # the pair into its columns of A8, after the pair before it (the last one implies every one)
-                            q = self.node(k, c, simd, f"q_s{s}{rs}p{j // 2}_g{g}", "__snax_bingo_kernel_simd_quant_rows",
+                            q = self.node(k, c, simd, f"q_s{s}{rs}p{j // 2}", "__snax_bingo_kernel_simd_quant_rows",
                                           SnaxBingoKernelSimdQuantRowsArgs(bg["a16c"][bi], mr, (b0 + n - p0) // BLK, stride,
                                                                            d.expert(e)["inv_a"],
                                                                            bg["a8e"][s].view(self.beat_aligned(r0 * self.PE + coff + p0, f"q_s{s}")),
                                                                            self.PE, w_addr=w_rows),
                                           [sw] + ([q] if q is not None else []))
-                            a16_reader[g][bi] = q
-                            a16_used[g] += 1
-                    xe_reader[g][xi] = pass_gms
+                            a16_reader[cl][bi] = q
+                            a16_used[cl] += 1
+                    xe_reader[cl][xi] = pass_gms
                     if quant and not self.a16_pairs:
-                        q = self.node(k, c, simd, f"q_s{s}{rs}_g{g}", "__snax_bingo_kernel_simd_quant_rows",
+                        q = self.node(k, c, simd, f"q_s{s}{rs}", "__snax_bingo_kernel_simd_quant_rows",
                                       SnaxBingoKernelSimdQuantRowsArgs(a16, mr, en // BLK, (en // BLK) * D_BLOCK,
                                                                        d.expert(e)["inv_a"],
                                                                        bg["a8e"][s].view(self.beat_aligned(r0 * self.PE + coff, f"q_s{s}")), self.PE,
                                                                        w_addr=w_rows),
                                       [sw] + ([q] if q is not None else []))
-                        a16_reader[g] = q
-                qa[(g, s)] = q
+                        a16_reader[cl] = q
+                qa[(cl, s)] = q
                 # the exchange of the previous MLP, behind this slot's loads in the DM core's program
                 if self.per_kernel:
-                    held_ex[g] += pend[g]
+                    held_ex[cl] += pend[cl]
                 else:
-                    for item in pend[g]:
-                        exchange(g, *item)
-                pend[g] = [(s, bg["a8e"][s], coff, en, rows, self.PE, q)] if quant else []
-                for j in passes[g].get(s, []):
-                    shared_pass(g, j)
-                if passes[g] and s == max(passes[g]) and quant:
-                    finish_sh(g)
+                    for item in pend[cl]:
+                        exchange(cl, *item)
+                pend[cl] = [(s, bg["a8e"][s], coff, en, rows, self.PE, q)] if quant else []
+                for j in passes[cl].get(s, []):
+                    shared_pass(cl, j)
+                if passes[cl] and s == max(passes[cl]) and quant:
+                    finish_sh(cl)
             if self.sd_early == s:
-                for g in range(G):
-                    sd_early_pass(g)
+                for cl in range(N_CL):
+                    sd_early_pass(cl)
         if self.per_kernel:
             # params barrier_at kernel: K2 ends with the gate|up; K3, the A8 exchange
             self.barrier({k: [] for k in self.chips})
-            for g in range(G):
-                pend[g] = held_ex[g] + pend[g]
-        for g in range(G):
-            for item in pend[g]:
-                exchange(g, *item)
+            for cl in range(N_CL):
+                pend[cl] = held_ex[cl] + pend[cl]
+        for cl in range(N_CL):
+            for item in pend[cl]:
+                exchange(cl, *item)
         if self.per_kernel:
             self.barrier({k: [] for k in self.chips})
         if self.stop == "gateup":
-            self.end_window([last_sw[g] for g in range(G) if last_sw[g] is not None])
+            self.end_window([last_sw[cl] for cl in range(N_CL) if last_sw[cl] is not None])
             self._checks()
             return
         if self.stop == "a8":
@@ -1872,23 +1877,23 @@ class MBuild(cm.ChipletBuild):
             return
 
         # ---- the down projection by output slice; one ChainGather a slice -------------------------
-        if self.sd_early is not None and len(sde_last) != G:
+        if self.sd_early is not None and len(sde_last) != N_CL:
             raise ValueError(f"params shared_down_early={self.sd_early}: not an expert slot (0..{self.EPC - 1})")
-        sym_reader = {g: (sde_last[g][-2:] if g in sde_last else [None] * self.NOUT) for g in range(G)}
-        dt_reader = {g: [None] * self.ndt for g in range(G)}
-        ndt_used = {g: 0 for g in range(G)}
+        xch_reader = {cl: (sde_last[cl][-2:] if cl in sde_last else [None] * self.NOUT) for cl in range(N_CL)}
+        dt_reader = {cl: [None] * self.ndt for cl in range(N_CL)}
+        ndt_used = {cl: 0 for cl in range(N_CL)}
         p1_reader = {c: [None, None] for c in range(self.NC)}
         if self.down_half:
-            for g in range(G):
-                self.ls[g] = HalfSlabs(self.ls[g])
+            for cl in range(N_CL):
+                self.ls[cl] = HalfSlabs(self.ls[cl])
         nt = self.SW // BLK
         jbase = {}
-        for g in range(G):
-            k, c = self.chip(g), self.c(g)
+        for cl in range(N_CL):
+            k, c = self.chip(cl), self.local(cl)
             (_, sn), ex = self.ch(k, c)
-            jbase[g] = len(self.chunks(sn)) + sum(len(self.chunks(ex[x][1])) for x in self.held[k])
+            jbase[cl] = len(self.chunks(sn)) + sum(len(self.chunks(ex[x][1])) for x in self.held[k])
         stores, last_red, last_any = [], {c: None for c in range(self.NC)}, None
-        copies_in = {c: [ex_copy[(g, key)] for (g, key) in ex_copy if self.c(g) != c] for c in range(self.NC)}
+        copies_in = {c: [ex_copy[(cl, key)] for (cl, key) in ex_copy if self.local(cl) != c] for c in range(self.NC)}
         last_ld = {}                                        # params chain_tail: every cluster's last weight load
 
         GS = self.chain_group
@@ -1899,79 +1904,80 @@ class MBuild(cm.ChipletBuild):
             s2, so = (jl // GS) % 2, jl % self.NOUT
             # l3_overlay: Y lies over X's source and the root's X landing
             over = ([root_gat[1 - c]] + ([] if self.x_hbm else list(x_last.values())) if self.l3_overlay and jl == 0 else [])
-            src = self.sym[(R, c)].view(so * self.SL) if self.halves else self.p1c[c].view(s2 * GS * self.SL)
+            src = self.xch[(R, c)].view(so * self.SL) if self.halves else self.p1c[c].view(s2 * GS * self.SL)
             st = self.node(R, c, dm, f"y_store_c{c}j{jl}", "__snax_bingo_kernel_idma_1d_copy",
                            SnaxBingoKernelIdma1dCopyArgs(src, self.ysym(self.y_off(c, jl)), GS * self.SL),
                            [red] + over)
             if self.halves:
-                for g in range(G):
-                    if self.chip(g) == R and self.c(g) == c:
-                        sym_reader[g][so] = st
+                for cl in range(N_CL):
+                    if self.chip(cl) == R and self.local(cl) == c:
+                        xch_reader[cl][so] = st
             else:
                 p1_reader[c][s2] = st
             stores.append(st)
 
         prev_add = {}
 
-        def down_g(g, jl, so, last_add):
-            """Cluster g's down projection of output slice jl into its output slot so: the shared MLP's down GEMM and
-            its dequantise, then each expert's down GEMM, dequantise and scatter-add into the slice (last_add[g])."""
-            k, c = self.chip(g), self.c(g)
-            bg = self.B[g]
-            other = self.gs(k)[1 - c]
-            y = self.sym[(k, c)].view(so * self.SL)
-            jj = jbase[g] + jl * (1 + self.EPC)
+        def down_cl(cl, jl, so, last_add):
+            """Cluster cl's down projection of output slice jl into its output slot so: the shared MLP's down GEMM and
+            its dequantise, then each expert's down GEMM, dequantise and scatter-add into the slice (last_add[cl])."""
+            k, c = self.chip(cl), self.local(cl)
+            bg = self.B[cl]
+            other = self.clusters(k)[1 - c]
+            y = self.xch[(k, c)].view(so * self.SL)
+            jj = jbase[cl] + jl * (1 + self.EPC)
             if self.sd_early is not None:
                 # the shared MLP's part of the slice, parked in the gate|up phase
-                prev = self.node(k, c, dm, f"sd_cp_j{jl}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
+                prev = self.node(k, c, dm, f"sd_cp_j{jl}", "__snax_bingo_kernel_idma_1d_copy",
                                  SnaxBingoKernelIdma1dCopyArgs(self.sdpark(c, jl), y, self.SL),
-                                 [sde_last[g][jl]] + ([sym_reader[g][so]] if sym_reader[g][so] else []))
+                                 [sde_last[cl][jl]] + ([xch_reader[cl][so]] if xch_reader[cl][so] else []))
             else:
-                ld, si, slab, sc = self._load(g, jj)
-                dep_sh = [qa[(g, "sh")]] if (g, "sh") in qa else []
+                ld, si, slab, sc = self._load(cl, jj)
+                dep_sh = [qa[(cl, "sh")]] if (cl, "sh") in qa else []
                 dep_sh += [ex_copy[(other, "sh")]] if (other, "sh") in ex_copy else []
-                gm = self.gemm(k, c, f"sd_j{jl}_g{g}", bg["a8sh"], self.PS, slab, y, T // 8, BLK * self.shk[k] // 8,
-                               nt, d.k_dn_sh, [ld] + dep_sh + ([sym_reader[g][so]] if sym_reader[g][so] else []))
-                prev = self.node(k, c, simd, f"sd_deq_j{jl}_g{g}", "__snax_bingo_kernel_simd_mul_tiles",
+                gm = self.gemm(k, c, f"sd_j{jl}", bg["a8sh"], self.PS, slab, y, T // 8, BLK * self.shk[k] // 8,
+                               nt, d.k_dn_sh, [ld] + dep_sh + ([xch_reader[cl][so]] if xch_reader[cl][so] else []))
+                prev = self.node(k, c, simd, f"sd_deq_j{jl}", "__snax_bingo_kernel_simd_mul_tiles",
                                  SnaxBingoKernelSimdMulTilesArgs(y, sc.addr, y, T // 8, nt), [gm] + sc.deps)
-                self._scale_read(g, sc, prev)
-                self._release(g, si, gm, prev, sc)
+                self._scale_read(cl, sc, prev)
+                self._release(cl, si, gm, prev, sc)
             if self.resid is not None and k == self.resid["chip"]:
-                prev = self._resid_add(g, jl, y, prev)
+                prev = self._resid_add(cl, jl, y, prev)
             caps = [md.pad8(d.cnt[x]) for x in self.held[k]]
             for s, e in enumerate(self.held[k]):
                 rows = md.pad8(d.cnt[e])
-                ld, si, slab, sc = self._load(g, jj + 1 + s)
-                last_ld[g] = ld
-                di = ndt_used[g] % self.ndt
-                ndt_used[g] += 1
+                ld, si, slab, sc = self._load(cl, jj + 1 + s)
+                last_ld[cl] = ld
+                di = ndt_used[cl] % self.ndt
+                ndt_used[cl] += 1
                 dt = bg["dtmp"][di]
-                gm = self.gemm(k, c, f"dn_j{jl}s{s}_g{g}", bg["a8e"][s], self.PE, slab, dt, rows // 8, self.IE // 8,
+                gm = self.gemm(k, c, f"dn_j{jl}s{s}", bg["a8e"][s], self.PE, slab, dt, rows // 8, self.IE // 8,
                                nt, d.k_dn_e,
-                               [ld, qa[(g, s)], ex_copy[(other, s)]] + ([dt_reader[g][di]] if dt_reader[g][di] else []))
+                               [ld, qa[(cl, s)],
+                                ex_copy[(other, s)]] + ([dt_reader[cl][di]] if dt_reader[cl][di] else []))
                 ids = bg["lists"].view(SnaxBingoKernelMoeDispatchArgs.rows_offset(caps, s))
                 if self.fuse_deq_scatter:
-                    prev = self.node(k, c, simd, f"scat_j{jl}s{s}_g{g}", "__snax_bingo_kernel_simd_scatter_add_rows",
+                    prev = self.node(k, c, simd, f"scat_j{jl}s{s}", "__snax_bingo_kernel_simd_scatter_add_rows",
                                      SnaxBingoKernelSimdScatterAddRowsArgs(y, dt, nt, ids, int(d.cnt[e]),
                                                                            s_addr=sc.addr, y_bytes=self.SL),
                                      [gm, prev] + sc.deps)
-                    self._scale_read(g, sc, prev)
-                    self._release(g, si, gm, prev, sc)
+                    self._scale_read(cl, sc, prev)
+                    self._release(cl, si, gm, prev, sc)
                 else:
-                    mt = self.node(k, c, simd, f"dn_deq_j{jl}s{s}_g{g}", "__snax_bingo_kernel_simd_mul_tiles",
+                    mt = self.node(k, c, simd, f"dn_deq_j{jl}s{s}", "__snax_bingo_kernel_simd_mul_tiles",
                                    SnaxBingoKernelSimdMulTilesArgs(dt, sc.addr, dt, rows // 8, nt), [gm] + sc.deps)
-                    self._scale_read(g, sc, mt)
-                    self._release(g, si, gm, mt, sc)
-                    prev = self.node(k, c, simd, f"scat_j{jl}s{s}_g{g}", "__snax_bingo_kernel_simd_scatter_add_rows",
+                    self._scale_read(cl, sc, mt)
+                    self._release(cl, si, gm, mt, sc)
+                    prev = self.node(k, c, simd, f"scat_j{jl}s{s}", "__snax_bingo_kernel_simd_scatter_add_rows",
                                      SnaxBingoKernelSimdScatterAddRowsArgs(y, dt, nt, ids, int(d.cnt[e]), y_bytes=self.SL),
                                      [mt, prev])
-                dt_reader[g][di] = prev
-            last_add[g] = prev
+                dt_reader[cl][di] = prev
+            last_add[cl] = prev
             if jl % GS:
                 # params chain_group: a gather waits for its group's last slice on each chip only; the slices'
                 # last adds go into the core's in-order queue in slice order
-                self.dfg.bingo_add_order_edge(prev_add[g], prev)
-            prev_add[g] = prev
+                self.dfg.bingo_add_order_edge(prev_add[cl], prev)
+            prev_add[cl] = prev
 
         def fold_store(c, jl, acc, last):
             """reduce root: root cluster c's folded slice jl from its own output slot into L3 (l3_overlay: Y lies over
@@ -1996,8 +2002,8 @@ class MBuild(cm.ChipletBuild):
                     if jl and jl % (self.NSLC // self.down_phases) == 0:
                         self.args_phase(f"MoE down from slice {jl}")
                     last_add = {}
-                    for g in range(G):
-                        down_g(g, jl, jl % self.NOUT, last_add)
+                    for cl in range(N_CL):
+                        down_cl(cl, jl, jl % self.NOUT, last_add)
                 self.barrier({k: [] for k in self.chips})
                 for jl in grp:
                     so, s2 = jl % self.NOUT, jl % 2
@@ -2005,7 +2011,7 @@ class MBuild(cm.ChipletBuild):
                         if self.reduce_impl == "chain":
                             p1x = f"((uint64_t)({self.p1c[c].get_c_var_name()}))"
                             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                                cm.remote, R, c, self.chain_order(c)[:-1], src=self.sx(c, so * self.SL),
+                                cm.remote, R, c, self.chain_order(c)[:-1], src=self.xch_addr(c, so * self.SL),
                                 dst=f"({p1x} + {s2 * self.SL})", size=self.SL, junction=self.jct["Elementwise"],
                                 jct_csr0=EW_F16_ADD, holds=[self.p1c[c]])
                             p1 = [p1_reader[c][s2]] if p1_reader[c][s2] is not None else []
@@ -2014,14 +2020,14 @@ class MBuild(cm.ChipletBuild):
                             last_red[c] = last_any = red
                             store(c, jl, red)
                             continue
-                        acc = self.sym[(R, c)].view(so * self.SL)
+                        acc = self.xch[(R, c)].view(so * self.SL)
                         for n_, k in enumerate(self.fold_order_c(c)[1:]):
                             q = len(add_hist[c])
                             slot = self.p1c[c].view((q % 2) * self.SL)
                             # one pull in flight; the slot free once the add two pulls back has read it
                             pl = self.node(R, c, dm, f"y_pull_c{c}j{jl}n{n_}", "__snax_bingo_kernel_idma_1d_copy",
-                                           SnaxBingoKernelIdma1dCopyArgs(cm.remote(k, self.sx(c, so * self.SL)), slot,
-                                                                         self.SL),
+                                           SnaxBingoKernelIdma1dCopyArgs(cm.remote(k, self.xch_addr(c, so * self.SL)),
+                                                                         slot, self.SL),
                                            ([pull_last[c]] if pull_last[c] is not None else []) + add_hist[c][q - 2:q - 1])
                             pull_last[c] = pl
                             add_hist[c].append(self.node(R, c, simd, f"y_add_c{c}j{jl}n{n_}",
@@ -2040,8 +2046,8 @@ class MBuild(cm.ChipletBuild):
                 self.args_phase(f"MoE down from slice {jl}")
             so = jl % self.NOUT
             last_add = {}
-            for g in range(G):
-                down_g(g, jl, so, last_add)
+            for cl in range(N_CL):
+                down_cl(cl, jl, so, last_add)
             if (jl + 1) % GS:
                 continue
             j0 = jl + 1 - GS                                # the group's first slice
@@ -2053,18 +2059,18 @@ class MBuild(cm.ChipletBuild):
                 # params barrier_at cross: the slice's barrier takes every chip's last adds of the slice (before slice 0
                 # also its A8 copies, which no chain may meet) and the root's reduces of the slice before; the output
                 # slots those read are free once it is passed
-                bar = self.barrier({k: [last_add[g] for g in self.gs(k)]
-                                    + ([t for (g, _), t in ex_copy.items() if self.chip(g) == k] if j0 == 0 else [])
+                bar = self.barrier({k: [last_add[cl] for cl in self.clusters(k)]
+                                    + ([t for (cl, _), t in ex_copy.items() if self.chip(cl) == k] if j0 == 0 else [])
                                     + ([last_red[c] for c in range(self.NC) if last_red[c] is not None] if k == R else [])
                                     for k in self.chips})
-                for g, o in freed:
-                    sym_reader[g][o] = bar[self.chip(g)]
+                for cl, o in freed:
+                    xch_reader[cl][o] = bar[self.chip(cl)]
                 freed = []
             for c in corder:
                 ordr = self.chain_order(c)[:-1]
                 p1x = f"((uint64_t)({self.p1c[c].get_c_var_name()}))"
                 ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                    cm.remote, R, c, ordr, src=self.sx(c, so0 * self.SL), dst=f"({p1x} + {s2 * GS * self.SL})",
+                    cm.remote, R, c, ordr, src=self.xch_addr(c, so0 * self.SL), dst=f"({p1x} + {s2 * GS * self.SL})",
                     size=GS * self.SL, junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD,
                     holds=[self.p1c[c]])
                 first = list(copies_in[c]) if j0 == 0 and not self.cross else []
@@ -2074,8 +2080,8 @@ class MBuild(cm.ChipletBuild):
                 if self.halves:                             # params chain_halves: west and east at once, then one hop
                     west, east = self.halves
                     E = east[-1]
-                    add_of = {self.chip(g): last_add[g] for g in range(G) if self.c(g) == c}
-                    slot = self.sx(c, so * self.SL)          # a slot of the symmetric output buffer, on any chip
+                    add_of = {self.chip(cl): last_add[cl] for cl in range(N_CL) if self.local(cl) == c}
+                    slot = self.xch_addr(c, so * self.SL)          # a slot of the exchange buffer, on any chip
                     p1s = f"({p1x} + {s2 * self.SL})"
                     kern = "__snax_bingo_kernel_xdma_chain_gather"
                     gw = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
@@ -2087,7 +2093,7 @@ class MBuild(cm.ChipletBuild):
                     # this cluster's previous reduce only (its east chain read esrc, its last hop used this xDMA)
                     e_after = (first + ([last_red[c]] if last_red[c] is not None else [])) if self.esrc_early else after
                     ecp = self.node(E, c, xdma, f"y_esrc_c{c}j{jl}", "__snax_bingo_kernel_xdma_1d_copy",
-                                    SnaxBingoKernelXdma1dCopyArgs(self.sym[(E, c)].view(so * self.SL), self.esrc[c],
+                                    SnaxBingoKernelXdma1dCopyArgs(self.xch[(E, c)].view(so * self.SL), self.esrc[c],
                                                                   self.SL),
                                     [add_of[E]] + e_after)
                     ge = SnaxBingoKernelXdmaChainGatherArgs(
@@ -2104,30 +2110,30 @@ class MBuild(cm.ChipletBuild):
                         holds=[self.p1c[c]])
                     red = self.node(R, c, xdma, f"y_chain_c{c}j{jl}", kern, gc, [wch, ech])
                     p1_reader[c][s2] = red
-                    for g in range(G):
-                        if self.c(g) == c:
+                    for cl in range(N_CL):
+                        if self.local(cl) == c:
                             # chip E's slot holds the east sum until the hop has read it; the root's (set by its store)
                             # the result until it is stored
-                            k = self.chip(g)
-                            sym_reader[g][so] = red if k in (E, R) else (wch if k in west else ech)
+                            k = self.chip(cl)
+                            xch_reader[cl][so] = red if k in (E, R) else (wch if k in west else ech)
                 else:
-                    ins = [bar[R]] if self.cross else [last_add[g] for g in range(G) if self.c(g) == c]
+                    ins = [bar[R]] if self.cross else [last_add[cl] for cl in range(N_CL) if self.local(cl) == c]
                     red = self.node(R, c, xdma, f"y_chain_c{c}j{j0}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                     ins + after + p1)
-                    for g in range(G):
-                        if self.c(g) == c:
+                    for cl in range(N_CL):
+                        if self.local(cl) == c:
                             for o in range(so0, so0 + GS):
-                                if self.cross and self.chip(g) != R:
-                                    freed.append((g, o))
+                                if self.cross and self.chip(cl) != R:
+                                    freed.append((cl, o))
                                 else:
-                                    sym_reader[g][o] = red
+                                    xch_reader[cl][o] = red
                 last_red[c] = last_any = red
                 store(c, j0, red)
         if self.chain_tail:                                 # every push has landed before a last-slice chain
-            for g in range(G):
-                for o in self.gs(self.chip(g)):
-                    if o != g:
-                        self.edge(last_ld[o], last_add[g])
+            for cl in range(N_CL):
+                for o in self.clusters(self.chip(cl)):
+                    if o != cl:
+                        self.edge(last_ld[o], last_add[cl])
         self.end_window(stores[-self.NC:])
         self._checks()
 

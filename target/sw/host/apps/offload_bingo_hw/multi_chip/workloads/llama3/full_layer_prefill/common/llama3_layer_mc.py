@@ -227,12 +227,12 @@ class AttnPart(lam.ABuild):
             return super().xland(off)
         return BingoMemSymbol(f"{self.TAG}_xland", offset=off // self.XB % S * self.XB + off % self.XB)
 
-    def copy(self, g, name, src, dst, nb, deps):
+    def copy(self, cl, name, src, dst, nb, deps):
         # params layer.rope_hbm: the RoPE tables from the cluster's memory chip's HBM instead of L3
         L = self.layer
         if L.rope_hbm and isinstance(src, BingoMemSymbol) and src.symbol_name == f"{self.TAG}_rope":
-            src = BingoMemFixedAddr(L.st.rope_h[self.mem[self.chip(g)]].address + src.offset, mem_level="HBM")
-        return super().copy(g, name, src, dst, nb, deps)
+            src = BingoMemFixedAddr(L.st.rope_h[self.mem[self.chip(cl)]].address + src.offset, mem_level="HBM")
+        return super().copy(cl, name, src, dst, nb, deps)
 
 
 class FfnPart(fpm.PBuild):
@@ -260,10 +260,10 @@ class FfnPart(fpm.PBuild):
     def pass_start(self, i):
         self.layer.at(("ffn_top", i))
 
-    def _load(self, g, i, j, deps=()):
-        if g == 0 and j >= len(self.chunks[0]):
+    def _load(self, cl, i, j, deps=()):
+        if cl == 0 and j >= len(self.chunks[0]):
             self.layer.at(("ffn_dn", i, j - len(self.chunks[0])))
-        return super()._load(g, i, j, deps)
+        return super()._load(cl, i, j, deps)
 
     def end_window(self, after):
         L = self.layer
@@ -329,7 +329,7 @@ class LayerBuild(cm.ChipletBuild):
         # the blocks' input regions in HBM are written in the window; the FFN's root Y buffer is never used (y_scatter)
         self.st = LayerStaging(self.st, zero_hbm=("la_xhbm", "pf_xhbm"), drop=("pf_y",), alias=alias, sizes=sizes,
                                rope=rope)
-        self.sym_zero = False
+        self.xch_zero = False
         # params layer.piece_rows (16 | 8 | 4): rows a step processes at a time inside the window (its L1 buffers that
         # many rows); norm_cluster, glue_cluster, final_cluster: each step's cluster (default layer.cluster);
         # final_step: down slices between two final pieces
@@ -587,7 +587,7 @@ class LayerBuild(cm.ChipletBuild):
     def glue(self, q, key_a):
         """The glue of tile q: h into HBM, the FFN's X into its region in HBM (its wait joins g_conf). The parts before
         the reshape are placed at the point key_a."""
-        A, F, H, G = self.attn, self.ffn, self.H, self.attn.G
+        A, F, H, N_CL = self.attn, self.ffn, self.H, self.attn.N_CL
         k, m, _ = self.tq[q]
         own, lt = A.y_owner(q)
         nm = f"g{q}"
@@ -598,7 +598,8 @@ class LayerBuild(cm.ChipletBuild):
         # also follows this cluster's last softmax of that iteration, so its buffers live only once the sweep's are free
         after = [A._last_sm[self.chips.index(k) * self.NC + self.SC, key_a[1]]] if key_a and key_a[0] == "attn_wo" else []
         w = self._t(k, "dm", f"g_wait_q{q}", "__snax_bingo_kernel_wait_flags",
-                    SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{A.TAG}_ytflag", offset=lt * G * 64), G, 1), after)
+                    SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{A.TAG}_ytflag", offset=lt * N_CL * 64), N_CL, 1),
+                    after)
         self.waits.append((w, "attn", q))
         ly = self._copy(k, f"g_ldy_q{q}", A.yt_sym(q), b["d"], self.TB, [w])
         cl = self._cld(k, f"g_cld_q{q}", 1, 2, b["c"], [w])
@@ -717,7 +718,7 @@ class LayerBuild(cm.ChipletBuild):
         rows from the chip's L3 -> row major, dequantised, plus x16: h, into HBM (the last piece's behind a flag); RMSNorm
         in place, the post-attention gain, the A layout, quantised (s_h) into the L3 staging; after the last piece the
         tile into the FFN's X region in HBM, its wait on the landed flag joining g_conf."""
-        A, F, H, G, PR = self.attn, self.ffn, self.H, self.attn.G, self.PR
+        A, F, H, N_CL, PR = self.attn, self.ffn, self.H, self.attn.N_CL, self.PR
         k, c = self.tq[q][0], self.cl_glue
         own, lt = A.y_owner(q)
         PB, r0, sfx = PR * H * 2, n * PR, f"q{q}p{n}"
@@ -729,7 +730,8 @@ class LayerBuild(cm.ChipletBuild):
             # cluster's sweep of iteration j is done, so the buffers live once the sweep's are free)
             after = [A._last_sm[self.chips.index(k) * self.NC + c, j]] if j is not None else []
             prev["w"] = self._t(k, "dm", f"g_wait_q{q}", "__snax_bingo_kernel_wait_flags",
-                                SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{A.TAG}_ytflag", offset=lt * G * 64), G, 1),
+                                SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{A.TAG}_ytflag", offset=lt * N_CL * 64),
+                                                             N_CL, 1),
                                 after, c)
             self.waits.append((prev["w"], "attn", q))
         w = prev["w"]
@@ -885,7 +887,7 @@ class LayerBuild(cm.ChipletBuild):
         A, R = self.attn, self.ROOT
         first_wo = {}
         for t in self.dfg.node_list:
-            m = re.match(r"Ld_w(\d+)_i(\d+)_g\d+_k", t.node_name)
+            m = re.match(r"Ld_w(\d+)_i(\d+)_k", t.node_name)
             if m and t.assigned_chiplet_id == R and getattr(t, "exec_chunk", None) is not None:
                 ring, idx = t.exec_chunk
                 j, i = int(m.group(1)), int(m.group(2))
@@ -1005,7 +1007,7 @@ class LayerBuild(cm.ChipletBuild):
             mm = re.match(r"y_chain_(?:i(\d+))?j\d+_k", t.node_name)
             if mm:
                 chains.setdefault(int(mm.group(1) or 0), []).append(t)
-            mm = re.match(r"Ld_c(\d+)_i(\d+)_g\d+_k", t.node_name)
+            mm = re.match(r"Ld_c(\d+)_i(\d+)_k", t.node_name)
             if mm and getattr(t, "exec_chunk", None) is not None:
                 idx[(t.exec_chunk[0], int(mm.group(2)), int(mm.group(1)))] = t.exec_chunk[1]
         first = {i: min(ts, key=lambda t: t.node_id) for i, ts in chains.items()}
@@ -1074,7 +1076,7 @@ class LayerBuild(cm.ChipletBuild):
         if self.alias_l3:
             self._ring_alias_edges()
         self._wait_edges()
-        self.sym = dict(F.sym)        # the FFN's symmetric buffers: the gathers name them by the root's address
+        self.xch = dict(F.xch)        # the FFN's exchange buffers: the gathers name them by the root's address
         self.run_checks(self.layer_checks())
 
     def _wait_edges(self):
@@ -1091,7 +1093,7 @@ class LayerBuild(cm.ChipletBuild):
             if mm and t.assigned_chiplet_id == R and t.kernel_name == "__snax_bingo_kernel_idma_put_flagged":
                 yf.setdefault(int(mm.group(1) or 0) * self.NQ + int(mm.group(2)), []).append(t)
         for w, blk, q in self.waits:
-            puts, n = (ya.get(q, []), A.G) if blk == "attn" else (yf.get(q, []), F.NDN)
+            puts, n = (ya.get(q, []), A.N_CL) if blk == "attn" else (yf.get(q, []), F.NDN)
             if len(puts) != n:
                 raise ValueError(f"tile {q}: {len(puts)} {blk} puts raise the {n} flags its step waits for")
             for t in puts:
@@ -1106,7 +1108,7 @@ class LayerBuild(cm.ChipletBuild):
         slice of one L3 buffer on the root (from HBM through a 64 KiB L1 buffer of its chip, behind the data's flag);
         returns the check."""
         R, T = self.ROOT, self.TAG
-        n = sum(g.size for _, _, g, _ in items)
+        n = sum(ref.size for _, _, ref, _ in items)
         sym = f"{T}_chk_{name}"
         self.st.put_zeros(sym, "uint8_t", n)
         off = 0
@@ -1121,7 +1123,7 @@ class LayerBuild(cm.ChipletBuild):
                 cp = self._copy(k, f"chk_{name}{j}", buf, dst, gold.size, [ld], c=0)
             self.check_copies.append(cp)
             off += gold.size
-        gold = np.concatenate([g.reshape(-1) for _, _, g, _ in items])
+        gold = np.concatenate([ref.reshape(-1) for _, _, ref, _ in items])
         return (name, BingoMemSymbol(sym, chip_id=R), gold, n)
 
     def layer_checks(self):
@@ -1244,11 +1246,11 @@ class LayerBuild(cm.ChipletBuild):
             by.setdefault(re.sub(r"_k[0-9a-f]{2}_cl\d$", "", t.node_name), []).append(t)
 
         def users_attn(i):
-            pat = re.compile(rf"^(x_wait_i{i}t\d+_g|x_xw_i{i}t\d+_g|x_xcp_i{i}t\d+_g|o_put_i{i}$|o_bput_i{i}$|o_get_i{i}r)")
+            pat = re.compile(rf"^((x_wait|x_xw|x_xcp)_i{i}t\d+$|o_put_i{i}$|o_bput_i{i}$|o_get_i{i}r)")
             return [t for n, ts in by.items() if pat.match(n) for t in ts]
 
         def users_ffn(i):
-            pat = re.compile(rf"^x_wait_i{i}(b\d+)?_g\d+$")
+            pat = re.compile(rf"^x_wait_i{i}(b\d+)?$")
             return [t for n, ts in by.items() if pat.match(n) for t in ts]
         bad, n = [], 0
         for i in range(S, A.NP):

@@ -67,23 +67,32 @@ def fold_cycle(chips, root):
 
 
 class FabricBase:
-    """The topology and node helpers of a build. The subclass sets chips, NC, ROOT, dfg, roles, hw,
-    n_stamp, stamps, mark and sym (the symmetric buffers, {(chip, cluster): handle})."""
+    """The topology and node helpers of a build. The subclass sets chips, NC, N_CL, ROOT, dfg, roles,
+    hw, n_stamp, stamps, mark and xch.
+
+    A cluster `cl` is numbered over the whole build, 0 .. N_CL - 1, chip by chip in the order of
+    `chips` (cl = the chip's position * NC + its index on the chip). xch {(chip, cluster): handle}:
+    each cluster's exchange buffer, the L1 buffer the chips hand partial results through; it sits at
+    offset 0 of its cluster's static arena, so at the same local address on every chip."""
 
     # ---- topology helpers -----------------------------------------------------------------
-    def chip(self, g):
-        return self.chips[g // self.NC]
+    def chip(self, cl):
+        """The chip of cluster cl."""
+        return self.chips[cl // self.NC]
 
-    def c(self, g):
-        return g % self.NC
+    def local(self, cl):
+        """Cluster cl's index on its chip (0 .. NC - 1)."""
+        return cl % self.NC
 
-    def gs(self, k):
+    def clusters(self, k):
+        """Chip k's clusters, in order."""
         i = self.chips.index(k)
         return list(range(i * self.NC, (i + 1) * self.NC))
 
-    def cx(self, g):
+    def cx(self, cl):
+        """Cluster cl as the node factory a mini_compiler block takes."""
         return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw,
-                   chiplet=self.chip(g)).at(self.c(g))
+                   chiplet=self.chip(cl)).at(self.local(cl))
 
     def cx_chip(self, k):
         return Ctx(dfg=self.dfg, mesh=MESH, roles=self.roles, hw=self.hw, chiplet=k)
@@ -113,11 +122,11 @@ class FabricBase:
         return self.node(k, 0, self.roles["dm"], f"P_{tag}", "__snax_bingo_kernel_stamp",
                          SnaxBingoKernelStampArgs(stamp_buf=0, slot=0), after)
 
-    def sv(self, k, c, off):
-        """A view of chip k cluster c's symmetric buffer at `off`."""
-        return self.sym[(k, c)].view(off)
+    def xch_view(self, k, c, off):
+        """A view of chip k cluster c's exchange buffer at `off`."""
+        return self.xch[(k, c)].view(off)
 
-    def sx(self, c, off):
-        """The C expression of the root's own symmetric buffer at `off`: the same local
+    def xch_addr(self, c, off):
+        """The C expression of the root's own exchange buffer at `off`: the same local
         address on every chip."""
-        return f"((uint64_t)({self.sym[(self.ROOT, c)].get_c_var_name()}) + {off})"
+        return f"((uint64_t)({self.xch[(self.ROOT, c)].get_c_var_name()}) + {off})"

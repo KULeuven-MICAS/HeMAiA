@@ -7,8 +7,8 @@
 projection's output slices, against the weight stream the down projection pulls through the rings.
 A testbench for running cluster 0's and cluster 1's gathers at the same time.
 
-PER SLICE j, PER CLUSTER g (chip k, cluster c), on the cluster's DM core, as the MoE runs it:
-    partial    the cluster's partial of slice j into slot j of the cluster's symmetric buffer (the
+PER SLICE j, PER CLUSTER cl (chip k, cluster c), on the cluster's DM core, as the MoE runs it:
+    partial    the cluster's partial of slice j into slot j of the cluster's exchange buffer (the
                MoE's down projection writes it there; the MoE reuses two slots, here every slice
                has its own, so no gather is a remote predecessor of a later partial), from its
                memory chip's HBM (params partials: hbm) or from its own L3 (l3: the copies stay off
@@ -107,7 +107,7 @@ class GatherTb(cm.ChipletBuild):
         of every slice (random multiples of 1/4, params seed; with partials l3 the same on every chip) and the golden
         sums in the chain order (_golden); _stage(): the partials and the weight chunks into HBM (or the partials into
         the image every chip runs), y in the root's L3; make_streams(): each cluster's L1 weight slabs; make_rings():
-        each chip's weight rings in its L3 and its host's prefetcher task; every cluster's symmetric buffer (a slot a
+        each chip's weight rings in its L3 and its host's prefetcher task; every cluster's exchange buffer (a slot a
         slice) and the root clusters' fold slots (p1c)."""
         rng = np.random.default_rng(self.seed)
         n = self.SL // 2
@@ -122,9 +122,9 @@ class GatherTb(cm.ChipletBuild):
         self._stage()
         self.make_streams()
         self.make_rings()
-        self.sym = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_sym", self.NSLC * self.SL)
+        self.xch = {(k, c): self.cx_chip(k).at(c).l1(f"AAAA_{self.TAG}_xch", self.NSLC * self.SL)
                     for k in self.chips for c in range(self.NC)}
-        self.sym_zero = False                    # each slot is written whole by its partial copy first
+        self.xch_zero = False                    # each slot is written whole by its partial copy first
         self.p1c = {c: self.cx_chip(self.ROOT).at(c).l1(f"{self.TAG}_p1c", 2 * self.SL) for c in range(self.NC)}
 
     def chain_order(self, c):
@@ -164,14 +164,14 @@ class GatherTb(cm.ChipletBuild):
             self.w_src[m] = st.put_hbm(f"{T}_w_m{m:02x}", w, mem_chip=(m >> 4, m & 15)).address
         self.h_y = st.put_zeros(f"{T}_y", "uint8_t", self.NC * self.NSLC * self.SL)
 
-    def _load(self, g, j, deps):
-        """Weight chunk j of cluster g from its ring into the next slab, released at once."""
-        k, c = self.chip(g), self.c(g)
-        ls = self.ls[g]
+    def _load(self, cl, j, deps):
+        """Weight chunk j of cluster cl from its ring into the next slab, released at once."""
+        k, c = self.chip(cl), self.local(cl)
+        ls = self.ls[cl]
         si, slab, war = ls.take(self.chunk)
         ld, _ = ls.rings.load_chunk(
             lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
-            f"Ld_w{j}_g{g}", src=self.w_src[self.mem[k]] + j * self.chunk, nbytes=self.chunk,
+            f"Ld_w{j}", src=self.w_src[self.mem[k]] + j * self.chunk, nbytes=self.chunk,
             slab=slab, war=war, deps=deps, dm=self.roles["dm"], trailer=True)
         ls.release(si, ld)
         return ld
@@ -185,40 +185,40 @@ class GatherTb(cm.ChipletBuild):
         if self.p.get("relay_per_gather", True):
             self.dfg.relay_one_consumer_cores = [xdma]
         self.setup()
-        G = self.G
+        N_CL = self.N_CL
         p1_reader = {c: [None, None] for c in range(self.NC)}
         last_red = {c: None for c in range(self.NC)}
         last_any = None
-        nload = {g: 0 for g in range(G)}
+        nload = {cl: 0 for cl in range(N_CL)}
         for j in range(self.NSLC):
             s2 = j % 2
-            ready = {g: [] for g in range(G)}
-            for g in range(G):
-                k, c = self.chip(g), self.c(g)
+            ready = {cl: [] for cl in range(N_CL)}
+            for cl in range(N_CL):
+                k, c = self.chip(cl), self.local(cl)
                 if self.part_src == "l3":
                     src = BingoMemSymbol(f"{Tg}_part", offset=(c * self.NSLC + j) * self.SL)
                 else:
                     src = BingoMemFixedAddr(self.h_part[(k, c)] + j * self.SL, mem_level="HBM")
-                cp = self.node(k, c, dm, f"x_copy_j{j}_g{g}", "__snax_bingo_kernel_idma_1d_copy",
-                               SnaxBingoKernelIdma1dCopyArgs(src, self.sym[(k, c)].view(j * self.SL), self.SL))
-                ready[g].append(cp)
+                cp = self.node(k, c, dm, f"x_copy_j{j}", "__snax_bingo_kernel_idma_1d_copy",
+                               SnaxBingoKernelIdma1dCopyArgs(src, self.xch[(k, c)].view(j * self.SL), self.SL))
+                ready[cl].append(cp)
                 prev = cp
                 for _ in range(self.LPS_C[c] + (self.FX[c] if j == 0 else 0)):
-                    prev = self._load(g, nload[g], [prev])
-                    nload[g] += 1
+                    prev = self._load(cl, nload[cl], [prev])
+                    nload[cl] += 1
                 if self.LPS_C[c] + (self.FX[c] if j == 0 else 0):
-                    ready[g].append(prev)
+                    ready[cl].append(prev)
             for c in range(self.NC):
                 ordr = self.chain_order(c)[:-1]
                 p1x = f"((uint64_t)({self.p1c[c].get_c_var_name()}))"
                 ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                    cm.remote, R, c, ordr, src=self.sx(c, j * self.SL), dst=f"({p1x} + {s2 * self.SL})",
+                    cm.remote, R, c, ordr, src=self.xch_addr(c, j * self.SL), dst=f"({p1x} + {s2 * self.SL})",
                     size=self.SL, junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD,
                     holds=[self.p1c[c]])
                 before = last_any if self.mode == "serial" else last_red[c]
                 red = chain_gather(lambda n, kernel, args, deps: self.node(R, c, xdma, n, kernel, args, deps),
                                    f"y_chain_c{c}j{j}", ga,
-                                   [t for g in range(G) if self.c(g) == c for t in ready[g]]
+                                   [t for cl in range(N_CL) if self.local(cl) == c for t in ready[cl]]
                                    + ([before] if before is not None else [])
                                    + ([p1_reader[c][s2]] if p1_reader[c][s2] is not None else []))
                 last_red[c] = last_any = red

@@ -37,7 +37,7 @@ one ring: the push order is the ring order).
                flag
     query      C00's cluster 0 waits for the 16 rows, converts the FP16 rows [16, 576] to the A layout (xDMA) and
                quantises them in two parts (q~ at s_qt, q_pe at s_qpe): Q8, the query tile of 16 lanes, lane h head h,
-               multicast into every chip's cluster-0 symmetric buffer (fa_mc's broadcast, cluster 0 only); C00's
+               multicast into every chip's cluster-0 exchange buffer (fa_mc's broadcast, cluster 0 only); C00's
                cluster 1 copies it from its cluster 0
     pass 1     every chip's cluster 0 over its cached tiles (K from the ring) and C00's cluster 1 over the new tile (K
                made on the device, its keys after P masked by the QK's C): S^T = K Q^T and the FA softmax with its own
@@ -366,7 +366,7 @@ class FaDecodeKs(FaBuild):
         """The data and the memory; no task yet. FaBuild.mem_handles is not run, as FaBuild.__init__ is not: the data
         (fa_decode_mc.FaDecodeData) and its golden (KsGolden) with their report and the cross-check of head 0's Q8;
         _stage (x, y, the gathers' and multicasts' areas in L3, every chip's weights, cache shard and constants in its
-        memory chip's HBM); one weight ring a chip (_make_ring); every cluster's symmetric buffer (its offsets: the
+        memory chip's HBM); one weight ring a chip (_make_ring); every cluster's exchange buffer (its offsets: the
         query, the flags, the arenas, the partial)."""
         R, nchip, extra = self.ROOT, len(self.chips), self.kva_extra
         d = self.d = fdm.FaDecodeData(self.kv_path, self.w_cache, cache=self.P, bc=BC, n_calib=self.n_calib,
@@ -387,7 +387,7 @@ class FaDecodeKs(FaBuild):
               f"{[f'{k:02x}' for k in extra]}; m* by {self.m_exchange}; fold order {[f'{k:02x}' for k in self.order]}")
         self._stage()
         self._make_ring()
-        # ---- every cluster's symmetric buffer, on whole transfer units -----------------------------------------------
+        # ---- every cluster's exchange buffer, on whole transfer units -----------------------------------------------
         self.OFF_X, self.OFF_FLAG, self.OFF_MFLAG = 0, QB, QB + XFER
         self.OFF_MX = QB + 2 * XFER                  # an FA arena: the pass-1 arena of a chip's cluster 0 (the root's:
         self.OFF_MLOC = self.OFF_MX + MRUN           # its two clusters' maximum), whose mrun is the chip's maximum
@@ -395,7 +395,7 @@ class FaDecodeKs(FaBuild):
         self.OFF_M = self.OFF_A2 + MRUN
         self.OFF_MR = self.OFF_A2 + ARENA            # the root's arena of m*
         self.OFF_LOC = self.OFF_MR + ARENA           # the chip's partial for the chain
-        self.make_sym(self.OFF_LOC + PB, PB, dst_lead=BEAT)
+        self.make_xch(self.OFF_LOC + PB, PB, dst_lead=BEAT)
 
     def _kva_extra_default(self, n):
         """One chip a memory link, the links of the memory chips other than the root's (whose links also carry x and the
@@ -415,20 +415,20 @@ class FaDecodeKs(FaBuild):
 
     # ---- data --------------------------------------------------------------------------------------------------------
     def _stage(self):
-        st, d, g, T = self.st, self.d, self.gold, self.TAG
+        st, d, gold, T = self.st, self.d, self.gold, self.TAG
         R, nchip = self.ROOT, len(self.chips)
         loc = lambda k: (self.mem[k] >> 4, self.mem[k] & 15)       # noqa: E731
         f16 = lambda a: np.asarray(a, dtype=np.float16).reshape(-1).view(np.uint8)    # noqa: E731
         # x: the token's INT8 row in a_row in the root memory chip's HBM; its landing area and flag in every chip's L3
         if self.x_on_host:
-            self.h_xhbm = st.put_hbm(f"{T}_xhbm", a_row(g.x8), mem_chip=loc(R))
+            self.h_xhbm = st.put_hbm(f"{T}_xhbm", a_row(gold.x8), mem_chip=loc(R))
         st.put_zeros(f"{T}_xland", "int8_t", XB)
         st.put_zeros(f"{T}_xtflag", "uint8_t", 64)
         # y: FP16 [2048] in the root memory chip's HBM; the row the clusters fill in the root's L3, a flag each
         if self.y_to_hbm:
             self.h_yhbm = st.put_hbm(f"{T}_yhbm", np.zeros(2 * HIDDEN, dtype=np.uint8), mem_chip=loc(R))
         st.put_zeros(f"{T}_yrow", "uint8_t", 2 * HIDDEN)
-        st.put_zeros(f"{T}_yflag", "uint8_t", self.G * 64)
+        st.put_zeros(f"{T}_yflag", "uint8_t", self.N_CL * 64)
         # the gathers into the root's L3: the W_KVA rows, the query rows, the maxima, the o8 rows; the multicasts'
         # landing areas in every chip's L3: o~ and the o8 row
         for name, nb in (("kvraw", N_KVA * 2 * QC), ("kvrflag", N_KVA * 64), ("qrows", nchip * QROW),
@@ -463,12 +463,12 @@ class FaDecodeKs(FaBuild):
                 tiles.append(np.zeros(KB + VB, dtype=np.int8))
             self.h_kv[k] = st.put_hbm(f"{T}_kv_k{k:02x}", np.concatenate(tiles).astype(np.int8), mem_chip=loc(k))
             qs = np.asarray(d.q_scale(h), np.float16)
-            c0b = np.concatenate([f16(a_row(qs[:Q_NOPE])), f16(qs[Q_NOPE:]), f16(g.cos), f16(g.sin),
+            c0b = np.concatenate([f16(a_row(qs[:Q_NOPE])), f16(qs[Q_NOPE:]), f16(gold.cos), f16(gold.sin),
                                   f16(d.qt_scale(h)), f16(a_row(np.asarray(d.uv_scale(h), np.float16)))])
             if c0b.size != C0_BYTES:
                 raise ValueError(f"cluster 0's constants are {c0b.size} B, not {C0_BYTES}")
             self.h_c0[k] = st.put_hbm(f"{T}_c0_k{k:02x}", c0b, mem_chip=loc(k))
-        c1b = np.concatenate([f16(d.kva_scale()), f16(g.cos), f16(g.sin), g.mask.reshape(-1).view(np.uint8)])
+        c1b = np.concatenate([f16(d.kva_scale()), f16(gold.cos), f16(gold.sin), gold.mask.reshape(-1).view(np.uint8)])
         if c1b.size != C1_BYTES:
             raise ValueError(f"the new key's constants are {c1b.size} B, not {C1_BYTES}")
         self.h_c1 = st.put_hbm(f"{T}_c1_k{R:02x}", c1b, mem_chip=loc(R))
@@ -796,13 +796,14 @@ class FaDecodeKs(FaBuild):
         qin = self.broadcast("q", qa8, QB, self.OFF_X, self.OFF_FLAG,
                              {k: ([qq1, qq2][-1] if k == R else q_puts[k]) for k in self.chips}, clusters=[0])
         self.edge(qq1, self.bcast_puts[0])
-        qin[(R, 1)] = self.copy(R, 1, "q_cp", self.sv(R, 0, self.OFF_X), self.sv(R, 1, self.OFF_X), QB, [qin[(R, 0)]])
+        qin[(R, 1)] = self.copy(R, 1, "q_cp", self.xch_view(R, 0, self.OFF_X), self.xch_view(R, 1, self.OFF_X), QB,
+                                [qin[(R, 0)]])
         self.q_mc = list(self.bcast_puts)
         # ---- pass 1: the row maximum of every attention cluster over its tiles ---------------------------------------
         self.kbuf, self.vbuf, s16, ar1, sm1 = {}, {}, {}, {}, {}
         for k, c, ts in self.units:
-            q8 = self.sv(k, c, self.OFF_X)
-            ar1[k, c] = self.l1(R, 0, "ar1", ARENA) if (k, c) == (R, 0) else self.sv(k, c, self.OFF_MX)
+            q8 = self.xch_view(k, c, self.OFF_X)
+            ar1[k, c] = self.l1(R, 0, "ar1", ARENA) if (k, c) == (R, 0) else self.xch_view(k, c, self.OFF_MX)
             s16[k, c] = self.l1(k, c, "s16", len(ts) * SB)
             p8 = self.l1(k, c, "p8a", FA.p8_bytes(BC, BR, FA.EXACT))
             sm = []
@@ -826,15 +827,15 @@ class FaDecodeKs(FaBuild):
         mloc = {k: sm1[k, QC_] for k in self.chips if k != R}
         mt, p8m = self.l1(R, 0, "mt", 3 * BEAT), self.l1(R, 0, "p8m", FA.p8_bytes(2, BR, 0))
         cp0 = self.copy(R, 0, "m_cp0", at_offset(ar1[R, 0], MRUN), at_offset(mt, BEAT), BEAT, [sm1[R, 0]])
-        cp1 = self.copy(R, 1, "m_cp1", self.sv(R, 1, self.OFF_MLOC), at_offset(mt, 2 * BEAT), BEAT, [sm1[R, 1]])
+        cp1 = self.copy(R, 1, "m_cp1", self.xch_view(R, 1, self.OFF_MLOC), at_offset(mt, 2 * BEAT), BEAT, [sm1[R, 1]])
         mloc[R] = self.nd(R, 0, "simd", "m_max", "__snax_bingo_kernel_simd_fa_softmax",
-                          FA(at_offset(mt, BEAT), p8m, self.sv(R, 0, self.OFF_MX), 2, 1, tile_idx=0, seed_state=1,
+                          FA(at_offset(mt, BEAT), p8m, self.xch_view(R, 0, self.OFF_MX), 2, 1, tile_idx=0, seed_state=1,
                              geom_mode=FA.GEOM_SELF, score_scale=1.0, p_mode=0, p8_pitch=0), [cp0, cp1])
         vld = {}
         if self.m_exchange == "gather":
             m_puts = {}
             for i, k in enumerate(self.chips):
-                m_puts[k] = self.put(k, 0, "m_put", self.sv(k, 0, self.OFF_MLOC),
+                m_puts[k] = self.put(k, 0, "m_put", self.xch_view(k, 0, self.OFF_MLOC),
                                      self.l3("mstg", XFER * i, self.far(k)), XFER,
                                      self.l3("mflag", 64 * i, self.far(k)), [mloc[k]])
                 vld.update(self._v_loads(k, qin))
@@ -844,7 +845,8 @@ class FaDecodeKs(FaBuild):
             msp = self.copy2d(R, 0, "mg_split", self.l3("mstg"), at_offset(rows, BEAT), BEAT, XFER, BEAT,
                               len(self.chips), [mw])
             made = self.nd(R, 0, "simd", "mg_max", "__snax_bingo_kernel_simd_fa_softmax",
-                           FA(at_offset(rows, BEAT), p8r, self.sv(R, 0, self.OFF_MR), len(self.chips), 1, tile_idx=0,
+                           FA(at_offset(rows, BEAT), p8r, self.xch_view(R, 0, self.OFF_MR), len(self.chips), 1,
+                              tile_idx=0,
                               seed_state=1, geom_mode=FA.GEOM_SELF, score_scale=1.0, p_mode=0, p8_pitch=0), [msp])
         else:
             for k in self.chips:
@@ -853,25 +855,26 @@ class FaDecodeKs(FaBuild):
                 for k in self.chips:
                     self._stream_tail(k)
             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-                cm.remote, R, 0, self.order[1:], src=self.sx(0, self.OFF_MLOC), dst=self.sx(0, self.OFF_MR + MRUN),
+                cm.remote, R, 0, self.order[1:], src=self.xch_addr(0, self.OFF_MLOC),
+                dst=self.xch_addr(0, self.OFF_MR + MRUN),
                 size=XFER, junction=self.jct["Elementwise"], jct_csr0=EW_F16_MAX)
             deps = [mloc[k] for k in self.chips] + ([self.last_chunk[k] for k in self.chips]
                                                     if self.after_stream else [])
             made = self.nd(R, 0, "xdma", "mg_chain", "__snax_bingo_kernel_xdma_chain_gather", ga, deps)
             self._chains.append(made)
-        self.m_made, self.msrc = made, self.sv(R, 0, self.OFF_MR + MRUN)
+        self.m_made, self.msrc = made, self.xch_view(R, 0, self.OFF_MR + MRUN)
         marr = self.broadcast("m", self.msrc, XFER, self.OFF_M, self.OFF_MFLAG,
                               {k: (made if k == R else vld[k, self.tiles[k][-1]]) for k in self.chips}, clusters=[0])
         self.m_mc = list(self.bcast_puts)
-        marr[(R, 1)] = self.copy(R, 1, "m_cp", self.msrc, self.sv(R, 1, self.OFF_M), XFER, [made])
+        marr[(R, 1)] = self.copy(R, 1, "m_cp", self.msrc, self.xch_view(R, 1, self.OFF_M), XFER, [made])
         # ---- pass 2: the softmax seeded at m*, PV, the partial -------------------------------------------------------
         part, lcp = {}, {}
         for k, c, ts in self.units:
-            ar2 = self.sv(k, c, self.OFF_A2)
+            ar2 = self.xch_view(k, c, self.OFF_A2)
             p8 = [self.l1(k, c, f"p8b{j}", FA.p8_bytes(BC, BR, FA.EXACT)) for j in range(2)]
             oacc = self.l1(k, c, "oacc", D_V * BR * 4) if len(ts) > 1 else None
             single = sum(1 for kk, _, _ in self.units if kk == k) == 1
-            part[k, c] = self.sv(k, 0, self.OFF_LOC) if single else self.l1(k, c, "part", PB)
+            part[k, c] = self.xch_view(k, 0, self.OFF_LOC) if single else self.l1(k, c, "part", PB)
             corr = FA.corr_offset(BC, BR)
             sm, pv = [], []
             for i, t in enumerate(ts):
@@ -891,8 +894,8 @@ class FaDecodeKs(FaBuild):
                                   [sm[i]] + ready + pv[-1:]))
             if c == QC_ and self.after_stream and self.m_exchange == "gather":
                 self._stream_tail(k)
-            lcp[k, c] = self.copy(k, c, "l_cp", self.sv(k, c, self.OFF_A2 + LRUN), at_offset(part[k, c], OB), XFER,
-                                  [sm[-1], pv[-1]])
+            lcp[k, c] = self.copy(k, c, "l_cp", self.xch_view(k, c, self.OFF_A2 + LRUN), at_offset(part[k, c], OB),
+                                  XFER, [sm[-1], pv[-1]])
         if not self.after_stream:
             for k in self.chips:
                 self._stream_tail(k)
@@ -900,10 +903,10 @@ class FaDecodeKs(FaBuild):
         loc = {k: lcp[k, QC_] for k in self.chips}
         pp = self.copy(R, 1, "part_push", part[R, 1], self.p1[R], PB, [lcp[R, 1]])
         loc[R] = self.nd(R, 0, "simd", "loc_add", "__snax_bingo_kernel_simd_stream_elementwise",
-                         SnaxBingoKernelSimdAddF16Args(part[R, 0], self.p1[R], self.sv(R, 0, self.OFF_LOC), PB // 64,
-                                                       32), [lcp[R, 0], pp])
+                         SnaxBingoKernelSimdAddF16Args(part[R, 0], self.p1[R], self.xch_view(R, 0, self.OFF_LOC),
+                                                       PB // 64, 32), [lcp[R, 0], pp])
         ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
-            cm.remote, R, 0, self.order[1:], src=self.sx(0, self.OFF_LOC), dst=self.dst_expr(), size=PB,
+            cm.remote, R, 0, self.order[1:], src=self.xch_addr(0, self.OFF_LOC), dst=self.dst_expr(), size=PB,
             junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD, holds=[self.dst_buf])
         chain = self.nd(R, 0, "xdma", "o_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                         [loc[k] for k in self.chips])
@@ -942,7 +945,7 @@ class FaDecodeKs(FaBuild):
         y_puts = []
         for i, k in enumerate(self.chips):
             for c in range(NC):
-                g = i * NC + c
+                cl = i * NC + c
                 ofl, yw_ = self.l1(k, c, "ofull", XB), self.l1(k, c, "ywo", 4 * QC)
                 if k == R:
                     get = self.copy(R, c, "o8_get", self.l3("oland"), ofl, len(self.chips) * OAR, [ow])
@@ -951,9 +954,9 @@ class FaDecodeKs(FaBuild):
                                      [self.o8_mc])
                 gms = [self.gemv(k, c, f"gwo{s}", ofl, self.wo[k, c, s], yw_.view(2 * QC * s), HIDDEN, QC, d.k_wo,
                                  [get, self.wo_ld[k, c, s]]) for s in range(2)]
-                y_puts.append(self.put(k, c, "y_put", yw_, self.l3("yrow", 4 * QC * g, self.far(k)), 4 * QC,
-                                       self.l3("yflag", 64 * g, self.far(k)), gms))
-        yw = self.wait(R, 0, "y_wait", self.l3("yflag"), self.G, y_puts)
+                y_puts.append(self.put(k, c, "y_put", yw_, self.l3("yrow", 4 * QC * cl, self.far(k)), 4 * QC,
+                                       self.l3("yflag", 64 * cl, self.far(k)), gms))
+        yw = self.wait(R, 0, "y_wait", self.l3("yflag"), self.N_CL, y_puts)
         ys = self.stage_store(yw)
         self.append = self.kv_append([ys] if ys is not None else [yw])
         self.link_report()
@@ -989,29 +992,31 @@ class FaDecodeKs(FaBuild):
         the query tile as its multicast left it on the chip in the middle of the fold order, that chip's partial, m*
         and o~ on the root; checks stages adds that chip's query row in the root's L3, the root's o8 row of every head
         and the new tile's K on the root's cluster 1."""
-        R, g = self.ROOT, self.gold
+        R, gold = self.ROOT, self.gold
         far = self.order[len(self.order) // 2]
         n = 2048
-        checks = [("q8", self.stash("q8", far, 0, self.sv(far, 0, self.OFF_X), QB, []), g.q8_tile.view(np.uint8), QB),
+        checks = [("q8", self.stash("q8", far, 0, self.xch_view(far, 0, self.OFF_X), QB, []),
+                   gold.q8_tile.view(np.uint8), QB),
                   ("mstar", self.stash("mstar", R, 0, self.msrc, BEAT, [self.m_made]),
-                   np.asarray(g.mstar, np.float16).view(np.uint8), BEAT),
-                  (f"loc_k{far:02x}", self.stash(f"loc_k{far:02x}", far, 0, self.sv(far, 0, self.OFF_LOC), PB, []),
-                   g.part_bytes(far).view(np.uint8), PB),
-                  ("xt", self.stash("xt", R, 0, self.xt, OB, []), g.xt.view(np.uint8), OB)]
+                   np.asarray(gold.mstar, np.float16).view(np.uint8), BEAT),
+                  (f"loc_k{far:02x}", self.stash(f"loc_k{far:02x}", far, 0, self.xch_view(far, 0, self.OFF_LOC), PB,
+                                                 []),
+                   gold.part_bytes(far).view(np.uint8), PB),
+                  ("xt", self.stash("xt", R, 0, self.xt, OB, []), gold.xt.view(np.uint8), OB)]
         if self.checks_kind == "stages":
             h = self.head[far]
             checks += [("qrow", self.stash("qrow", R, 0, self.l3("qrows", QROW * h), QROW, []),
-                        g.qrow[h].view(np.uint8), QROW),
+                        gold.qrow[h].view(np.uint8), QROW),
                        ("o8row", self.stash("o8row", R, 0, self.l3("oland"), len(self.chips) * OAR, []),
-                        a_row(g.o8_all).view(np.uint8), len(self.chips) * OAR),
-                       ("ktnew", self.stash("ktnew", R, 1, self.b1["kt"], PK, []), g.piece_k.view(np.uint8), PK)]
+                        a_row(gold.o8_all).view(np.uint8), len(self.chips) * OAR),
+                       ("ktnew", self.stash("ktnew", R, 1, self.b1["kt"], PK, []), gold.piece_k.view(np.uint8), PK)]
         if self.y_to_hbm:
-            y = g.y_raw.view(np.uint8)
+            y = gold.y_raw.view(np.uint8)
             checks.append(("y", self.stash("y", R, 0, self.h_yhbm.address, y.size, list(self._y_stores)), y, y.size))
         if self.append is not None:
             base = self.h_kv[R].address + self.kv_new
-            vt = g.vtile_new.view(np.uint8)
-            for nm, off, img in (("kapp_a", 0, g.piece_k[:n]), ("kapp_b", PK - n, g.piece_k[PK - n:]),
+            vt = gold.vtile_new.view(np.uint8)
+            for nm, off, img in (("kapp_a", 0, gold.piece_k[:n]), ("kapp_b", PK - n, gold.piece_k[PK - n:]),
                                  ("vapp_a", KB, vt[:n]), ("vapp_b", KB + VB - n, vt[VB - n:])):
                 img = np.ascontiguousarray(img).view(np.uint8)
                 checks.append((nm, self.stash(nm, R, 0, base + off, n, [self.append]), img, n))

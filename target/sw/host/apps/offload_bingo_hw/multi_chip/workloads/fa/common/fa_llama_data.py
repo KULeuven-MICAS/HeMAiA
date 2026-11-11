@@ -163,8 +163,8 @@ def ssj_fold(groups, scale):
     """Groups (FP16 [2 * SSJ_ROWS]: m then l) folded in order, each later one into the running result (operand A):
     a chain in data order ending at its collector, or the host fold's part order."""
     acc = np.asarray(groups[0], np.float16).view(np.uint16).copy()
-    for g in groups[1:]:
-        b = np.asarray(g, np.float16).view(np.uint16)
+    for grp in groups[1:]:
+        b = np.asarray(grp, np.float16).view(np.uint16)
         for r in range(SSJ_ROWS):
             acc[r], acc[SSJ_ROWS + r] = ssj_hop(int(acc[r]), int(acc[SSJ_ROWS + r]), int(b[r]),
                                                 int(b[SSJ_ROWS + r]), scale)
@@ -314,7 +314,7 @@ class LlamaFaData:
         return out
 
     def golden(self, shards, chips, order):
-        """shards {g: (t0, nt)}, chips {chip: [g, ...]} (cluster 0 first), order: the chips in fold order. -> per half
+        """shards {cl: (t0, nt)}, chips {chip: [cl, ...]} (cluster 0 first), order: the chips in fold order. -> per half
         the clusters' maxima, m* (packed [m*_0 | m*_1]), every cluster's partial and each chip's sum (flat FP16
         [O_0 | O_1 | l_0 | l_1]), the folded partial, xt [NH, HD]."""
         hm, fp, simd = self.hm, self.fp, self.hm.simd
@@ -322,17 +322,17 @@ class LlamaFaData:
         lane_max = lambda a: simd.reduce_lanewise(a, simd.MAX)          # noqa: E731
         seed = np.full(BR, -65504.0, dtype=F16)
         a32 = F32(self.a_exp)
-        mstar, part = [], {g: [[], []] for g in shards}
+        mstar, part = [], {cl: [[], []] for cl in shards}
         for h in range(HALVES):
             m_c = {}
-            for g, (t0, nt) in shards.items():
+            for cl, (t0, nt) in shards.items():
                 m16 = seed
                 for j in range(t0, t0 + nt):
                     m16 = lane_max(np.stack([lane_max(self._tile(h, j)[0]), m16]))
-                m_c[g] = m16
+                m_c[cl] = m16
             ms = lane_max(np.stack([lane_max(np.stack(list(m_c.values()))), seed]))
             mstar.append(ms)
-            for g, (t0, nt) in shards.items():
+            for cl, (t0, nt) in shards.items():
                 m16, l16, o = ms, np.zeros(BR, dtype=F16), None
                 for j in range(t0, t0 + nt):
                     S16, V = self._tile(h, j)
@@ -346,15 +346,15 @@ class LlamaFaData:
                         np.rint(o.astype(F64) * corr16.astype(F64)[None, :]),
                         -2**31, 2**31 - 1).astype(np.int64) + pv
                     m16 = mnew
-                part[g][0].append(self.compact(hm.d_port(o, self.k_o)))
-                part[g][1].append(l16)
-        flat = {g: np.concatenate([o.reshape(-1) for o in os_] + list(ls)).astype(F16)
-                for g, (os_, ls) in part.items()}
+                part[cl][0].append(self.compact(hm.d_port(o, self.k_o)))
+                part[cl][1].append(l16)
+        flat = {cl: np.concatenate([o.reshape(-1) for o in os_] + list(ls)).astype(F16)
+                for cl, (os_, ls) in part.items()}
         loc = {}
-        for k, gs in chips.items():
-            acc = flat[gs[0]]
-            for g in gs[1:]:
-                acc = fp.add16(acc, flat[g])
+        for k, cl_k in chips.items():
+            acc = flat[cl_k[0]]
+            for cl in cl_k[1:]:
+                acc = fp.add16(acc, flat[cl])
             loc[k] = acc
         tot = loc[order[0]]
         for k in order[1:]:
@@ -398,41 +398,41 @@ class LlamaFaData:
                 m16 = mnew
             return m16, l16, o
 
-        st = {(g, h): sweep(h, t0, nt, seed, passes == 1) for g, (t0, nt) in shards.items() for h in range(HALVES)}
+        st = {(cl, h): sweep(h, t0, nt, seed, passes == 1) for cl, (t0, nt) in shards.items() for h in range(HALVES)}
         out = {}
         if merge:
-            grp = {g: np.concatenate([st[g, h][0] for h in range(HALVES)] + [st[g, h][1] for h in range(HALVES)])
-                   for g in shards}
-            chip = {k: ssj_fold([grp[g] for g in reversed(gs)], a32) for k, gs in chips.items()}
+            grp = {cl: np.concatenate([st[cl, h][0] for h in range(HALVES)] + [st[cl, h][1] for h in range(HALVES)])
+                   for cl in shards}
+            chip = {k: ssj_fold([grp[cl] for cl in reversed(cl_k)], a32) for k, cl_k in chips.items()}
             ml = ssj_fold([chip[k] for k in order], a32)
             out["ml"] = ml
             mstar = [ml[h * BR:(h + 1) * BR] for h in range(HALVES)]
             lstar = [ml[SSJ_ROWS + h * BR:SSJ_ROWS + (h + 1) * BR] for h in range(HALVES)]
         else:
-            mstar = [lane_max(np.stack([lane_max(np.stack([st[g, h][0] for g in shards])), seed]))
+            mstar = [lane_max(np.stack([lane_max(np.stack([st[cl, h][0] for cl in shards])), seed]))
                      for h in range(HALVES)]
             out["mstar"] = np.concatenate(mstar).astype(F16)
-        part = {g: [[], []] for g in shards}
-        for g, (t0, nt) in shards.items():
+        part = {cl: [[], []] for cl in shards}
+        for cl, (t0, nt) in shards.items():
             for h in range(HALVES):
                 if passes == 2:
                     _, l16, o = sweep(h, t0, nt, mstar[h], True)
                 else:
-                    m_c, l_c, o = st[g, h]
+                    m_c, l_c, o = st[cl, h]
                     S = np.repeat(mstar[h][None, :], fix_rows, axis=0)
                     mnew = lane_max(np.stack([lane_max(S), m_c]))
                     corr16 = hm.exp16(fp.add16(m_c, -mnew), a32)
                     o = self._colscale(o, corr16)
                     l16 = fp.mul16(l_c, corr16)
-                part[g][0].append(self.compact(hm.d_port(o, self.k_o)))
-                part[g][1].append(l16)
-        flat = {g: np.concatenate([o.reshape(-1) for o in os_] + ([] if merge else list(ls))).astype(F16)
-                for g, (os_, ls) in part.items()}
+                part[cl][0].append(self.compact(hm.d_port(o, self.k_o)))
+                part[cl][1].append(l16)
+        flat = {cl: np.concatenate([o.reshape(-1) for o in os_] + ([] if merge else list(ls))).astype(F16)
+                for cl, (os_, ls) in part.items()}
         loc = {}
-        for k, gs in chips.items():
-            acc = flat[gs[0]]
-            for g in gs[1:]:
-                acc = fp.add16(acc, flat[g])
+        for k, cl_k in chips.items():
+            acc = flat[cl_k[0]]
+            for cl in cl_k[1:]:
+                acc = fp.add16(acc, flat[cl])
             loc[k] = acc
         tot = loc[order[0]]
         for k in order[1:]:

@@ -231,16 +231,16 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             # order="search": first-fit over several preference orders, the lowest peak kept. Largest
             # first, allocation order, then largest first with each size scaled by a seeded factor in
             # [0.75, 1.25] (deterministic: the seed is the cluster), so near-equal sizes trade places. Every
-            # order keeps the AAAA_ buffers (the symmetric ones, whose offset must be 0 on every chip) in front.
+            # order keeps the AAAA_ buffers (the exchange buffers, whose offset must be 0 on every chip) in front.
             import random
             rng = random.Random(key[0] * 64 + key[1])
-            sym = lambda i: not items[i][0].name.startswith("AAAA_")
+            xch_first = lambda i: not items[i][0].name.startswith("AAAA_")
             cands = [order, sorted(idxs, key=lambda i: items[i][0].name)]
 
             def jittered(lo=0.75, hi=1.25):
                 f = {i: rng.uniform(lo, hi) for i in idxs}
-                return sorted(sorted(idxs, key=lambda i: (-items[i][0].size * f[i], items[i][0].name)), key=sym)
-            cands = [sorted(o, key=sym) for o in cands] + [jittered() for _ in range(opts.search_tries)]
+                return sorted(sorted(idxs, key=lambda i: (-items[i][0].size * f[i], items[i][0].name)), key=xch_first)
+            cands = [sorted(o, key=xch_first) for o in cands] + [jittered() for _ in range(opts.search_tries)]
 
         fp = {i: _footprint(items[i][0].size, alignment, guard) for i in idxs}
         pinned = {i: fixed[id(items[i][0])] for i in idxs if fixed and id(items[i][0]) in fixed}

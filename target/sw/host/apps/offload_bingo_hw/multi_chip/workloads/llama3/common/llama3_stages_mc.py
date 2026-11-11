@@ -55,30 +55,30 @@ class LStages(ABuild):
             self._stage678_images()
 
     # ---- the inputs of a stage alone, in the memory chips' HBM ----------------------------------------------------------
-    def _tiles(self, g):
-        """Cluster g's key tiles (A layout, rope_pairs' column order) and value tiles (V^T, A layout) of the whole prompt,
-        as kbuf and vbuf hold them."""
-        d, m = self.d, self.group[self.chip(g)]
+    def _tiles(self, cl):
+        """Cluster cl's key tiles (A layout, rope_pairs' column order) and value tiles (V^T, A layout) of the whole
+        prompt, as kbuf and vbuf hold them."""
+        d, m = self.d, self.group[self.chip(cl)]
         kt = [self.lay.to_a(d.k8[m][j * self.bc:(j + 1) * self.bc][:, self.perm], self.mesh).astype(np.int8)
               for j in range(self.NP * self.TPP)]
         vt = [self.lay.to_a(d.v8[m][j * self.bc:(j + 1) * self.bc].T, self.mesh).astype(np.int8)
               for j in range(self.NP * self.TPP)]
         return np.concatenate([t.reshape(-1) for t in kt]), np.concatenate([t.reshape(-1) for t in vt])
 
-    def _q8_tiles(self, g):
-        """Cluster g's query tiles of every pass, one after the other (A layout, rope_pairs' column order)."""
-        d, h = self.d, self.head[g]
+    def _q8_tiles(self, cl):
+        """Cluster cl's query tiles of every pass, one after the other (A layout, rope_pairs' column order)."""
+        d, h = self.d, self.head[cl]
         return np.concatenate([self.lay.to_a(d.q8[h][r0:r0 + BR][:, self.perm], self.mesh).astype(np.int8).reshape(-1)
                                for r0 in range(0, self.T, BR)])
 
     def _stage5_images(self):
         T = self.TAG
         self.h_in = {}
-        for g in range(self.G):
-            k = self.chip(g)
-            kt, vt = self._tiles(g)
+        for cl in range(self.N_CL):
+            k = self.chip(cl)
+            kt, vt = self._tiles(cl)
             m = self.mem[k]
-            self.h_in[g] = self.st.put_hbm(f"{T}_s5in_g{g}", np.concatenate([kt, vt, self._q8_tiles(g)]),
+            self.h_in[cl] = self.st.put_hbm(f"{T}_s5in_cl{cl}", np.concatenate([kt, vt, self._q8_tiles(cl)]),
                                            mem_chip=(m >> 4, m & 15))
         # every pass's o~ out of the sweep: per chip, its clusters' tiles, pass by pass (ot8_fused: o8, A layout)
         self.OTB = BR * self.HD * (1 if self.ot8_fused else 2)
@@ -95,19 +95,19 @@ class LStages(ABuild):
         T = self.TAG
         self.OTB = BR * self.HD * (1 if self.ot8_fused else 2)
         self.h_in = {}
-        for g in range(self.G):
-            k, h = self.chip(g), self.head[g]
+        for cl in range(self.N_CL):
+            k, h = self.chip(cl), self.head[cl]
             m = self.mem[k]
             ot = np.concatenate([self._ot_tile(h, r0) for r0 in range(0, self.T, BR)])     # tile by tile, pass by pass
-            self.h_in[g] = self.st.put_hbm(f"{T}_s678in_g{g}", ot.view(np.int8), mem_chip=(m >> 4, m & 15))
+            self.h_in[cl] = self.st.put_hbm(f"{T}_s678in_cl{cl}", ot.view(np.int8), mem_chip=(m >> 4, m & 15))
 
     def _consts(self):
         pre = {k: [] for k in self.chips}
         for k in self.chips:
             for c in reversed(range(self.NC)):
-                g = self.chips.index(k) * self.NC + c
-                h, nb = self.cst[g]
-                pre[k] = [self.copy(g, f"const_ld_g{g}", h.address, self.consts[g], nb, pre[k])]
+                cl = self.chips.index(k) * self.NC + c
+                h, nb = self.cst[cl]
+                pre[k] = [self.copy(cl, f"const_ld", h.address, self.consts[cl], nb, pre[k])]
         return pre
 
     def _init(self):
@@ -141,11 +141,11 @@ class LStages(ABuild):
         for i in range(self.NP):
             if i:
                 self.pass_start(i)
-            x = {g: self.stage_x(g, i, puts[i], [go[self.chip(g)]] + list(last_proj.get(g, [])))
-                 for g in range(self.G)}
+            x = {cl: self.stage_x(cl, i, puts[i], [go[self.chip(cl)]] + list(last_proj.get(cl, [])))
+                 for cl in range(self.N_CL)}
             own = {}
-            for g in range(self.G):
-                q8s[(g, i)], last_proj[g], own[g] = self.stage_proj(g, i, x[g])
+            for cl in range(self.N_CL):
+                q8s[(cl, i)], last_proj[cl], own[cl] = self.stage_proj(cl, i, x[cl])
             if i + 1 < self.NP and not self.x_mem:
                 puts.append(self.stage_x_put(i + 1, [go[R]] + puts[-1:]))
             if self.kv_split:
@@ -153,10 +153,11 @@ class LStages(ABuild):
             else:
                 for k in self.chips:
                     self.stage_trade_kv(k, i, own)
-            for g in range(self.G):
-                k = self.chip(g)
-                last[k] += [t for u in range(self.NQ) for t in q8s[(g, i)][u][1]]
-                last[k] += [self.tile_ready[(g, kind, i * self.TPP + t)] for kind in ("K", "V") for t in range(self.TPP)]
+            for cl in range(self.N_CL):
+                k = self.chip(cl)
+                last[k] += [t for u in range(self.NQ) for t in q8s[(cl, i)][u][1]]
+                last[k] += [self.tile_ready[(cl, kind,
+                                             i * self.TPP + t)] for kind in ("K", "V") for t in range(self.TPP)]
         self._end_per_chip({k: list(dict.fromkeys(v)) for k, v in last.items()})
         # checks: the last pass's first and last query tile on both clusters of the root and of the fold order's middle
         # chip; every cluster of both chips' key and value tiles of the whole prompt
@@ -165,16 +166,16 @@ class LStages(ABuild):
         i = self.NP - 1
         for k in (R, far):
             for c in range(self.NC):
-                g = self.chips.index(k) * self.NC + c
-                h = self.head[g]
+                cl = self.chips.index(k) * self.NC + c
+                h = self.head[cl]
                 for u in sorted({0, self.NQ - 1}):
                     r0 = i * self.R + u * BR
                     q8 = self.lay.to_a(d.q8[h][r0:r0 + BR][:, self.perm], self.mesh).astype(np.int8)
                     nm = f"q8_k{k:02x}c{c}u{u}"
-                    checks.append((nm, self.stash(nm, k, c, self.pb(g, i)["q8"][u], q8.size, []), q8.view(np.uint8),
+                    checks.append((nm, self.stash(nm, k, c, self.pb(cl, i)["q8"][u], q8.size, []), q8.view(np.uint8),
                                    q8.size))
-                kt, vt = self._tiles(g)
-                for nm, buf, img in ((f"k8_k{k:02x}c{c}", self.kbuf[g], kt), (f"v8_k{k:02x}c{c}", self.vbuf[g], vt)):
+                kt, vt = self._tiles(cl)
+                for nm, buf, img in ((f"k8_k{k:02x}c{c}", self.kbuf[cl], kt), (f"v8_k{k:02x}c{c}", self.vbuf[cl], vt)):
                     checks.append((nm, self.stash(nm, k, c, buf, img.size, []), img.view(np.uint8), img.size))
         self.run_checks(checks)
 
@@ -186,36 +187,36 @@ class LStages(ABuild):
         qb = BR * self.HD
         for k in self.chips:
             for c in range(self.NC):
-                g = self.chips.index(k) * self.NC + c
-                a = self.h_in[g].address
-                pre[k] = [self.copy(g, "kt_pre", a, self.kbuf[g], nk, pre[k])]
-                pre[k] = [self.copy(g, "vt_pre", a + nk, self.vbuf[g], nk, pre[k])]
+                cl = self.chips.index(k) * self.NC + c
+                a = self.h_in[cl].address
+                pre[k] = [self.copy(cl, "kt_pre", a, self.kbuf[cl], nk, pre[k])]
+                pre[k] = [self.copy(cl, "vt_pre", a + nk, self.vbuf[cl], nk, pre[k])]
                 for i in range(self.NP):
                     for u in range(self.NQ):
                         off = 2 * nk + (i * self.NQ + u) * qb
-                        pre[k] = [self.copy(g, f"q8_pre_i{i}u{u}", a + off, self.pb(g, i)["q8"][u], qb, pre[k])]
+                        pre[k] = [self.copy(cl, f"q8_pre_i{i}u{u}", a + off, self.pb(cl, i)["q8"][u], qb, pre[k])]
         go = self.setup(extra=pre)
         self.dfg.relay_one_consumer_cores = [self.roles["xdma"]]
-        for g in range(self.G):
+        for cl in range(self.N_CL):
             for kind in ("K", "V"):
                 for j in range(self.NP * self.TPP):
-                    self.tile_ready[(g, kind, j)] = go[self.chip(g)]
+                    self.tile_ready[(cl, kind, j)] = go[self.chip(cl)]
         prev_sw, xt_rd, last = {}, {}, {k: [] for k in self.chips}
         for i in range(self.NP):
             if i:
                 self.pass_start(i)
-            for g in range(self.G):
-                k, c = self.chip(g), self.c(g)
-                q8 = {u: (self.pb(g, i)["q8"][u], [go[k]]) for u in range(self.NQ)}
-                sw = fa_sweep(self.at(k, c), self.sweep_cfg(i + 1), self.sweep_bufs[g], la.L1Tiles(self, g), q8, self.roles,
-                              prev=prev_sw.get(g), oacc_free=xt_rd.get(g), name=f"s{i}_", early=1, mask=self.mask(i)(g),
-                              mask_c=self.mask_c, ot8=self.ot8_bits(), geom_core=self.sm_geom,
+            for cl in range(self.N_CL):
+                k, c = self.chip(cl), self.local(cl)
+                q8 = {u: (self.pb(cl, i)["q8"][u], [go[k]]) for u in range(self.NQ)}
+                sw = fa_sweep(self.at(k, c), self.sweep_cfg(i + 1), self.sweep_bufs[cl], la.L1Tiles(self, cl), q8,
+                              self.roles, prev=prev_sw.get(cl), oacc_free=xt_rd.get(cl), name=f"s{i}_", early=1,
+                              mask=self.mask(i)(cl), mask_c=self.mask_c, ot8=self.ot8_bits(), geom_core=self.sm_geom,
                               sm_batch=self.sm_batch)
-                outs = [self.copy(g, f"ot_out{u}_i{i}", sw["xt"][u],
+                outs = [self.copy(cl, f"ot_out{u}_i{i}", sw["xt"][u],
                                   BingoMemSymbol(f"{T}_otout", offset=((i * self.NC + c) * self.NQ + u) * self.OTB),
                                   self.OTB, [sw["tr"][u]]) for u in range(self.NQ)]
-                xt_rd[g] = {u: [outs[u]] for u in range(self.NQ)}
-                prev_sw[g] = sw
+                xt_rd[cl] = {u: [outs[u]] for u in range(self.NQ)}
+                prev_sw[cl] = sw
                 last[k] += outs
         self._end_per_chip(last)
         # checks: the last pass's first and last query tile's o~ (FP16 rows) on both clusters of the root and of the fold
@@ -225,8 +226,8 @@ class LStages(ABuild):
         i = self.NP - 1
         for k in (R, far):
             for c in range(self.NC):
-                g = self.chips.index(k) * self.NC + c
-                h = self.head[g]
+                cl = self.chips.index(k) * self.NC + c
+                h = self.head[cl]
                 for u in sorted({0, self.NQ - 1}):
                     r0 = i * self.R + u * BR
                     ot = self._ot_tile(h, r0)
@@ -246,32 +247,32 @@ class LStages(ABuild):
         ot_buf = {}
         for k in self.chips:
             for c in range(self.NC):
-                g = self.chips.index(k) * self.NC + c
-                a = self.h_in[g].address
+                cl = self.chips.index(k) * self.NC + c
+                a = self.h_in[cl].address
                 for i in range(self.NP):
                     for u in range(self.NQ):
                         buf = self.cx_chip(k).at(c).l1(f"{self.TAG}_otp{u}_i{i}", self.OTB)
                         off = (i * self.NQ + u) * self.OTB
-                        pre[k] = [self.copy(g, f"ot_pre_i{i}u{u}", a + off, buf, self.OTB, pre[k])]
-                        ot_buf[(g, i, u)] = buf
+                        pre[k] = [self.copy(cl, f"ot_pre_i{i}u{u}", a + off, buf, self.OTB, pre[k])]
+                        ot_buf[(cl, i, u)] = buf
         go = self.setup(extra=pre)
         self.dfg.relay_one_consumer_cores = [self.roles["xdma"]]
         stores = []
-        x = {g: go[self.chip(g)] for g in range(self.G)}
+        x = {cl: go[self.chip(cl)] for cl in range(self.N_CL)}
         for i in range(self.NP):
             if i:
                 self.pass_start(i)
             post_last = {}
-            for g in range(self.G):
-                k = self.chip(g)
-                sw = {"xt": [ot_buf[(g, i, u)] for u in range(self.NQ)], "tr": [go[k]] * self.NQ}
-                _, post_last[g] = self.stage_post(g, i, sw)
+            for cl in range(self.N_CL):
+                k = self.chip(cl)
+                sw = {"xt": [ot_buf[(cl, i, u)] for u in range(self.NQ)], "tr": [go[k]] * self.NQ}
+                _, post_last[cl] = self.stage_post(cl, i, sw)
             self.stage_wo_cols(i, post_last, x, stores, None)
         if self.y_scatter:
             self.end_window(self._y_scatter_waits())
         else:
             yw = self.node(R, 0, dm, "y_wait", "__snax_bingo_kernel_wait_flags",
-                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{self.TAG}_yflag"), self.NP * self.G, 1),
+                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{self.TAG}_yflag"), self.NP * self.N_CL, 1),
                            [t for t in self._y_last if t.assigned_chiplet_id == R])
             for t in self._y_last:
                 if t.assigned_chiplet_id != R:
