@@ -18,4 +18,7 @@
   }
   first_blocks: 2
   root_cols: [320, 304]
+  // the D2D links' RX yield windows, compute / memory chips: a compute chip receiving a push stream hands the
+  // half-duplex link over after 255 cycles when its own writes are waiting (the layers' setting)
+  d2d_rx_yield: [255, 0]
 }

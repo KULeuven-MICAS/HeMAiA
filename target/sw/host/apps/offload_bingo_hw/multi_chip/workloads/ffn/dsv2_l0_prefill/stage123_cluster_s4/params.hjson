@@ -1,0 +1,26 @@
+// stage123: stages 1-3 of one pass alone (main_bingo.py): X in L1 before the window; gate|up over the weight stream,
+// dequantise and SwiGLU, the reshape, the quantise and the A8 exchange. The mapping is the whole block's (../full) for
+// one pass (tokens = rows). Here as ../stage123_cluster with 4 ring slots, so a ring wraps and a run's push waits for
+// the loads of the bytes it overwrites.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l0
+  tokens: 128
+  rows: 128
+  blocks: 3
+  w_chunk_bytes: 98304
+  w_buffers: 2
+  weight_ring:
+  {
+    mode: cluster
+    slots: 4
+    head: 4
+    batch_head: 1
+  }
+  first_blocks: 2
+  root_cols: [320, 304]
+  // the D2D links' RX yield windows, compute / memory chips: a compute chip receiving a push stream hands the
+  // half-duplex link over after 255 cycles when its own writes are waiting (the layers' setting)
+  d2d_rx_yield: [255, 0]
+}
