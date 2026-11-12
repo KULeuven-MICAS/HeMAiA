@@ -495,7 +495,7 @@ class ChipletBuild(FabricBase):
         the start stamp, and what each chip's window opens with: the start (edge) or the
         chip's first barrier, which every chip parks in before the root stamps the start and
         arrives last. `extra` {chip: [task]}: more of a chip's setup the start waits for.
-        Returns {chip: go task}; the prefetchers follow it."""
+        Returns {chip: go task}; the prefetchers follow it (in cluster mode, each ring's first post)."""
         xdma = self.roles["xdma"]
         setup_end = {}
         # xch_zero False: a workload whose every read of an exchange buffer follows a write of it in the
@@ -816,8 +816,9 @@ class ChipletBuild(FabricBase):
         the order the hardware runs them: the descriptor list of the emitted header, which is not the node-id order. A
         ring load spins on a chunk the prefetcher pushes only after it starts: one ring load ahead of a task that
         prefetcher (through the start) waits for, on the same core, is a deadlock no dependency check sees. A load's
-        prefetcher: the one filling its ring's flags whose chunk range holds the load's chunk. (x_prefixes: unused, kept
-        for the drivers that pass it.)"""
+        prefetcher: the one filling its ring's flags whose chunk range holds the load's chunk. With weight_ring.mode
+        cluster there is no prefetcher: a load follows its run's post by an edge. (x_prefixes: unused, kept for the
+        drivers that pass it.)"""
         import networkx as nx
         g = nx.DiGraph(self.dfg)
         g.add_edges_from(self.dfg.order_edges)

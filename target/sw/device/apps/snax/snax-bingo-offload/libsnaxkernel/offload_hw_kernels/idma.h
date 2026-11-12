@@ -364,16 +364,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
 #define BINGO_RING_TRAILER_MAGIC 0x5EED7A11C0DEF1A6ULL
 #endif
 
-// The expert-slot record (moe_route.h) one copy reads its source from: slot `slot`, word
-// pair 16 + 2 field. The address was decided by the router at run time, so it is looked up
-// here, on the DM core, the one engine that reaches every memory.
 // One chunk of a weight RING in this chiplet's L3 into an L1 slab. The memory chiplet's
-// iDMA PUSHES the weights into the ring (the host's prefetcher schedules it: over the
-// half-duplex D2D link a push flows one way, a pull turns the link around per request),
-// and after each chunk pushes a 64-B flag holding the chunk's sequence number. Same
-// iDMA queue, one AXI ID, one link: the flag lands after the chunk. So: wait for the flag,
-// copy the slot (a local L3 read), then hand the slot back by writing the same number
-// into its release word, which the prefetcher polls before it reuses the slot.
+// iDMA PUSHES the weights into the ring (over the half-duplex D2D link a push flows one way,
+// a pull turns the link around per request), a run of chunks at a time, then the run's 64-B
+// flags, each holding its chunk's sequence number. Same iDMA queue, one AXI ID, one link:
+// the flags land after the chunks. The runs are posted by the host's prefetcher
+// (host_kernel_lib.h weight_prefetch) or by this cluster's DM core (ring_push below,
+// weight_ring.mode cluster). So: wait for the flag, copy the slot (a local L3 read), then
+// hand the slot back by writing the same number into its release word, which the
+// prefetcher polls before it reuses the slot.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_ring_load_args_t);
@@ -409,8 +408,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
         flag[0] = 0u;
         flag[1] = 0u;
     }
-    // release_addr 0: this load is one of several readers of the slot (a chunk both clusters of a
-    // chip read); the reader that comes last, whose task follows the others, writes the release.
+    // release_addr 0: no release word. Either this load is one of several readers of the slot (a
+    // chunk both clusters of a chip read; the reader that comes last, whose task follows the
+    // others, writes the release), or the cluster posts the ring's runs, and the post that
+    // reuses the slot follows this load in the graph.
     if (release) *release = a->seq;
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
@@ -467,6 +468,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_ring_push(void *arg)
 #define BINGO_MOE_REC_SLOT_WORDS 32u   // 128 B per slot
 #define BINGO_MOE_REC_ENTRY_WORD 16u   // the copied 64-B table entry starts here
 
+// The expert-slot record (moe_route.h) one copy reads its source from: slot `slot`, word
+// pair 16 + 2 field. The address was decided by the router at run time, so it is looked up
+// here, on the DM core, the one engine that reaches every memory.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_copy_slot(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_copy_slot_args_t);

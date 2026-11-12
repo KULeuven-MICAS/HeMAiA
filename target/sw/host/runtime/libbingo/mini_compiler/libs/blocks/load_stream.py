@@ -118,21 +118,22 @@ class LoadStream:
         """Every later load waits for `node`, which must follow every read of the slabs so
         far -- the store of what those reads computed, say. The DM core runs its tasks in
         order and the sort puts a load as early as its WAR edge allows, so without the fence
-        the next projection's first load -- waiting on a ring chunk the prefetcher has not
-        pushed yet -- sits in front of this one's dequantisation load and store."""
+        the next projection's first load -- waiting on a ring chunk not pushed yet -- sits in
+        front of this one's dequantisation load and store."""
         self._reader = [node] * len(self._reader)
 
 
 class WeightRings:
     """Per-cluster rings of weight chunks in this chiplet's L3, PUSHED there by the memory
-    chiplet's iDMA under the host's prefetcher (host_kernel_lib.h weight_prefetch),
-    instead of every cluster PULLING its weights over the D2D link.
+    chiplet's iDMA, the runs posted by the host's prefetcher (host_kernel_lib.h
+    weight_prefetch) or, in cluster mode, by each ring's cluster, instead of every cluster
+    PULLING its weights over the D2D link.
 
     WHY. The D2D link is half-duplex. A pull sends a read request toward the memory
     chiplet for every burst and the data comes back the other way, so the link turns
     around each time; a push only flows toward us, so it keeps the link streaming. The
-    ring also decouples the link from the clusters: the prefetcher runs up to `n_slots`
-    chunks ahead of each cluster, through the attention and the routing.
+    ring also decouples the link from the clusters: the pushes run up to `n_slots` chunks
+    ahead of each cluster, through the attention and the routing.
 
     The workload stages the ring memory (symbols in L3: the slots of every ring, a 64-B
     flag and a 64-B release word per slot) and passes the handles; a LoadStream with

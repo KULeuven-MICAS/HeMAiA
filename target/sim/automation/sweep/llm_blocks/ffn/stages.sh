@@ -10,7 +10,8 @@
 #                       12, 16 chips)
 #   llama3_t64          workloads/ffn/llama3_prefill/t64: Llama-3-8B's FFN, one pass of 64 tokens
 #   dsv2_<app>, llama3_<app>  workloads/ffn/{dsv2_l0_prefill,llama3_prefill}/<app>: DeepSeek-V2-Lite's or Llama-3-8B's
-#                       FFN, one stage alone (stage0, stage123, stage45: each its own main_bingo.py) or full (the 256-token block)
+#                       FFN, one stage alone (stage0, stage123, stage45: each its own main_bingo.py) or full (the 256-token block);
+#                       DeepSeek also stage123_cluster, stage123_cluster_s4 (the rings in cluster mode)
 # TIMEOUT_H is the runner's wall-clock limit.
 # What it does: refuses to start while another simulator of this user runs; launches the run through
 # common/launch.sh (the runner's event log); arms common/sim_watchdog.py with the ffn_prefill profile (it
@@ -22,7 +23,7 @@
 # running simulations (SIM_SLOTS of them, default 8).
 S=$(cd "$(dirname "$0")" && pwd); H=${S%/target/sim/automation/sweep/*}; EXP=${S#"$H"/target/sim/automation/sweep/}
 stage=$1
-[ -z "$stage" ] && { sed -n 6,14p "$0"; exit 1; }
+[ -z "$stage" ] && { sed -n 6,15p "$0"; exit 1; }
 case $stage in
   abl64_*)  wl=ffn/dsv2_l0_prefill_ablation/${stage#abl64_}; bound=${2:-2500}; TIMEOUT_H=${TIMEOUT_H:-9};;
   sweep64_*) wl=ffn/scaling/${stage#sweep64_}; bound=${2:-2500}; TIMEOUT_H=${TIMEOUT_H:-9};;

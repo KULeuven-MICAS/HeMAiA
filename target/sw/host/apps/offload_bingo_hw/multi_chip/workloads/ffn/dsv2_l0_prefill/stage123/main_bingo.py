@@ -145,7 +145,8 @@ class Stage123(cm.ChipletBuild):
         _stage(): X and every cluster's weight chunks and dequantisation factors into HBM; make_streams(): each
         cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
         (weight_prefetch_k<chip>, which walks the chip's ring schedule and has its memory chip push the chunks into the
-        rings); _buffers(): every cluster's L1 buffers."""
+        rings), none with weight_ring.mode cluster (each run's post is made with its first load, _load); _buffers():
+        every cluster's L1 buffers."""
         d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
         R = self.ROWS
         self.D, self.I = d.H, d.I
@@ -242,6 +243,8 @@ class Stage123(cm.ChipletBuild):
                                           |
                                       S0_start  ---------->  weight_prefetch_k<chip>   host: its memory chip pushes
                                           :                                            the chunks into the L3 ring
+          a run's first chunk   Ld_c<j>_i0_push                    DM, with weight_ring.mode cluster (no prefetcher):
+                                                                   the run posted to the memory chip's push engine
           every chunk j         Ld_c<j>_i0                         DM: the chunk, ring slot -> L1 slab, once landed
                                           |
                                 gu_c<j>_i0[b<b>]                   GEMM: X x the chunk's gate and up columns, FP16

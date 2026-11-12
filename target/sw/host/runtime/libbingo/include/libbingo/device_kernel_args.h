@@ -351,7 +351,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_copy_slot_args {
 // One chunk of an L3 weight ring into L1 (offload_hw_kernels/idma.h): wait until the
 // slot's flag holds `seq`, copy the slot, write `seq` into its release word. flag_addr
 // and release_addr are this chiplet's local 32-bit L3 addresses. release_addr 0: no release
-// word is written (one of several readers of the slot; the last reader's load writes it).
+// word is written (one of several readers of the slot, where the last reader's load writes
+// it; or a ring whose cluster posts its runs, ring_push, where the graph orders the next
+// post of the slot after the load).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t flag_addr;
   uint32_t seq;           // the chunk's sequence number in its ring, from 1

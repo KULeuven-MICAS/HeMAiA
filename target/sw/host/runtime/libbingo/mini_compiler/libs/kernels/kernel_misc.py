@@ -328,9 +328,10 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     """One chunk of an L3 weight ring into an L1 slab (offload_hw_kernels/idma.h): wait
     until the slot's flag holds `seq`, copy `size` bytes from the slot, then write `seq`
     into the slot's release word. The memory chiplet's iDMA pushes the chunk and then its
-    flag (libs/blocks/load_stream.py WeightRings); flag and release are local L3 words. A release
-    address of 0 writes no release word: a chunk several clusters read is released by the load
-    that follows the others."""
+    flag, posted by the host's prefetcher or by the ring's cluster (libs/blocks/load_stream.py
+    WeightRings); flag and release are local L3 words. A release address of 0 writes no release
+    word: a chunk several clusters read is released by the load that follows the others, and in
+    cluster mode the next post of the slot follows the load in the graph."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
 
     def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr,
@@ -344,7 +345,8 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         self.trailer = int(bool(trailer))
 
     def accesses(self):
-        # the ring slot and its flags: the prefetcher's protocol orders them
+        # the ring slot and its flags: the ring's protocol orders them (the prefetcher's release words, or in
+        # cluster mode the posts' edges)
         return [Sync("flag_addr"), Sync("src_addr"), Write("dst_addr", self.size), Sync("release_addr")]
 
     def get_struct_name(self) -> str:
