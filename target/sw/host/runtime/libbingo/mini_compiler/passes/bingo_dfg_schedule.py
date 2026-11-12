@@ -143,8 +143,8 @@ class _Model:
                     self._edge(self._out(ld), c, 0)
             if w is not None:
                 self._edge(s, w, 0)
-        # a ring load waits for its chunk, which the chip's prefetcher (the part whose chunk range holds it, when the
-        # prefetcher runs in parts) pushes once it runs
+        # a ring load waits for its chunk, which the memory chip pushes once the chip's prefetcher runs (the part whose
+        # chunk range holds it, when the prefetcher runs in parts), or once the ring's cluster posts its run
         self.prefetcher, self.pf_of, self.arrival = {}, {}, {}
         for n in sorted(dfg.node_list, key=lambda t: t.node_id):
             if isinstance(n.kernel_args, HostBingoKernelWeightPrefetchArgs) or (n.kernel_name or "").startswith(
@@ -165,10 +165,18 @@ class _Model:
             return chunk is None or (lo <= chunk[1] and (not hi or chunk[1] < hi))
         loads = {}
         for v in self.vertices:
-            if isinstance(v, BingoNode) and v.kernel_name == cm.RING_LOAD and v.assigned_chiplet_id in self.prefetcher:
-                loads.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id), []).append(v)
+            if not (isinstance(v, BingoNode) and v.kernel_name == cm.RING_LOAD):
+                continue
+            if getattr(v, "ring_start", None) is not None:
+                # a ring whose cluster posts its own runs (WeightRings cluster mode): the load follows its run's push
+                # by an edge, and the engine streams the ring's runs from the first push on
+                self.pf_of[v] = [v.ring_start]
+            elif v.assigned_chiplet_id in self.prefetcher:
                 pfs = self.prefetcher[v.assigned_chiplet_id]
                 self.pf_of[v] = [p for p in pfs if pushes(p, v)] or pfs[:1]
+            else:
+                continue
+            loads.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id), []).append(v)
         rings = {}
         for (k, _c) in loads:
             rings[k] = rings.get(k, 0) + 1

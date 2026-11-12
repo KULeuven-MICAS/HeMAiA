@@ -10,12 +10,12 @@ rings the memory chiplet pushes weight chunks into.
                the cluster goes through, in build order, each load after whatever last read
                its slab. Linear's weight chunks and MlaAttention's K/V tiles share it.
   WeightRings  per-cluster rings of weight chunks in a chiplet's L3, pushed there by the
-               memory chiplet's iDMA under the host's prefetcher. A LoadStream with `rings`
-               set loads its weight chunks from them (Linear._build_streamed), and
-               schedule() is the table the prefetcher walks.
+               memory chiplet's iDMA, posted by the host's prefetcher or (push_from) by each
+               cluster's DM core. A LoadStream with `rings` set loads its weight chunks from
+               them (Linear._build_streamed), and schedule() is the table the prefetcher walks.
 """
 
-from bingo_kernel_args import SnaxBingoKernelIdmaRingLoadArgs
+from bingo_kernel_args import SnaxBingoKernelIdmaRingLoadArgs, SnaxBingoKernelRingPushArgs
 
 from ..comm import Ctx
 from ..comm.ports import at_offset
@@ -141,6 +141,10 @@ class WeightRings:
     through its cluster's ring (Linear._build_streamed), and schedule() is the table the
     prefetcher walks. Ring c is cluster c's (with `split`, ring c + n_rings / 2 holds its
     routed chunks).
+
+    CLUSTER MODE (push_from): no prefetcher and no schedule. Each run is a task of its ring's
+    cluster, a ring push on the DM core that posts the run into the push engine's queue, and
+    its edges are the whole protocol (push_from). The chunks, runs and places are the same.
     """
 
     FIELDS = {"gu": 0, "gu_s": 1, "dn": 2, "dn_s": 3}
@@ -199,6 +203,48 @@ class WeightRings:
         self.last = {}
         # The run each ring's newest chunk belongs to: [first slot, chunks, bytes]
         self._run = [None] * n_rings
+        # cluster mode (push_from): the push engine, and per ring its runs [push, first load,
+        # first chunk] and its chunks' bytes in the ring (lo, hi, chunk, load)
+        self.pusher = None
+        self._runs = [[] for _ in range(n_rings)]
+        self._held = [[] for _ in range(n_rings)]
+
+    def push_from(self, *, memchip: int, engine: int, seq, edge, depth: int = 32,
+                  seq_entries: int = 1024) -> None:
+        """Cluster mode: every run of a ring is posted by the ring's cluster, a ring push
+        (offload_hw_kernels/idma.h ring_push) on its DM core, into the descriptor queue of push
+        engine `engine` of memory chip `memchip` (`depth` transfers), instead of the host's
+        prefetcher walking schedule(). `seq` is that memory chip's sequence table, `seq_entries`
+        64-B entries, entry i holding i; `edge(a, b)` adds a graph edge. A push's edges are the
+        protocol:
+
+          the newest load of the bytes the run overwrites -> push         (no release words)
+          the ring's previous push -> push                                 (posted in ring order)
+          the first load of the run `share` runs earlier -> push           (the queue never fills)
+          push -> each load of its run                                     (which polls its flag)
+
+        A push queues two transfers (the data, then the flags), the chip's rings share the
+        queue, so a ring may have `share` = depth / (2 rings) runs posted and not landed: once a
+        run's first flag has landed, the engine has taken that run's transfers off the queue.
+        A ring's first push follows start_after()'s task. Routed and trailer chunks have no
+        cluster mode."""
+        share = depth // (2 * self.n_rings)
+        if share < 1:
+            raise ValueError(f"WeightRings.push_from: a queue of {depth} transfers for {self.n_rings} rings")
+        if self.split or self.plain_trailer:
+            raise ValueError("WeightRings.push_from: routed rings (split) and trailer chunks have no cluster mode")
+        if any(self.entries):
+            raise ValueError("WeightRings.push_from: chunks were taken before the rings were set to cluster mode")
+        self.pusher = dict(memchip=int(memchip), engine=int(engine), seq=seq, edge=edge, share=share,
+                           seq_entries=int(seq_entries), start=None)
+
+    def start_after(self, node) -> None:
+        """Cluster mode: each ring's first push follows `node` (the window's start)."""
+        p = self.pusher
+        p["start"] = node
+        for runs in self._runs:
+            if runs:
+                p["edge"](node, runs[0][0])
 
     def _continues(self, ring: int, k: int, src: int, kind: int, offset: int) -> bool:
         """Whether chunk k of `ring` joins its predecessor's run. The prefetcher applies the
@@ -231,6 +277,12 @@ class WeightRings:
 
     def take_ex(self, ring: int, src: int, nbytes: int, *, kind: int = 0, offset: int = 0):
         """take(), then (bit 1: the chunk ends in a trailer) and the bytes pushed."""
+        if self.pusher is not None:
+            raise ValueError("WeightRings: in cluster mode a chunk is taken by load_chunk(), which makes its push")
+        return self._take_ex(ring, src, nbytes, kind=kind, offset=offset)[:6]
+
+    def _take_ex(self, ring: int, src: int, nbytes: int, *, kind: int = 0, offset: int = 0):
+        """take_ex(), then the ring, whether the chunk starts a run, and its first byte in the ring."""
         # trailer mode: the chunk's own last beat says it has landed; its schedule entry is
         # marked (kind bit 1) so the prefetcher pushes no flag for it. A dense chunk
         # (plain_trailer) ends in one its caller appended.
@@ -243,11 +295,12 @@ class WeightRings:
             ring += self.n_clusters          # the cluster's routed ring
         k = len(self.entries[ring])
         src, kind, offset, nbytes = int(src), int(kind), int(offset), int(nbytes)
-        if self._continues(ring, k, src, kind, offset):
-            run = self._run[ring]
-        else:
-            run = self._run[ring] = [k % self.n_slots, 0, 0]
-        place = (ring * self.n_slots + run[0]) * self.slot_bytes + run[2]
+        new = not self._continues(ring, k, src, kind, offset)
+        if new:
+            self._run[ring] = [k % self.n_slots, 0, 0]
+        run = self._run[ring]
+        rel = run[0] * self.slot_bytes + run[2]
+        place = ring * self.n_slots * self.slot_bytes + rel
         run[1] += 1
         run[2] += nbytes
         idx = ring * self.n_slots + k % self.n_slots
@@ -256,29 +309,83 @@ class WeightRings:
         flag = at_offset(self.slots, place + nbytes - 64) if trailer else \
             at_offset(self.flags, idx * 64)
         return (at_offset(self.slots, place), flag, at_offset(self.releases, idx * 64), k + 1,
-                2 if trailer else 0, nbytes)
+                2 if trailer else 0, nbytes, ring, new, rel)
 
     def load_chunk(self, node, cluster: int, name: str, *, src: int, nbytes: int, slab, war,
                    deps=(), kind: int = 0, offset: int = 0, dm: int, trailer: bool = False):
         """The ring load of one chunk into an L1 slab: take_ex(), then an idma_ring_load that
-        waits for the prefetcher's push and copies the chunk from L3 into `slab` on core `dm`.
+        waits for the chunk's push and copies the chunk from L3 into `slab` on core `dm`.
         It follows `war` (the slab's last readers, LoadStream.take), then the ring's newest
         load on `cluster` (so the loads run in the ring's order), then `deps`; the load becomes
         the ring's newest and is tagged for the Execution-IR export. `node(name, core, kernel,
-        args, deps)` creates a node.
+        args, deps)` creates a node. In cluster mode a chunk that starts a run makes the run's
+        push, `<name>_push`, on core `dm` too (push_from), and the load follows it.
 
         The load honours the chunk's trailer only with `trailer`. Returns (the load, the chunk's
         place in the ring: the address the load reads)."""
-        sl, fl, rl, seq, how, _ = self.take_ex(cluster, src=src, nbytes=nbytes, kind=kind,
-                                               offset=offset)
+        if self.pusher is not None and kind & 1:
+            raise ValueError(f"WeightRings: {name} is a routed chunk; cluster mode pushes dense chunks only")
+        sl, fl, rl, seq, how, _, ring, new, rel = self._take_ex(cluster, src=src, nbytes=nbytes,
+                                                                 kind=kind, offset=offset)
         prev = [self.last[cluster]] if self.last.get(cluster) is not None else []
         after = list(dict.fromkeys(list(war) + prev + list(deps)))
+        if self.pusher is not None:
+            after.append(self._push(node, dm, name, ring, new, rel, int(src) + int(offset), nbytes, sl, fl,
+                                    seq - 1))
+            rl = 0                      # the next push of these bytes follows this load instead
         ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
                   SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl,
                                                   trailer=trailer and bool(how & 2)), after)
         self.last[cluster] = ld
         ld.exec_chunk = self.last_take
+        if self.pusher is not None:
+            self._held[ring].append((rel, rel + nbytes, seq - 1, ld))
+            runs = self._runs[ring]
+            if new:
+                runs[-1][1] = ld
+            # the scheduler's arrival model: the ring's pushes stream from its first one
+            ld.ring_start = runs[0][0]
         return ld, sl
+
+    def _push(self, node, dm, name, ring, new, lo, src, nbytes, slot, flag, k):
+        """Cluster mode: the push of chunk k's run, made when the chunk starts it, else grown by
+        the chunk. Its edges: push_from()."""
+        p, runs = self.pusher, self._runs[ring]
+        if new:
+            if k + 1 >= p["seq_entries"]:
+                raise ValueError(f"WeightRings: chunk {k} of ring {ring}; the sequence table has "
+                                 f"{p['seq_entries']} entries")
+            deps = [runs[-1][0]] if runs else ([p["start"]] if p["start"] is not None else [])
+            if len(runs) >= p["share"]:
+                deps.append(runs[-p["share"]][1])
+            deps.append(self._reader(ring, len(runs), lo, lo + nbytes))
+            push = node(f"{name}_push", dm, SnaxBingoKernelRingPushArgs.KERNEL_NAME,
+                        SnaxBingoKernelRingPushArgs(src, slot, nbytes, at_offset(p["seq"], 64 * (k + 1)), flag,
+                                                    1, p["memchip"], p["engine"]),
+                        list(dict.fromkeys(d for d in deps if d is not None)))
+            runs.append([push, None, k])
+            return push
+        push = runs[-1][0]
+        push.kernel_args.size += nbytes
+        push.kernel_args.chunks += 1
+        r = self._reader(ring, len(runs) - 1, lo, lo + nbytes)
+        if r is not None:
+            p["edge"](r, push)
+        return push
+
+    def _reader(self, ring, m, lo, hi):
+        """Cluster mode: the newest load of a chunk with bytes in [lo, hi) of `ring`, which run m
+        writes, or None. Its push follows it, and so every older load of the ring: the loads run
+        in the ring's order, each after the one before. None too where that load comes before
+        run m - share: the queue-share edge orders it already."""
+        runs, share = self._runs[ring], self.pusher["share"]
+        floor = runs[m - share][2] if m >= share else 0
+        for a, b, k, ld in reversed(self._held[ring]):
+            if k < floor:
+                return None
+            if a < hi and lo < b:
+                return ld
+        return None
 
     def schedule(self) -> list:
         """uint64 words: chunks per ring (4), first entry per ring (4), then 4 per entry."""
