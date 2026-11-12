@@ -46,8 +46,8 @@ def desc_rows(txt):
     rows = [(c, n, t, cl, co) for n, t, c, cl, co in _DESC_IMAGE.findall(txt)]
     return rows or _DESC_STORES.findall(txt)
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelChipBarrierArgs, HostBingoKernelStampReportArgs,
-    HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs,
+    HostBingoKernelChipBarrierArgs, HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs,
+    HostBingoKernelStampReportArgs, HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
     SnaxBingoKernelXdmaMemsetArgs, XDMA_EWJCT_FMT_FP16, XDMA_EWJCT_OP_ADD, xdma_ewjct_csr0)
@@ -78,6 +78,19 @@ class ClusterNodes:
 
     def node(self, name, core, kernel, args, after=()):
         return self.fb.node(self.chiplet, self.cluster, core, name, kernel, args, after)
+
+
+class _NoPrefetcher(dict):
+    """ChipletBuild.prefetch with weight_ring.mode cluster: there is no prefetcher task, each cluster posts its own
+    ring's runs (WeightRings push_from); a workload that orders its tasks around one fails here, by name."""
+
+    def __init__(self, tag):
+        super().__init__()
+        self.tag = tag
+
+    def __missing__(self, k):
+        raise KeyError(f"[{self.tag}] chip {k:#04x} has no weight prefetcher: params weight_ring.mode is 'cluster', "
+                       f"where each cluster posts its own ring's runs")
 
 
 class AliasStaging:
@@ -413,10 +426,15 @@ class ChipletBuild(FabricBase):
 
     def make_rings(self, rec_l3=None, rec_slots=1):
         """Per chip: its clusters' weight rings in its L3, filled by its memory chip's push
-        engine under its host's prefetcher (host_kernel_lib.h weight_prefetch); rec_l3 the L3
-        record each chip's prefetcher waits for (the routed runs)."""
+        engine under its host's prefetcher (host_kernel_lib.h weight_prefetch), or with
+        weight_ring.mode "cluster" posted run by run by each cluster's DM core (WeightRings
+        push_from: no prefetcher task); rec_l3 the L3 record each chip's prefetcher waits for
+        (the routed runs)."""
         p, st, T = self.p, self.st, self.TAG
         wr = p.get("weight_ring", {})
+        self.ring_mode = wr.get("mode", "prefetcher")
+        if self.ring_mode not in ("prefetcher", "cluster"):
+            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
         self.n_slots = n_slots = int(wr.get("slots", 16))
         self.ring_batch = int(wr.get("batch", 4))
         # weight_ring.trailer: a chunk's own last 64 B (a record the workload appends to every chunk,
@@ -444,7 +462,8 @@ class ChipletBuild(FabricBase):
         # one symbol for every chip's slots (zero at boot, so a trailer poll never reads X)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", NR * n_slots * self.slot_bytes,
                                      preload=True)
-        self.rings, self.prefetch = {}, {}
+        self.rings = {}
+        self.prefetch = {} if self.ring_mode == "prefetcher" else _NoPrefetcher(T)
         for k in self.chips:
             rings = self.rings[k] = WeightRings(
                 slots=self.h_wslots, flags=self.h_flags, releases=self.h_rel, n_rings=NR,
@@ -456,6 +475,10 @@ class ChipletBuild(FabricBase):
                 rings.plain_trailer = True
             for cl in cl_k:
                 self.ls[cl].rings = rings
+            if self.ring_mode == "cluster":
+                rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
+                                edge=self.edge)
+                continue
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
@@ -500,7 +523,10 @@ class ChipletBuild(FabricBase):
             start = self.stamp("start", list(armed.values()))
             go = self.barrier({k: [start] if k == self.ROOT else [armed[k]] for k in self.chips})
         for k in self.chips:
-            self.edge(go[k], self.prefetch[k])
+            if getattr(self, "ring_mode", "prefetcher") == "cluster":
+                self.rings[k].start_after(go[k])
+            else:
+                self.edge(go[k], self.prefetch[k])
         self.go = go
         return go
 
@@ -674,8 +700,23 @@ class ChipletBuild(FabricBase):
         """More lines for the end of the data header."""
         return []
 
+    def check_engine_queues(self):
+        """weight_ring.mode cluster: no host task posts into a push engine queue the clusters post
+        their runs into. The queue stages one entry for all its writers, and a host writes it word
+        by word, so a cluster's burst could land between them."""
+        if getattr(self, "ring_mode", "prefetcher") != "cluster":
+            return
+        ring_engines = {(self.mem[k], self.engine[k]) for k in self.rings}
+        for n in self.dfg.nodes:
+            a = n.kernel_args
+            if isinstance(a, (HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs)) and \
+                    (a.memchip_id, a.engine) in ring_engines:
+                raise ValueError(f"[{self.TAG}] {n.node_name}: a host post into memory chip {a.memchip_id:#04x} "
+                                 f"engine {a.engine}'s queue, which weight_ring.mode cluster's rings post into")
+
     def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
         dfg, p, st, args, T = self.dfg, self.p, self.st, self.args, self.TAG
+        self.check_engine_queues()
         self._stage_ring_schedules()
         self.report_ring_races()
         if args.data_h:
