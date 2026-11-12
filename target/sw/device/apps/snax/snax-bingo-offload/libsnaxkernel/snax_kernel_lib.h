@@ -90,6 +90,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_2d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_copy_slot),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_ring_load),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_ring_push),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_route),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_router_pack),
     // The MoE prefill (offload_hw_kernels/moe_prefill.h).
