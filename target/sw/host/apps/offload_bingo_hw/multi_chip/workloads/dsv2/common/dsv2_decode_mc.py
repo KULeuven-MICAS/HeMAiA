@@ -1121,7 +1121,6 @@ class LayerBuild(cm.ChipletBuild):
                 raise ValueError(f"FFN: {len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))
             print(f"[{self.TAG}] FFN buffer hazards: none")
         self.stream_report()
-        self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
         self.l1_report()
 

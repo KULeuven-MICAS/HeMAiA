@@ -393,10 +393,6 @@ class Stage123(cm.ChipletBuild):
             self.ex_push[cl].append(self.node(k, c, self.roles["dm"], f"a8_push_m{m}",
                                              "__snax_bingo_kernel_idma_1d_copy", cp, [q]))
 
-    def finish(self, app_name, x_prefixes=("x_pre_",)):
-        self.dfg.split_chip_functions = True     # one host function a chip
-        super().finish(app_name, x_prefixes)
-
 
 def _app_name(S):
     return (f"{S.p['model']} FFN prefill, stage 123, {S.T} tokens in {S.T // S.ROWS} x {S.ROWS}, "

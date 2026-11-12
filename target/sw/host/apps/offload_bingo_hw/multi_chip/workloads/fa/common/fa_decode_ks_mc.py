@@ -1116,7 +1116,6 @@ class FaDecodeKs(FaBuild):
     # ---- emission ----------------------------------------------------------------------------------------------------
     def finish(self, app_name, x_prefixes=("x_wait_",)):
         self._check_collectives()
-        self.dfg.split_chip_functions = bool(self.p.get("per_chip_image", False))
         cm.ChipletBuild.finish(self, app_name, x_prefixes)
         self.l1_report()
 

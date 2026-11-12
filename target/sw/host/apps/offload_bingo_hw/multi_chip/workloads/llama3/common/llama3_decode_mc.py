@@ -934,7 +934,6 @@ class DBuild(ABuild):
 
     # ---- emission -------------------------------------------------------------------------------------------------------
     def finish(self, app_name, x_prefixes=("x_wait_",)):
-        self.dfg.split_chip_functions = True
         cm.ChipletBuild.finish(self, app_name, x_prefixes)
 
 

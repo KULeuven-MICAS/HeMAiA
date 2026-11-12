@@ -422,7 +422,6 @@ class Stage45(cm.ChipletBuild):
 
     def finish(self, app_name, x_prefixes=("a8_pre_",)):
         self.check_hazards()
-        self.dfg.split_chip_functions = True     # one host function a chip
         super().finish(app_name, x_prefixes)
 
 

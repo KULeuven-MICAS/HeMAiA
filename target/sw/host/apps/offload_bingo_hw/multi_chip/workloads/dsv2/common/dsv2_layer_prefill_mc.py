@@ -902,7 +902,6 @@ class LayerBuild(cm.ChipletBuild):
             if bad:
                 raise ValueError(f"{len(bad)} FFN buffer hazards, e.g. " + "; ".join(bad[:4]))
             print(f"[{self.TAG}] FFN buffer hazards: none")
-        self.dfg.split_chip_functions = True
         if self.l3_arena:
             self._place_l3_arena()
             self._check_l3_arena()

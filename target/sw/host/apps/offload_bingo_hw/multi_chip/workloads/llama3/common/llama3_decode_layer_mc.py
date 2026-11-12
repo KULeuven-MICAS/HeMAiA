@@ -728,7 +728,6 @@ class LayerBuild(cm.ChipletBuild):
         self._check_collectives()
         self._stream_report()
         self._args_report()
-        self.dfg.split_chip_functions = True
         if self.ring_alias:
             self.st.finish()
         super().finish(app_name, x_prefixes)

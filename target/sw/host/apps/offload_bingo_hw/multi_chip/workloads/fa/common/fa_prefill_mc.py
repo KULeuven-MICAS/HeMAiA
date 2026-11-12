@@ -1940,7 +1940,6 @@ class FaBuild(cm.ChipletBuild):
         if self.fresh and not self.x_device:
             # alone, a fresh prompt's W_KVA loads run behind the cluster's tile loads (fresh_tiles): its first part of x
             x_prefixes = tuple(x_prefixes) + ("kx_ld_",)
-        self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 
 

@@ -1557,7 +1557,6 @@ class ABuild(cm.ChipletBuild):
                 raise ValueError(f"sync barrier: {len(cross)} dependency edges cross chips inside the window, e.g. "
                                  + "; ".join(f"{u.node_name} -> {v.node_name}" for u, v in cross[:4]))
             print(f"[{self.TAG}] sync barrier: {self.n_barrier} barriers a chip, no edge crosses chips inside the window")
-        self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 
 

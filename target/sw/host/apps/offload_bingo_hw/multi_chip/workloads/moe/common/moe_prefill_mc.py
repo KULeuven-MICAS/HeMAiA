@@ -2277,7 +2277,6 @@ class MBuild(cm.ChipletBuild):
                   f"chips inside the window")
         if self.args_phases:
             self._assign_phases()
-        self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 
 

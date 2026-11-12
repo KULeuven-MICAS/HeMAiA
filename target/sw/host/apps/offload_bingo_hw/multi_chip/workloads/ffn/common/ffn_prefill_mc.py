@@ -1264,8 +1264,6 @@ class PBuild(cm.ChipletBuild):
         if bad:
             raise ValueError(f"{len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))
         print(f"[{self.TAG}] buffer hazards: none (A16, A16a, A8, X, output and fold slots; every cluster)")
-        # one host function per chip: a single one of every chip's block compiles too slowly
-        self.dfg.split_chip_functions = True
         super().finish(app_name, x_prefixes)
 
 

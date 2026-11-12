@@ -1341,7 +1341,6 @@ class LayerBuild(cm.ChipletBuild):
             + f"; LayerStaging zeroed {self.st.zeroed}, dropped {self.st.dropped}")
         if self.x_slots or self.alias_l3:
             self._check_rings()
-        self.dfg.split_chip_functions = True
         self.st.finish()
         # the compiler's dep-tag relays come after the args phases: a relay takes no phase, so its args stay resident, as
         # the compiler's exit tasks' do, and no phase load can take their region
