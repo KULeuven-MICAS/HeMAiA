@@ -19,7 +19,7 @@ caller puts util/sim/multichip and mini_compiler on sys.path before importing it
 THE SWITCHES (params): bcast (bcast_l1 | pull), reduce (chain | root), sync (edge | barrier) and
 barrier_mode (bcast: one 0xFF broadcast store of the chip's checkpoint, then a local poll | sw: the
 point-to-point software barrier through the top-left chip); the ablations turn the first three on and
-off (ffn/common/ffn_prefill_mc.py, THE ABLATION, its own reduce root and barrier placement).
+off (ffn/common/ffn_prefill_mc/README.md: its own reduce root and barrier placement).
 """
 
 import os
@@ -57,6 +57,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_platform import core_roles, writer_junction_index  # noqa: E402
 from libs import Ctx, MemLevel, Pipeline  # noqa: E402
 from libs.blocks import LoadStream, WeightRings  # noqa: E402
+from libs.blocks.collective import broadcast_put, chain_gather, mark_broadcast  # noqa: E402
 from libs.verify import checks as vchecks  # noqa: E402
 
 # the shared mesh, address and fold helpers, re-exported for the workloads that import them from here
@@ -539,11 +540,9 @@ class ChipletBuild(FabricBase):
         if self.bcast_impl == "bcast_l1":
             puts = []
             for c in cls:
-                put = self.node(R, 0, dm, f"{name}_bput_c{c}", "__snax_bingo_kernel_idma_put_flagged",
-                                SnaxBingoKernelIdmaPutFlaggedArgs(
-                                    src, self.xch_view(R, c, off), nbytes, self.xch_view(R, c, off_flag),
-                                    value=value, bcast=True, also_here=True),
-                                [after[R]] + puts[-1:])
+                put = self.broadcast_put(R, 0, f"{name}_bput_c{c}", SnaxBingoKernelIdmaPutFlaggedArgs(
+                    src, self.xch_view(R, c, off), nbytes, self.xch_view(R, c, off_flag), value=value, bcast=True,
+                    also_here=True), [after[R]] + puts[-1:])
                 puts.append(put)
                 self.bcast_puts = list(puts)
                 for k in self.chips:
@@ -646,6 +645,10 @@ class ChipletBuild(FabricBase):
             tiles.update({(c, t): post for t in ts})
         self.hbm_casts.append(HbmCast(made, tiles=tiles, end_fn=land, unicast=ucast, key=key))
         self.hbm_casts[-1].tag = self.TAG
+        if not ucast:
+            # a broadcast from its first post to its landing (a wait made when asked for): the compiler orders it
+            # against the other collectives (libs/blocks/collective.py)
+            mark_broadcast(self.dfg, made[0], self.hbm_casts[-1], queue=key, tasks=made)
         self.queue_poster(key, f"{self.TAG} casts", budget, lambda key=key, tag=self.TAG: self._casts_span(key, tag))
         # the rings that post into this engine's queue too start after this cast's last post, so the engine runs the
         # cast first (a ring post made before it is already ahead in the queue)
@@ -700,6 +703,16 @@ class ChipletBuild(FabricBase):
             after = [] if after is None else [after]
         return super().node(k, c, core, name, kernel, kargs, [self.done_of(a) for a in after])
 
+    def broadcast_put(self, k, c, name, args, after=()):
+        """A multicast iDMA put from chip k cluster c's L1 into every chip, on its DM core (collective.broadcast_put):
+        the compiler orders it against the other broadcasts."""
+        return broadcast_put(lambda n, kern, a, d: self.node(k, c, self.roles["dm"], n, kern, a, d), name, args, after)
+
+    def chain_gather(self, k, c, name, args, after=()):
+        """A ChainGather collected on chip k cluster c, on its xDMA core (collective.chain_gather): the compiler orders
+        it against the other gathers into the same bytes."""
+        return chain_gather(lambda n, kern, a, d: self.node(k, c, self.roles["xdma"], n, kern, a, d), name, args, after)
+
     @staticmethod
     def first_of(p):
         """The task an HBM cast `p` (an HbmCast, or a task that stands for one: a layer's put) starts with."""
@@ -718,10 +731,10 @@ class ChipletBuild(FabricBase):
     def collectives(self):
         """Every multicast and reduce chain of the graph as (the task it starts with, the task after which it is done,
         kind): kind "cast" a multicast of hbm_cast, from its first post to its landing on the posting chip (its end);
-        "put" a multicast iDMA put, "chain" a ChainGather (one task
-        each); hbm_cast's casts first, in the order made, then the others in node order. Concurrent multicast
-        sources, or a multicast beside a chain, deadlock the fabric: the drivers' checks order them. Call it before a
-        check copies the graph: a cast's end may be a wait made when asked for."""
+        "put" a multicast iDMA put, "chain" a ChainGather (one task each); hbm_cast's casts first, in the order made,
+        then the others in node order. The compiler orders them among themselves (libs/blocks/collective.py,
+        passes/bingo_dfg_collectives.py); a driver's own checks (HBM writes after them, push streams against chains)
+        read them here. Call it before a check copies the graph: a cast's end may be a wait made when asked for."""
         spans = [(c.first, c.end, "cast") for c in self.hbm_casts if not c.unicast]
         cast_tasks = {t for c in self.hbm_casts for t in c.posts}
         for t in self.dfg.node_list:
@@ -771,8 +784,7 @@ class ChipletBuild(FabricBase):
             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
                 remote, R, 0, others, src=self.xch_addr(0, self.OFF_LOC), dst=self.dst_expr(), size=xb,
                 junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[self.dst_buf])
-            gth = self.node(R, 0, xdma, "y_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
-                            list(dict.fromkeys(loc[k] for k in self.chips)))
+            gth = self.chain_gather(R, 0, "y_chain", ga, list(dict.fromkeys(loc[k] for k in self.chips)))
             self.reduce_end = [gth]
             return
         pulls, adds = [], []
