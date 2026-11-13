@@ -18,9 +18,9 @@ bound the end sooner (a long put does not take the DM core from the ring load th
 lookahead and without, are laid out, and the shorter kept: the lookahead's local bound can be wrong. Every
 core runs in order and every task starts after its dependencies, its ordering-only edges (bingo_add_order_edge) and the
 edge latency: the one timeline all cores share is a topological order of the graph, so the programs it yields close no
-cycle. A weight-ring load also waits for its chunk, which its chip's prefetcher pushes from the time it starts, and a
+cycle. A weight-ring load also waits for its chunk, which the memory chip pushes from its ring's first post on, and a
 cluster's ring loads keep the order they were made in (the ring's: a load ahead of an earlier one can block its DM core
-on a chunk the prefetcher pushes only once that earlier one has freed its slot).
+on a chunk pushed only once that earlier one has freed its slot).
 
 L1. With a static L1 plan (static_l1), the programs must leave the packer (bingo_l1_packer.py) room: two buffers share
 space only when every user of one precedes every user of the other along the edges and the programs, and a schedule
@@ -75,7 +75,7 @@ import heapq
 import networkx as nx
 
 import bingo_cost_model as cm
-from bingo_kernel_args import (KEEPS, HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelSimdFaSoftmaxArgs,
+from bingo_kernel_args import (KEEPS, SnaxBingoKernelSimdFaSoftmaxArgs,
                                SnaxBingoKernelXdmaChainWaitArgs)
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_node import BingoNode
@@ -143,39 +143,16 @@ class _Model:
                     self._edge(self._out(ld), c, 0)
             if w is not None:
                 self._edge(s, w, 0)
-        # a ring load waits for its chunk, which the memory chip pushes once the chip's prefetcher runs (the part whose
-        # chunk range holds it, when the prefetcher runs in parts), or once the ring's cluster posts its run
-        self.prefetcher, self.pf_of, self.arrival = {}, {}, {}
-        for n in sorted(dfg.node_list, key=lambda t: t.node_id):
-            if isinstance(n.kernel_args, HostBingoKernelWeightPrefetchArgs) or (n.kernel_name or "").startswith(
-                    cm.WEIGHT_PREFETCH):
-                self.prefetcher.setdefault(n.assigned_chiplet_id, []).append(n)
-
-        def flags(a):
-            """The rings' flag words a prefetcher fills or a ring load polls: which rings they are."""
-            f = getattr(a, "flag_addr", None) if a is not None else None
-            return getattr(getattr(f, "base", f), "symbol_name", None) or getattr(f, "name", None)
-
-        def pushes(p, v):
-            a = p.kernel_args
-            if flags(a) is not None and flags(a) != flags(v.kernel_args):
-                return False                    # another set of rings (another block's prefetcher)
-            chunk = getattr(v, "exec_chunk", None)
-            lo, hi = getattr(a, "chunk_lo", 0), getattr(a, "chunk_hi", 0)
-            return chunk is None or (lo <= chunk[1] and (not hi or chunk[1] < hi))
+        # a ring load waits for its chunk, which the memory chip pushes once the ring's cluster posts its run (the
+        # load follows that post by an edge), streaming the ring's runs from its first post on
+        self.ring_start, self.arrival = {}, {}
         loads = {}
         for v in self.vertices:
             if not (isinstance(v, BingoNode) and v.kernel_name == cm.RING_LOAD):
                 continue
-            if getattr(v, "ring_start", None) is not None:
-                # a ring whose cluster posts its own runs (WeightRings cluster mode): the load follows its run's push
-                # by an edge, and the engine streams the ring's runs from the first push on
-                self.pf_of[v] = [v.ring_start]
-            elif v.assigned_chiplet_id in self.prefetcher:
-                pfs = self.prefetcher[v.assigned_chiplet_id]
-                self.pf_of[v] = [p for p in pfs if pushes(p, v)] or pfs[:1]
-            else:
+            if getattr(v, "ring_start", None) is None:
                 continue
+            self.ring_start[v] = v.ring_start
             loads.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id), []).append(v)
         rings = {}
         for (k, _c) in loads:
@@ -185,12 +162,11 @@ class _Model:
             for i, v in enumerate(ls):
                 sent += int(getattr(v.kernel_args, "size", 0))
                 self.arrival[v] = cm.PUSH_LATENCY + sent * rings[k] // cm.PUSH_BYTES_PER_CYCLE
-                for p in self.pf_of[v]:
-                    self._edge(p, v, 0)
+                self._edge(self.ring_start[v], v, 0)
                 if i:
                     # a cluster's ring loads in the ring's order: a load blocks its DM core until its chunk lands, and
-                    # the prefetcher pushes a chunk only once the load of the chunk a ring's length before it has
-                    # freed the slot, so a load ahead of an earlier one can wait for good
+                    # a chunk is pushed only once the load of the chunk a ring's length before it has freed the slot,
+                    # so a load ahead of an earlier one can wait for good
                     self._edge(ls[i - 1], v, 0)
         if keep_order:
             # every device core's tasks in the order they were made: each task starts after the start of the one
@@ -422,7 +398,7 @@ class _Timeline:
             t = end + lat
             if m.role[s] == "wait" and m.role[v] == "start":
                 t = max(t, self.done[v])
-            if s in m.arrival and v in m.pf_of.get(s, ()):
+            if s in m.arrival and m.ring_start.get(s) is v:
                 t = self.start[v] + m.arrival[s]
             if t > self.dr[s]:
                 self.dr[s] = t

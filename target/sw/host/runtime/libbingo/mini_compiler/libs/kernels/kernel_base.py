@@ -29,7 +29,7 @@ class Access:
                                    the columns of a row-major block, which another task's columns sit between); with
                                    `dims`, a nest of runs: ((count, stride), ...) from the outermost dimension in
         SYNC                       memory a runtime protocol orders, not the graph: a flag polled or set, a stamp, a
-                                   weight ring the prefetcher fills behind its flags
+                                   weight ring its posts fill behind its flags
         HOLD                       a buffer the task keeps live without touching it
 
     A field that holds a list (or tuple) applies to every address in it."""

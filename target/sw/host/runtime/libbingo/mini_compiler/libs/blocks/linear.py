@@ -87,7 +87,7 @@ from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                     PortSpec)
 from ..comm.ports import at_offset
 from ..comm.variant import free_fields
-from .load_stream import DEFAULT_W_CHUNK_BYTES, LoadStream, WeightRings
+from .load_stream import DEFAULT_W_CHUNK_BYTES, LoadStream
 
 
 # The layouts the GEMV reads are the (16, 4, 16) shape's, whatever shape it computes in.
@@ -585,8 +585,11 @@ class Linear(Block):
         if c.stream_after_x and ld_x is not None:
             c.stream.hold_until(ld_x)
         rings = c.stream.rings
-        if rings is not None and c.w_slot is None and not isinstance(src_port.handle,
-                                                                      BingoMemFixedAddr):
+        if rings is not None and c.w_slot is not None:
+            raise ValueError(f"Linear {self.name}: w_slot through a weight ring; a weight chosen at run "
+                             "time has no address its ring's post could name: stream it without rings "
+                             "(idma_copy_slot)")
+        if rings is not None and not isinstance(src_port.handle, BingoMemFixedAddr):
             rings = None        # not a fixed HBM / memchip address: a plain iDMA copy
         loads, tasks = [], []
         for i, (c0, n) in enumerate(chunks):
@@ -594,18 +597,11 @@ class Linear(Block):
             si, slab, war = c.stream.take(nbytes)
             nm = f"Ld_{self.name}_w{i}" if len(chunks) > 1 else f"Ld_{self.name}_w"
             if rings is not None:
-                # The prefetcher pushes the chunk into this cluster's ring; the load waits
-                # for its flag and copies it from L3. A routed chunk's source is named by
-                # its record slot and field; the prefetcher reads the address at run time.
-                if c.w_slot is None:
-                    ring_src = dict(src=src_port.handle.address + off)
-                else:
-                    slot, fld = c.w_slot
-                    ring_src = dict(src=(slot << 8) | WeightRings.FIELDS[fld], kind=1,
-                                    offset=c.w_slot_off + off)
+                # The memory chip pushes the chunk into this cluster's ring, the run posted
+                # by this cluster's DM core; the load waits for its flag and copies it from L3.
                 ld, _ = rings.load_chunk(
                     g.node, c.cluster, nm, nbytes=nbytes, slab=slab, war=war, dm=ctx.dm,
-                    **ring_src)
+                    src=src_port.handle.address + off)
             elif c.w_slot is None:
                 args = SnaxBingoKernelIdma1dCopyArgs(at_offset(src_port.handle, off), slab,
                                                      nbytes)

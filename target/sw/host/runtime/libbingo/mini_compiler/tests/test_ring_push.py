@@ -5,8 +5,8 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# Tests for the weight rings' cluster mode (libs/blocks/load_stream.py WeightRings.push_from): every run a
-# ring push on its cluster's DM core, and the edges that are the whole protocol -- the loads that last read
+# Tests for the weight rings (libs/blocks/load_stream.py WeightRings.push_from): every run a post on its
+# cluster's DM core, and the edges that are the whole protocol -- the loads that last read
 # the bytes a run overwrites before its push, the pushes of a ring in its order, the queue share, and each
 # load after its run's push.
 #
@@ -67,7 +67,7 @@ def build(n_slots=4, slot_bytes=8192, batch=2, depth=8, chunks=12, sizes=(8192, 
     Returns (dfg, rings, {cluster: [(load, ring byte lo, ring byte hi)]}, start)."""
     d = new_dfg()
     rings = WeightRings(slots=BingoMemSymbol("ring_slots"), flags=BingoMemSymbol("ring_flags"),
-                        releases=BingoMemSymbol("ring_rel"), n_rings=2, n_slots=n_slots, slot_bytes=slot_bytes,
+                        n_rings=2, n_slots=n_slots, slot_bytes=slot_bytes,
                         batch=batch)
     rings.push_from(memchip=0x20, engine=2, seq=BingoMemFixedAddr(SEQ, mem_level="HBM"), edge=d.bingo_add_edge,
                     depth=depth)
@@ -174,7 +174,7 @@ def shared_ring(defer):
     """One ring both clusters read: a post each run (post_chunk), each chunk read by both clusters, the releasing one
     last; that last read made `defer` chunks later. Returns (dfg, [(chunk, lo, hi, its post, its last read)], posts)."""
     d2 = new_dfg()
-    r2s = WeightRings(slots=BingoMemSymbol("s2"), flags=BingoMemSymbol("f2"), releases=BingoMemSymbol("r2"), n_rings=1,
+    r2s = WeightRings(slots=BingoMemSymbol("s2"), flags=BingoMemSymbol("f2"), n_rings=1,
                       n_slots=4, slot_bytes=8192, batch=2)
     r2s.push_from(memchip=0x20, engine=1, seq=BingoMemFixedAddr(SEQ, mem_level="HBM"), edge=d2.bingo_add_edge, depth=8)
     st2 = task(d2, DM, "start", "__snax_bingo_kernel_stamp", None)
@@ -184,7 +184,7 @@ def shared_ring(defer):
 
     def finish(jj, tt, pp, ff, rr):
         last = task(d2, DM, f"ld{jj}_c{rr}", LOAD, None, [pp, ff], cluster=rr)
-        r2s.read_chunk(0, tt[3] - 1, last, last=True)
+        r2s.read_chunk(0, tt[2] - 1, last, last=True)
         chunks2[jj] = chunks2[jj] + (last,)
     for j in range(14):
         nb = sizes2[j % len(sizes2)]
@@ -195,7 +195,7 @@ def shared_ring(defer):
         src2 += nb
         rel = (j // 3) % 2                      # the cluster that reads the chunk last
         first = task(d2, DM, f"ld{j}_c{1 - rel}", LOAD, None, [post], cluster=1 - rel)
-        r2s.read_chunk(0, tup[3] - 1, first, last=False)
+        r2s.read_chunk(0, tup[2] - 1, first, last=False)
         late.append((j, tup, post, first, rel))
         chunks2.append((j, tup[0].offset, tup[0].offset + nb, post))
         for x in [x for x in late if x[0] <= j - defer]:
@@ -228,13 +228,13 @@ for defer, what in ((0, "each last read made right away"), (6, "the last reads m
         many = [q for q in posts2 if sum(1 for j, lo, hi, p, l in chunks2 if overwriter[j] is q) > 1]
         check("some post overwrites two chunks read last by different clusters (every last reader is needed)",
               any(len({l.assigned_cluster_id for j, lo, hi, p, l in chunks2 if overwriter[j] is q}) > 1 for q in many))
-check("post_chunk outside cluster mode", *raises(lambda: WeightRings(
-    slots=BingoMemSymbol("s3"), flags=BingoMemSymbol("f3"), releases=BingoMemSymbol("r3"), n_rings=1, n_slots=4,
-    slot_bytes=8192).post_chunk(None, 0, "x", src=0, nbytes=4096, dm=DM), "cluster mode only"))
+check("post_chunk before the push engine is set", *raises(lambda: WeightRings(
+    slots=BingoMemSymbol("s3"), flags=BingoMemSymbol("f3"), n_rings=1, n_slots=4,
+    slot_bytes=8192).post_chunk(None, 0, "x", src=0, nbytes=4096, dm=DM), "push_from"))
 
 print("\nanother poster between a ring's runs: boundary, post_after, tail_before, runs_of")
 d4 = new_dfg()
-r4 = WeightRings(slots=BingoMemSymbol("s4"), flags=BingoMemSymbol("f4"), releases=BingoMemSymbol("r4"), n_rings=1,
+r4 = WeightRings(slots=BingoMemSymbol("s4"), flags=BingoMemSymbol("f4"), n_rings=1,
                  n_slots=8, slot_bytes=8192, batch=4)
 r4.push_from(memchip=0x20, engine=0, seq=BingoMemFixedAddr(SEQ, mem_level="HBM"), edge=d4.bingo_add_edge, depth=8)
 r4.start_after(task(d4, DM, "start", "__snax_bingo_kernel_stamp", None))
@@ -268,16 +268,10 @@ check("runs_of: the runs' posts in ring order, each with its chunks' loads",
 check("the graph with the boundaries has no cycle", nx.is_directed_acyclic_graph(d4))
 check("a boundary at a chunk taken already", *raises(lambda: r4.boundary(0, 3), "not taken yet"))
 
-print("\nwhat cluster mode refuses")
-_, r2, _, _ = build(chunks=2)
-check("a chunk taken outside load_chunk (it would have no push)",
-      *raises(lambda: r2.take_ex(0, 0x1000, 4096), "load_chunk"))
-check("a routed chunk", *raises(lambda: r2.load_chunk(lambda *a: None, 0, "r", src=0, nbytes=4096, slab=0, war=[],
-                                                     kind=1, dm=DM), "routed"))
-r3 = WeightRings(slots=BingoMemSymbol("s"), flags=BingoMemSymbol("f"), releases=BingoMemSymbol("r"), n_rings=2,
-                 n_slots=4, slot_bytes=8192)
-r3.plain_trailer = True
-check("trailer chunks", *raises(lambda: r3.push_from(memchip=0x20, engine=0, seq=0, edge=None), "trailer"))
+print("\nwhat the rings refuse")
+r3 = WeightRings(slots=BingoMemSymbol("s"), flags=BingoMemSymbol("f"), n_rings=2, n_slots=4, slot_bytes=8192)
+check("a load before the push engine is set",
+      *raises(lambda: r3.load_chunk(lambda *a: None, 0, "r", src=0, nbytes=4096, slab=0, war=[], dm=DM), "push_from"))
 
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {FAILED}")

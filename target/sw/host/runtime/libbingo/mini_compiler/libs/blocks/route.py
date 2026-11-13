@@ -25,12 +25,11 @@ THE TABLE. n entries of 64 bytes in L3 (or any memory the iDMA reaches), entry e
 An expert whose weights were never staged has an all-zero entry: the route refuses it.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
-from bingo_kernel_args import (SnaxBingoKernelIdmaCopySlotArgs, SnaxBingoKernelIdmaRingLoadArgs,
-                               SnaxBingoKernelMoeRouteArgs)
+from bingo_kernel_args import SnaxBingoKernelIdmaCopySlotArgs, SnaxBingoKernelMoeRouteArgs
 
 from ..comm import Block, BlockResult, Ctx, DType, Layout, MemLevel, Port, PortSpec
 from .linear import REC_SLOT_BYTES, record_spec
@@ -161,11 +160,6 @@ class SlotLoadCfg:
     cols: int                  # fp16 values
     cluster: int = 0
     rec_slots: int = 6
-    # The cluster's LoadStream: with weight rings, the tensor is PUSHED through the ring
-    # with the expert's weights (right after them, in take order) and the load is a copy
-    # out of L3 -- instead of a PULL across the half-duplex link, which waits for the push
-    # stream to drain while the in-order DM core holds every later task behind it.
-    stream: object = field(default=None, compare=False, repr=False)
     # Where the tensor starts in the record field, in bytes: this cluster's slice of a table
     # entry that names several clusters' slices back to back.
     offset: int = 0
@@ -205,22 +199,10 @@ class SlotLoad(Block):
         g = ctx.at(c.cluster)
         y = g.l1(f"{self.name}_y", 2 * c.cols)
         rec = bound["rec"]
-        rings = getattr(c.stream, "rings", None) if c.stream is not None else None
-        if rings is not None:
-            from .load_stream import WeightRings
-            sl, fl, rl, seq = rings.take(c.cluster, nbytes=2 * c.cols,
-                                         src=(c.slot << 8) | WeightRings.FIELDS[c.field],
-                                         kind=1, offset=c.offset)
-            prev = rings.last.get(c.cluster)
-            nd = g.node("LdSlot", ctx.dm, "__snax_bingo_kernel_idma_ring_load",
-                        SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, y, 2 * c.cols, rl),
-                        list(rec.ends) + ([prev] if prev is not None else []))
-            rings.last[c.cluster] = nd
-        else:
-            nd = g.node("LdSlot", ctx.dm, "__snax_bingo_kernel_idma_copy_slot",
-                        SnaxBingoKernelIdmaCopySlotArgs(rec.handle, c.slot, c.field, c.offset,
-                                                        y, 2 * c.cols),
-                        list(rec.ends))
+        nd = g.node("LdSlot", ctx.dm, "__snax_bingo_kernel_idma_copy_slot",
+                    SnaxBingoKernelIdmaCopySlotArgs(rec.handle, c.slot, c.field, c.offset,
+                                                    y, 2 * c.cols),
+                    list(rec.ends))
         return BlockResult(outputs={"y": Port(self.outputs["y"], y, (nd,), name="y")},
                            inputs={"rec": Port(self.inputs["rec"], rec.handle, (nd,),
                                                name="rec")},

@@ -326,12 +326,12 @@ class SnaxBingoKernelIdmaCopySlotArgs(BingoKernelArgs):
 
 class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     """One chunk of an L3 weight ring into an L1 slab (offload_hw_kernels/idma.h): wait
-    until the slot's flag holds `seq`, copy `size` bytes from the slot, then write `seq`
-    into the slot's release word. The memory chiplet's iDMA pushes the chunk and then its
-    flag, posted by the host's prefetcher or by the ring's cluster (libs/blocks/load_stream.py
-    WeightRings); flag and release are local L3 words. A release address of 0 writes no release
-    word: a chunk several clusters read is released by the load that follows the others, and in
-    cluster mode the next post of the slot follows the load in the graph."""
+    until the slot's flag holds `seq`, then copy `size` bytes from the slot. The memory
+    chiplet's iDMA pushes the chunk and then its flag, posted by the ring's cluster
+    (libs/blocks/load_stream.py WeightRings); the flag is a local L3 word. The next post of the
+    slot follows the slot's last load in the graph. WeightRings passes release_addr 0 (no release
+    word written) and trailer False (the flag word, not a magic last beat); the kernel keeps
+    both fields."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
 
     def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr,
@@ -340,13 +340,12 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
             raise ValueError(f"seq={seq} (from 1), size={size}.")
         self.flag_addr, self.seq, self.src_addr = flag_addr, int(seq), src_addr
         self.dst_addr, self.size, self.release_addr = dst_addr, int(size), release_addr
-        # weight_ring.trailer: flag_addr is the record's last beat (a 64-bit magic, cleared
-        # after the copy) instead of the ring's flag word
+        # trailer: flag_addr is the record's last beat (a 64-bit magic, cleared after the copy)
+        # instead of the ring's flag word
         self.trailer = int(bool(trailer))
 
     def accesses(self):
-        # the ring slot and its flags: the ring's protocol orders them (the prefetcher's release words, or in
-        # cluster mode the posts' edges)
+        # the ring slot and its flags: the ring's protocol orders them (the posts' edges)
         return [Sync("flag_addr"), Sync("src_addr"), Write("dst_addr", self.size), Sync("release_addr")]
 
     def get_struct_name(self) -> str:

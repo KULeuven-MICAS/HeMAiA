@@ -397,89 +397,10 @@ class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
         return a
 
 
-class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
-    """The weight prefetcher (host_kernel_lib.h): the memory chiplet's iDMA PUSHES every
-    streamed weight chunk into per-cluster L3 rings, then a flag per chunk, as fast as the
-    clusters release slots. Built by libs/blocks/load_stream.py WeightRings; see there."""
-    KERNEL_NAME = "__host_bingo_kernel_weight_prefetch"
-
-    def __init__(self, sched_addr, ring_addr, flag_addr, release_addr, seq_addr, rec_addr,
-                 rec_slots: int, n_rings: int, n_slots: int, slot_bytes: int, memchip_id: int,
-                 batch: int = 1, policy: int = 0, engine: int = 0, batch_routed: int = 0,
-                 queued: int = 0, queued_inflight_routed: int = 0, head: int = 0,
-                 batch_head: int = 0):
-        if not 1 <= n_rings <= 4:
-            raise ValueError(f"n_rings={n_rings}: 1..4")
-        if not 1 <= batch <= n_slots:
-            raise ValueError(f"batch={batch}: 1..n_slots ({n_slots})")
-        if policy not in (0, 1):
-            raise ValueError(f"policy={policy}: 0 (rings in turn) or 1 (fewest chunks first)")
-        self.sched_addr, self.ring_addr, self.flag_addr = sched_addr, ring_addr, flag_addr
-        self.release_addr, self.seq_addr, self.rec_addr = release_addr, seq_addr, rec_addr
-        self.rec_slots, self.n_rings, self.n_slots = int(rec_slots), int(n_rings), int(n_slots)
-        self.slot_bytes, self.memchip_id, self.batch = int(slot_bytes), int(memchip_id), int(batch)
-        self.policy = int(policy)
-        if not 0 <= int(engine) <= 3:
-            raise ValueError(f"engine={engine}: 0..3, one of the memchip's push engines")
-        self.engine = int(engine)
-        if not 0 <= int(batch_routed) <= n_slots:
-            raise ValueError(f"batch_routed={batch_routed}: 0 (= batch) or 1..n_slots ({n_slots})")
-        self.batch_routed = int(batch_routed)
-        self.queued = int(bool(queued))
-        if not 0 <= int(queued_inflight_routed) <= 8:
-            raise ValueError(f"queued_inflight_routed={queued_inflight_routed}: 0 (no cap) .. 8")
-        self.queued_inflight_routed = int(queued_inflight_routed)
-        if int(batch_head) and not (int(head) > 1 and 1 <= int(batch_head) <= n_slots):
-            raise ValueError(f"head={head} batch_head={batch_head}: head > 1, 1..n_slots")
-        self.head, self.batch_head = int(head), int(batch_head)
-
-    def accesses(self):
-        # it fills the rings behind their flags: the loads' protocol, not the graph, orders them
-        return [Read("sched_addr"), Sync("ring_addr"), Sync("flag_addr"), Sync("release_addr"),
-                Read("seq_addr"), Sync("rec_addr")]
-
-    def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_weight_prefetch_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        for f in ("sched_addr", "ring_addr", "flag_addr", "release_addr", "seq_addr", "rec_addr"):
-            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
-                               as_64bit=True)
-        for f in ("rec_slots", "n_rings", "n_slots", "slot_bytes", "memchip_id", "batch", "policy",
-                  "engine", "batch_routed", "queued", "queued_inflight_routed", "head",
-                  "batch_head"):
-            a[f] = str(getattr(self, f))
-        return a
-
-
-class HostBingoKernelWeightPrefetchRangeArgs(HostBingoKernelWeightPrefetchArgs):
-    """The weight prefetcher over chunks [chunk_lo, chunk_hi) of each ring (chunk_hi 0: to its
-    end; host_kernel_lib.h). Two of them on one host, one after the other, push what one
-    prefetcher pushes, so another host task can run between them."""
-    KERNEL_NAME = "__host_bingo_kernel_weight_prefetch_range"
-
-    def __init__(self, *args, chunk_lo: int = 0, chunk_hi: int = 0, **kw):
-        super().__init__(*args, **kw)
-        if int(chunk_lo) < 0 or (int(chunk_hi) and int(chunk_hi) <= int(chunk_lo)):
-            raise ValueError(f"chunk_lo={chunk_lo} chunk_hi={chunk_hi}: 0 <= lo < hi (hi 0: the end)")
-        self.chunk_lo, self.chunk_hi = int(chunk_lo), int(chunk_hi)
-
-    def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_weight_prefetch_range_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {f"w.{f}": v for f, v in super().get_c_field_assignments(handle_name_map).items()}
-        a["chunk_lo"], a["chunk_hi"] = str(self.chunk_lo), str(self.chunk_hi)
-        return a
-
-
 class HostBingoKernelHbmBcastArgs(BingoKernelArgs):
-    """The HBM multicast (host_kernel_lib.h): the memory chiplet's push engine multicasts
-    n_tiles tiles from its HBM into every compute chiplet's L3, each followed by its flag
-    (64 B apart). The task runs on a host whose chiplet the multicast reaches, and ends once
-    the last flag has landed there."""
-    KERNEL_NAME = "__host_bingo_kernel_hbm_bcast"
+    """An HBM multicast as ChipletBuild.hbm_cast takes it, which posts it (engine_post) and waits for it (wait_flag):
+    the memory chiplet's push engine multicasts n_tiles tiles from its HBM into every compute chiplet's L3, each
+    followed by its flag (64 B apart). A description, not a task's arguments."""
 
     def __init__(self, src_addr, dst_addr, flag_addr, value_addr, value: int, tile_bytes: int,
                  n_tiles: int, memchip_id: int, engine: int):
@@ -497,25 +418,17 @@ class HostBingoKernelHbmBcastArgs(BingoKernelArgs):
         return [Read("src_addr", n), Write("dst_addr", n), Sync("flag_addr"), Read("value_addr", 8)]
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_hbm_bcast_args_t"
+        raise TypeError(f"{type(self).__name__} describes an HBM cast for ChipletBuild.hbm_cast, not a task's arguments")
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        for f in ("src_addr", "dst_addr", "flag_addr", "value_addr"):
-            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
-                               as_64bit=True)
-        for f in ("value", "tile_bytes", "n_tiles", "memchip_id", "engine"):
-            a[f] = str(getattr(self, f))
-        return a
+        raise TypeError(f"{type(self).__name__} describes an HBM cast for ChipletBuild.hbm_cast, not a task's arguments")
 
 
 class HostBingoKernelHbmUcastArgs(BingoKernelArgs):
-    """The HBM unicast (host_kernel_lib.h), the multicast's conventional counterpart: the memory
-    chiplet's push engine writes the n_tiles tiles and their flags into each chiplet of `chips` in
-    turn (one copy a chiplet), at the same addresses as the multicast, plus a progress flag a tile
-    into `prog_addr` (64 B apart, n_tiles x len(chips) of them) on the issuing host's chiplet. Ends
-    once the last progress flag has landed there."""
-    KERNEL_NAME = "__host_bingo_kernel_hbm_ucast"
+    """An HBM unicast as ChipletBuild.hbm_cast takes it, the multicast's conventional counterpart: the memory chiplet's
+    push engine writes the n_tiles tiles and their flags into each chiplet of `chips` in turn (one copy a chiplet), at
+    the same addresses as the multicast, plus a progress flag a tile into `prog_addr` (64 B apart, n_tiles x len(chips)
+    of them) on the issuing host's chiplet. A description, not a task's arguments."""
 
     def __init__(self, src_addr, dst_addr, flag_addr, prog_addr, value_addr, value: int,
                  tile_bytes: int, n_tiles: int, memchip_id: int, engine: int, chips):
@@ -538,20 +451,10 @@ class HostBingoKernelHbmUcastArgs(BingoKernelArgs):
                 Read("value_addr", 8)]
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_hbm_ucast_args_t"
+        raise TypeError(f"{type(self).__name__} describes an HBM cast for ChipletBuild.hbm_cast, not a task's arguments")
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        for f in ("src_addr", "dst_addr", "flag_addr", "prog_addr", "value_addr"):
-            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
-                               as_64bit=True)
-        for f in ("value", "tile_bytes", "n_tiles", "memchip_id", "engine"):
-            a[f] = str(getattr(self, f))
-        a["n_chips"] = str(len(self.chips))
-        pack = lambda cs: sum(c << (8 * i) for i, c in enumerate(cs))
-        a["chips_lo"] = f"0x{pack(self.chips[:8]):016x}ull"
-        a["chips_hi"] = f"0x{pack(self.chips[8:]):016x}ull"
-        return a
+        raise TypeError(f"{type(self).__name__} describes an HBM cast for ChipletBuild.hbm_cast, not a task's arguments")
 
 
 

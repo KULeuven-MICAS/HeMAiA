@@ -910,7 +910,7 @@ class BingoDFGTransformsMixin:
 
         A relay is a normal task running __snax_bingo_kernel_stamp (no work, no
         print) on another core of the consumers' chip -- another core of their cluster, or a
-        core of another cluster, never the host's, whose queue holds the weight prefetcher.
+        core of another cluster, never the host's, whose queue holds the HBM casts' posts and waits.
         A group of up to 2**tag_width / 2 of the cell's edges (p -> c, in the consumers' core
         order) becomes p -> relay for each, and relay -> c0, c0 the group's first consumer:
         the later ones follow c0 on their core, so each still runs after its producer. The

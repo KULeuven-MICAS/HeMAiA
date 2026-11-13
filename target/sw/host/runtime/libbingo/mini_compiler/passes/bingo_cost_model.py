@@ -25,7 +25,7 @@ THE CONSTANTS:
   FAR_BYTES_PER_CYCLE      a transfer that leaves the chip (D2D links, the memory chip's HBM)
   DMA_LATENCY, FAR_LATENCY a transfer's first beat: in the chip, across the package
   PUSH_BYTES_PER_CYCLE     a memory chip's push of weight chunks into one compute chip's L3
-  PUSH_LATENCY             a push's first beat, from its post (the host prefetcher's, an engine post's)
+  PUSH_LATENCY             a push's first beat, from its post (an engine post's)
   SIMD_ELEMS_PER_CYCLE     the SIMD core's FlashAttention tile: a 32-byte beat (16 FP16 elements) every 2 cycles
   SIMD_ROW_ELEMS_PER_CYCLE a rows x cols SIMD kernel (SwiGLU, RMSNorm), which reads its rows more than once
   SIMD_OVERHEAD            a SIMD task's fixed cost: its CSR writes, the streamer's start, the drain
@@ -88,7 +88,6 @@ GEMM_MINIMAL = "__snax_bingo_kernel_gemm_minimal"
 GEMV = "__snax_bingo_kernel_gemv"
 RING_LOAD = "__snax_bingo_kernel_idma_ring_load"
 ENGINE_POST = "__snax_bingo_kernel_engine_post"
-WEIGHT_PREFETCH = "__host_bingo_kernel_weight_prefetch"
 
 
 def _is_far(addr, chip):

@@ -3,8 +3,9 @@
 The bingo framework's chiplet DSE simulates the layer from this file instead of re-deriving its
 structure: every node the RTL runs (dummy dep-tag nodes included), its core, kernel and arguments,
 the dependency edges, each chip's descriptor stream in dispatch order, and the weight rings with
-their chunks (pushed and expanded bytes, routed, trailer) and the prefetcher's policy. The framework's
-`frontend/parser_hemaia` maps it onto its cost model.
+their chunks (pushed and expanded bytes) and their run parameters (the `prefetch` entry: slots,
+batch, head, batch_head). The framework's `frontend/parser_hemaia` maps it onto its cost model; the
+schema keeps the fields its parser reads (a chunk's routed and trailer flags are always false).
 
     dfg.skip_viz = True                      # optional: the pictures are slow on large graphs
     dfg.bingo_compile_dfg(...)
@@ -99,10 +100,9 @@ def ring_table(rings, chip: int, mem: int, engine: int) -> dict:
         chunks, sid, prev = [], 0, None
         for src, kind, off, nbytes in entries:
             routed = bool(kind & 1)
-            # the prefetcher's run rule (host_kernel_lib.h weight_prefetch_run_of): a run goes on
-            # only within one source stream -- the same kind, and the next byte of the same range
-            # (dense) or the same record field at the next offset (routed). A new stream id where
-            # it breaks; the simulator's runs never cross one.
+            # the rings' run rule (WeightRings._continues): a run goes on only within one source
+            # stream -- the next byte of the same range. A new stream id where it breaks; the
+            # simulator's runs never cross one.
             if prev is not None:
                 ps, pk, po, pn = prev
                 cont = kind == pk and ((src == ps and off == po + pn) if routed

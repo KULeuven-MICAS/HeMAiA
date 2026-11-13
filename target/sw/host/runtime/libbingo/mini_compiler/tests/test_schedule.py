@@ -149,17 +149,19 @@ check("never more than two outstanding on the array", worst <= 2, p)
 check("the four dispatches numbered 1..4", sorted(t.kernel_args.seq for t in gs if hasattr(t.kernel_args, "seq"))
       == [i + 1 for i in range(sum(hasattr(t.kernel_args, "seq") for t in gs))])
 
-print("\nring loads wait for their chip's prefetcher")
+print("\nring loads wait for their ring's post")
 d = new_dfg()
 ld = task(d, DM, "ld", "__snax_bingo_kernel_idma_ring_load",
           SnaxBingoKernelIdmaRingLoadArgs(0x40, 1, 0x50, 0x60, 8192, 0x70))
 x = copy(d, "x", 4096)
 start = task(d, DM, "start", "__snax_bingo_kernel_stamp", None, [x])
-task(d, HOST, "pf", "__host_bingo_kernel_weight_prefetch", None, [start])
+post = task(d, DM, "post", "__snax_bingo_kernel_engine_post", None, [start])
+d.bingo_add_edge(post, ld)
+ld.ring_start = post
 gemm(d, "use", [ld, x])
 d.bingo_schedule_programs()
-check("the DM core runs x and the start before the ring load made first",
-      program(d, DM) == ["x", "start", "ld"], program(d, DM))
+check("the DM core runs x, the start and the post before the ring load made first",
+      program(d, DM) == ["x", "start", "post", "ld"], program(d, DM))
 
 print("\nwithout async_exec every dispatch stays blocking")
 d = new_dfg()
