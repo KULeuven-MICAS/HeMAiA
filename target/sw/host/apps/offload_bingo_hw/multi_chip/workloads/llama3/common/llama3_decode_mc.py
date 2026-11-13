@@ -47,7 +47,8 @@ value buffers use (K: each key tile in the A layout, rope_pairs' column order, a
 trade buffer kvx holds a pass: [K halves | V halves], in params cache_parts parts of whole tiles, then the new key's
 tile (zero until the append). Each half crosses its chip's memory link once: the chip's host queues its memory chip's
 push engine (__host_bingo_kernel_hbm_ucast, a part a tile behind its flag) between the two parts of its weight
-prefetcher (params cache_after: the chunks of each ring before it), so the cache lands after the q weights and before
+prefetcher (params cache_after: the chunks of each ring before it; weight_ring.mode cluster: a run boundary of each
+ring there, the cache's posts between the two runs), so the cache lands after the q weights and before
 the k/v and W_O weights; each cluster copies the half into its key and value tiles, and the chip relays it into its
 mate's L3 (cluster 0 the K half, cluster 1 the V half, a flagged put each), where both of the mate's clusters copy it.
 Per pair link: one half each way; per memory link: the halves of the chips it feeds. No chip copies remote data into its
@@ -622,11 +623,11 @@ class DBuild(ABuild):
 
     def x_multicast(self, go):
         """x's row into every chip's L3 (xland) behind the flag xtflag: the root's host has its memory chip's push engine
-        multicast it from HBM, behind the root's go. Returns the task the x fetches follow."""
+        multicast it from HBM, behind the root's go (ChipletBuild.hbm_cast). Returns the HbmCast the x fetches follow."""
         R = self.ROOT
         mR = self.mem[R]
-        return self.cx_chip(R).host_node(
-            "x_hbm_bcast", "__host_bingo_kernel_hbm_bcast",
+        return self.hbm_cast(
+            R, "x_hbm_bcast",
             HostBingoKernelHbmBcastArgs(self.h_xhbm.address, self.l3("xland"), self.l3("xtflag"), self.h_seq[mR].address + 64,
                                         1, self.XB, 1, mR, self.engine[R]), after=[go[R]])
 
@@ -666,14 +667,24 @@ class DBuild(ABuild):
         self.x_put = self.x_multicast(go)
         self.ucast = {}
         for k in self.chips:
-            first = [go[k]] + ([self.x_put] if k == R and self.x_on_host else [])
+            first = [go[k]] + ([self.done_of(self.x_put)] if k == R and self.x_on_host else [])
+            mk = self.mem[k]
+            args = HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"),
+                                               self.l3("kvcprog"), one(mk), 1, self.PB, self.P, mk, self.engine[k], [k])
+            if self.ring_mode == "cluster":
+                # weight_ring.mode cluster: the chip's engine queue takes each ring's first cache_after chunks, the
+                # cache, then the rest (WeightRings.boundary); cache_after 0: the cache before every ring's runs
+                if self.cache_after and not 0 < self.cache_after <= self.n_slots:
+                    raise ValueError(f"params cache_after={self.cache_after}: 0..{self.n_slots} (the ring's slots)")
+                self.ucast[k] = self.hbm_cast(k, f"kv_ucast_k{k:02x}", args, after=first,
+                                              ahead_of_rings=not self.cache_after)
+                for r in range(self.rings[k].n_rings) if self.cache_after else ():
+                    self.rings[k].boundary(r, self.cache_after, before=[self.ucast[k].first],
+                                           after=[self.ucast[k].posts[-1]])
+                continue
             if self.cache_after:
                 first = [self._prefetch_head(k, self.cache_after, first)]
-            mk = self.mem[k]
-            self.ucast[k] = self.cx_chip(k).host_node(
-                f"kv_ucast_k{k:02x}", "__host_bingo_kernel_hbm_ucast",
-                HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"), self.l3("kvcprog"),
-                                            one(mk), 1, self.PB, self.P, mk, self.engine[k], [k]), after=first)
+            self.ucast[k] = self.hbm_cast(k, f"kv_ucast_k{k:02x}", args, after=first)
             self.edge(self.ucast[k], self.prefetch[k])
         # ---- x into every cluster's L1 ---------------------------------------------------------------------------------
         xf = {}
@@ -681,7 +692,7 @@ class DBuild(ABuild):
             xf[cl] = self.nd(cl, "dm", f"x_wait", "__snax_bingo_kernel_idma_fetch_flagged",
                             SnaxBingoKernelIdmaFetchFlaggedArgs(self.l3("xland"), self.xa[cl], self.XB,
                                                                 self.l3("xtflag"), 1, 1), [go[self.chip(cl)]])
-            self.dfg.bingo_add_order_edge(self.x_put, xf[cl])
+            self.dfg.bingo_add_order_edge(self.queued_of(self.x_put), xf[cl])
         # ---- q: the GEMVs, the column factors, RoPE, the query tile ---------------------------------------------------
         q8t = {}
         for cl in range(self.N_CL):
@@ -708,7 +719,7 @@ class DBuild(ABuild):
                     c = self.local(cl)
                     w = self.nd(cl, "dm", f"kvc_wait{p}", "__snax_bingo_kernel_wait_flags",
                                 SnaxBingoKernelWaitFlagsArgs(self.l3("kvcflag", p * 64), 1, 1), [])
-                    self.dfg.bingo_add_order_edge(self.ucast[k], w)
+                    self.dfg.bingo_add_order_edge(self.queued_of(self.ucast[k]), w)
                     # cluster 0 relays the part's K halves, cluster 1 its V halves, into the mate's L3 behind a flag each
                     off = p * self.PB + c * self.PT * self.HB
                     relay[k, p, c] = self.nd(cl, "dm", f"kv_relay{p}", "__snax_bingo_kernel_idma_put_flagged",

@@ -54,7 +54,9 @@ chip's host runs its FFN prefetcher after its attention prefetcher; params layer
             cluster) streams while the attention still computes (the sweep, the o rows, W_O, the glue); the rings are two
             L3 regions
 The window report prints each block's bytes over the memory links, the busiest link, and the FFN bytes the early rings
-take ahead.
+take ahead. With weight_ring.mode cluster (both blocks; no prefetcher task) each cluster posts its rings' runs into its
+memory chip's push engine queue: the attention's first posts follow the start, the FFN's first posts follow every
+attention ring's last post of the chip (and with after, the chip's attention end), each a graph edge.
 
 ORDER AND PLACEMENT. Every device core runs its tasks in creation order (one program order over the layer), except the
 attention's k / v projection (its kv_at) and the FFN's set-up (its scales into L1, its X tiles zeroed), which runs before
@@ -285,6 +287,12 @@ class LayerBuild(cm.ChipletBuild):
             self.ffn = FfnPart(self, args, pf, plat, hw)
         # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: ffn.gu_gemv)
         self.x_arow = bool(self.ffn.gu_gemv) if self.ffn is not None else bool(lp.get("x_arow", False))
+        # weight_ring.mode: the blocks' rings both filled by a prefetcher or both posted by their clusters
+        modes = {str(dict(common, **p[b]).get("weight_ring", {}).get("mode", "prefetcher"))
+                 for b in (("attn", "ffn") if self.ffn is not None else ("attn",))}
+        if len(modes) != 1:
+            raise ValueError(f"params attn / ffn weight_ring.mode: one mode for both blocks, not {sorted(modes)}")
+        self.cluster_rings = modes == {"cluster"}
 
     def mem_handles(self):
         """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
@@ -412,7 +420,7 @@ class LayerBuild(cm.ChipletBuild):
         self.start = self.stamp("start", ends)
         self.go = {k: self.start for k in self.chips}
         for k in self.chips:
-            self.edge(self.start, self.attn.prefetch[k])
+            self.pushes_after(self.attn, k, [self.start])
         self.x_put = self.input_norm()
         return dict(self.go)
 
@@ -461,20 +469,23 @@ class LayerBuild(cm.ChipletBuild):
     def ffn_window(self, extra):
         """The FFN's set-up (its scales into L1, its X tiles zeroed) before the window, first on its cores; its
         prefetchers per params layer.ffn_prefetch. Returns {chip: the task its X waits follow} (the chip's attention
-        end)."""
-        F = self.ffn
+        end). weight_ring.mode cluster: each FFN ring's first post after every attention ring's last post of the chip
+        (the engine queue takes the attention's runs first, as the host ran its prefetchers), and with after, also
+        after the chip's attention end."""
+        A, F = self.attn, self.ffn
         for t in self.ffn_pre:
             self.edge(t, self.start)            # before the window
         for k in self.chips:
             for t in (extra or {}).get(k, []):
                 self.edge(t, self.start)
-            # the chip's host runs its FFN prefetcher after its attention prefetcher; after: also after the chip's
-            # attention end, so no FFN chunk lands in a slot of the shared region an attention load still reads
-            self.edge(self.attn.prefetch[k], F.prefetch[k])
-            if self.ffn_prefetch == "after":
-                self.edge(self.attn_fin[k], F.prefetch[k])
-        print(f"[{self.TAG}] FFN: {len(self.ffn_pre)} set-up tasks before the window; its prefetchers "
-              + ("behind the attention's on each host" if self.ffn_prefetch == "early" else
+            # the chip's host runs its FFN prefetcher after its attention prefetcher (cluster: the FFN's first posts
+            # after the attention's last); after: also after the chip's attention end, so no FFN chunk lands in a slot
+            # of the shared region an attention load still reads
+            self.pushes_after(F, k, self.push_heads(A, k) + ([self.attn_fin[k]] if self.ffn_prefetch == "after"
+                                                             else []))
+        who = "first posts" if self.cluster_rings else "prefetchers"
+        print(f"[{self.TAG}] FFN: {len(self.ffn_pre)} set-up tasks before the window; its {who} "
+              + ("behind the attention's on each chip" if self.ffn_prefetch == "early" else
                  "behind each chip's attention end"))
         return dict(self.attn_fin)
 
@@ -567,13 +578,13 @@ class LayerBuild(cm.ChipletBuild):
         ordered against every other by a path of dependency and order edges, so no two are ever in flight together.
         No device copy reads HBM into an L3 buffer. attn ks: also every ChainGather against every push part of both
         blocks and every device write into HBM after all of them (_check_pushes). Returns (multicasts, gathers)."""
+        spans = self.collectives()      # each collective by its first task, descendants of its done one; before the view
         G = self.dfg.bingo_order_view()
-        mc = [t for t in self.dfg.node_list
-              if (t.kernel_name == "__snax_bingo_kernel_idma_put_flagged" and t.kernel_args.bcast & 1)
-              or t.kernel_name == "__host_bingo_kernel_hbm_bcast"]
-        ch = [t for t in self.dfg.node_list if t.kernel_name == "__snax_bingo_kernel_xdma_chain_gather"]
+        done = {s: e for s, e, _ in spans}
+        mc = [s for s, _, kind in spans if kind != "chain"]
+        ch = [s for s, _, kind in spans if kind == "chain"]
         items = sorted(mc + ch, key=lambda t: t.node_id)
-        desc = {t: nx.descendants(G, t) for t in items}
+        desc = {t: nx.descendants(G, done[t]) for t in items}
         bad = [(a.node_name, b.node_name) for a, b in itertools.combinations(items, 2)
                if b not in desc[a] and a not in desc[b]]
         if bad:
@@ -591,10 +602,28 @@ class LayerBuild(cm.ChipletBuild):
         return len(mc), len(ch)
 
     def _push_parts(self):
-        """attn ks: {(chip, part): (the part's host task, the tasks after which every push of it has landed)}: the
-        attention's W_q, cache, k / v and W_O parts and the FFN's prefetcher. A chunk has landed once its ring load (which
+        """attn ks: {(chip, part): (the task that starts its pushes, the tasks after which every push of it has
+        landed)}: the attention's W_q, cache, k / v and W_O parts and the FFN's prefetcher; weight_ring.mode cluster:
+        the cache and each run of every ring (its post, its chunks' loads). A chunk has landed once its ring load (which
         waits for the chunk's landed flag) has run, the cache once both of each cluster's flagged fetches have."""
         A, F = self.attn, self.ffn
+        if self.cluster_rings:
+            parts = {}
+            for k in self.chips:
+                parts[k, "cache"] = (A.ucast[k].first,
+                                     [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
+                for blk, S in (("attn", A), ("ffn", F)):
+                    if S is None:
+                        continue
+                    n = 0
+                    for r in range(S.rings[k].n_rings):
+                        for i, (post, loads) in enumerate(S.rings[k].runs_of(r)):
+                            parts[k, f"{blk} ring {r} run {i}"] = (post, loads)
+                            n += len(loads)
+                    want = sum(len(S.chunk_off[cl]) for cl in self.clusters(k))
+                    if n != want:
+                        raise ValueError(f"chip {k:#04x}: {n} {blk} ring loads of its {want} chunks")
+            return parts
         ring = {}
         for blk, S in (("attn", A), ("ffn", F)):
             for (cl, j), (_, ld) in (S.slot.items() if S is not None else ()):
@@ -604,7 +633,8 @@ class LayerBuild(cm.ChipletBuild):
             head, mid, wo = A.pf_parts[k]
             at = ring[("attn", k)]
             parts[k, "W_q"] = (head, [ld for j, ld in at if j < A.NQC])
-            parts[k, "cache"] = (A.ucast[k], [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
+            parts[k, "cache"] = (A.ucast[k].first,
+                                 [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
             parts[k, "k/v"] = (mid, [ld for j, ld in at if A.NQC <= j < A.WO0])
             parts[k, "W_O"] = (wo, [ld for j, ld in at if j >= A.WO0])
             want = {"attn": sum(len(A.chunk_off[cl]) for cl in self.clusters(k))}

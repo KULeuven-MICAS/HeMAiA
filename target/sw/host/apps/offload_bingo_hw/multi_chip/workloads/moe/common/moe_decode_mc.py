@@ -65,7 +65,8 @@ before the device's route has reached that chip and passed its check, while the 
 latency. n is the fewer such chunks of the chip's two rings, so a chunk past it that no route decides (the root's cluster
 0 ring has the router's chunk extra) waits with the routed ones. The HBM image of each ring has a 64-byte gap before
 chunk n: no run of the prefetcher crosses the split, so the ring places the compiler fixed are the ones the two tasks
-push into.
+push into. With weight_ring.mode cluster (each cluster posts its ring's runs) chunk n starts a run of its own
+(WeightRings.boundary), whose post depends on the chip's moe_dispatch tasks: the route's wait is a graph edge.
 
 X FROM HBM. The root's host queues its memory chip's push engine, which multicasts the token's row from HBM into every
 chip's L3 behind one flag (the prefill's x_hbm, one tile of one row); every cluster waits for the flag and copies the
@@ -585,7 +586,8 @@ class DBuild(mp.MBuild):
 
     def _stream_report(self):
         """The bytes a token streams: per memory chip, per link (a memory chip's link carries the chips behind it), and
-        per chip those its first prefetcher task pushes, which cover the route's latency."""
+        per chip the route-free chunks, pushed before the route is known (the first prefetcher task, or a cluster ring's
+        runs before its boundary), which cover the route's latency."""
         R = self.ROOT
         chip_b = {k: sum(sum(nb for _, nb, _ in self.chunk_off[cl]) for cl in self.clusters(k)) for k in self.chips}
         free_b = {k: sum(sum(nb for _, nb, _ in self.chunk_off[cl][:self.n_free[k]]) for cl in self.clusters(k))
@@ -602,7 +604,7 @@ class DBuild(mp.MBuild):
               f"router's INT8 chunk and X); per memory chip " + ", ".join(f"{m:02x} {b:,}" for m, b in mem_b.items()))
         print("[md] stream per link: " + ", ".join(f"{m:02x}{'+' if s > 0 else '-'} {b:,}"
                                                   for (m, s), b in sorted(link_b.items())))
-        print("[md] first prefetcher task (route-free chunks a ring, bytes a chip): "
+        print("[md] pushed before the route (route-free chunks a ring, bytes a chip): "
               + ", ".join(f"{k:02x} {self.n_free[k]} {free_b[k]:,}" for k in self.chips))
 
     def _buffers(self):
@@ -738,9 +740,17 @@ class DBuild(mp.MBuild):
 
     def _split_prefetch(self, go, after):
         """Each chip's prefetcher as two host tasks: its rings' first n_free chunks, after the start and `after`; then
-        the rest, the original task (the routed chunks), which the caller makes wait for the route. Returns the first
-        tasks."""
+        the rest, the original task (the routed chunks), which the caller makes wait for the route (_after_route).
+        weight_ring.mode cluster: each ring's first post after `after` too, and its chunk n_free starts a run of its
+        own. Returns the first tasks (none in cluster mode)."""
         first = {}
+        if self.ring_mode == "cluster":
+            for k in self.chips:
+                for t in [go[k]] + list(after):
+                    self.rings[k].start_after(t)
+                for r in range(self.rings[k].n_rings):
+                    self.rings[k].boundary(r, self.n_free[k])
+            return first
         for k in self.chips:
             t, b = self.prefetch[k], self.prefetch[k].kernel_args
             n = self.n_free[k]
@@ -759,6 +769,19 @@ class DBuild(mp.MBuild):
             self.edge(first[k], t)
         return first
 
+    def _after_route(self, disp):
+        """The routed chunks are pushed only once the chip has the device's route and its check passed: each chip's
+        second prefetcher task after its clusters' moe_dispatch tasks (disp {cluster: task}); weight_ring.mode cluster:
+        the post of each ring's run from chunk n_free on."""
+        for k in self.chips:
+            ds = [disp[cl] for cl in self.clusters(k)]
+            if self.ring_mode == "cluster":
+                for r in range(self.rings[k].n_rings):
+                    self.rings[k].post_after(r, self.n_free[k], ds)
+                continue
+            for d in ds:
+                self.edge(d, self.prefetch[k])
+
     # ---- the decode -------------------------------------------------------------------------------------------------
     def build(self):
         if self.gemv:
@@ -773,13 +796,13 @@ class DBuild(mp.MBuild):
         go = self.setup(extra=pre)
         # ---- X from HBM into every chip's L3, then the prefetchers' first tasks ----
         self.x_bcast = self.x_multicast(go)
-        self._split_prefetch(go, [self.x_bcast])
+        self._split_prefetch(go, [self.done_of(self.x_bcast)])
         xc = {}
         for cl in range(N_CL):
             k, c = self.chip(cl), self.local(cl)
             w = self.node(k, c, dm, f"x_wait", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{Tg}_xtflag"), 1, 1), [go[k]])
-            self.dfg.bingo_add_order_edge(self.x_bcast, w)
+            self.dfg.bingo_add_order_edge(self.queued_of(self.x_bcast), w)
             xc[cl] = self.node(k, c, dm, f"x_copy", "__snax_bingo_kernel_idma_2d_copy",
                               SnaxBingoKernelIdma2dCopyArgs(self.xland(), self.B[cl]["x"], self.H, self.H, self.PX,
                                                             ROWS),
@@ -819,9 +842,7 @@ class DBuild(mp.MBuild):
                                 SnaxBingoKernelMoeDispatchArgs(bg["rt"], self.T, md.TOP_K, self.held[k], bg["lists"],
                                                                [ROWS] * n, [1] * n, pad_row=self.T), [f])
         # the routed chunks are pushed only once the chip has the device's route and its check passed
-        for k in self.chips:
-            for cl in self.clusters(k):
-                self.edge(disp[cl], self.prefetch[k])
+        self._after_route(disp)
 
         # ---- gate|up and quantise per piece; the A8 exchange ----
         gb_reader = {cl: [None, None] for cl in range(N_CL)}
@@ -996,13 +1017,13 @@ class DBuild(mp.MBuild):
         go = self.setup(extra=pre)
         # ---- X from HBM into every chip's L3, then the prefetchers' first tasks ----
         self.x_bcast = self.x_multicast(go)
-        self._split_prefetch(go, [self.x_bcast])
+        self._split_prefetch(go, [self.done_of(self.x_bcast)])
         xc = {}
         for cl in range(N_CL):
             k, c = self.chip(cl), self.local(cl)
             w = self.node(k, c, dm, f"x_wait", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{Tg}_xtflag"), 1, 1), [go[k]])
-            self.dfg.bingo_add_order_edge(self.x_bcast, w)
+            self.dfg.bingo_add_order_edge(self.queued_of(self.x_bcast), w)
             xc[cl] = self.node(k, c, dm, f"x_copy", "__snax_bingo_kernel_idma_1d_copy",
                               SnaxBingoKernelIdma1dCopyArgs(self.xland(), self.B[cl]["x"], self.XT), [w])
 
@@ -1038,9 +1059,7 @@ class DBuild(mp.MBuild):
                                 SnaxBingoKernelMoeDispatchArgs(bg["rt"], self.T, md.TOP_K, self.held[k], bg["lists"],
                                                                [ROWS] * n, [1] * n, pad_row=self.T), [f])
         # the routed chunks are pushed only once the chip has the device's route and its check passed
-        for k in self.chips:
-            for cl in self.clusters(k):
-                self.edge(disp[cl], self.prefetch[k])
+        self._after_route(disp)
 
         # ---- gate|up and quantise per piece; the A8 exchange ----
         qa, ex = {}, {}
@@ -1196,12 +1215,13 @@ class DBuild(mp.MBuild):
 
     def x_multicast(self, go):
         """X into every chip's L3 behind one flag (md_xland, md_xtflag): the root's host queues its memory chip's push
-        engine, which multicasts the token's row from HBM. Returns the task the X waits and the first prefetcher tasks
-        follow. A whole layer (dsv2/common/dsv2_decode_mc.py) multicasts its glue's row here instead."""
+        engine, which multicasts the token's row from HBM (ChipletBuild.hbm_cast). Returns the HbmCast the X waits and
+        the first prefetcher tasks follow. A whole layer (dsv2/common/dsv2_decode_mc.py) multicasts its glue's row here
+        instead."""
         R, m = self.ROOT, self.mem[self.ROOT]
         one = self.h_seq[m].address + 64                  # a word holding 1 in the memory chip's HBM: the flag's value
-        return self.cx_chip(R).host_node(
-            f"x_hbm_bcast_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
+        return self.hbm_cast(
+            R, f"x_hbm_bcast_k{R:02x}",
             HostBingoKernelHbmBcastArgs(self.h_xhbm.address, self.xland(), BingoMemSymbol(f"{self.TAG}_xtflag"), one, 1,
                                         self.XT, self.NXT, m, self.engine[R]), after=[go[R]])
 

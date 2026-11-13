@@ -177,7 +177,8 @@ PASS_TAGS = ("mp", "mq", "mr", "ms")   # the MoE passes' tags (params layer.moe_
 ARENA_ATTN = ("fp_wring_slots", "fp_kvraw", "fp_wkvc3", "fp_kc3", "fp_wkvx3")
 ARENA_ALIGN = 4096
 ATTN_PUSHES = ("__host_bingo_kernel_weight_prefetch", "__host_bingo_kernel_weight_prefetch_range",
-               "__host_bingo_kernel_hbm_bcast")
+               "__host_bingo_kernel_hbm_bcast", "__host_bingo_kernel_engine_post", "__host_bingo_kernel_wait_flag",
+               "__snax_bingo_kernel_engine_post")
 
 
 def arg_symbols(args, field=""):
@@ -311,13 +312,13 @@ class MoePart(mom.MBuild):
         return self.n == len(self.layer.mlps) - 1
 
     def setup(self, extra=None):
-        self.go = self.layer.mlp_window(extra, self.prefetch, self.n)
+        self.go = self.layer.mlp_window(extra, self, self.n)
         return self.go
 
     def hbm_bcasts(self, go):
         rw, x = super().hbm_bcasts(go)
         for t in self.layer.glue_done.values():
-            self.edge(t, x)
+            self.edge(t, x.first)
         return rw, x
 
     def ysym(self, off=0, chip_id=None):
@@ -380,7 +381,7 @@ class FfnPart(fpm.PBuild):
                                 wbits=self.wbits, tokens=self.T, inter=p.get("inter"), rows=self.layer.mlp_rows)
 
     def setup(self, extra=None):
-        self.go = self.layer.mlp_window(extra, self.prefetch, 0)
+        self.go = self.layer.mlp_window(extra, self, 0)
         return self.go
 
     def x_hbm_bcasts(self, go):
@@ -388,7 +389,7 @@ class FfnPart(fpm.PBuild):
         # no multicast beside the glue's transfers: the first (the others follow it) behind every chip's glue probe,
         # which follows every X store of the chip; one edge a chip into the root's host
         for t in self.layer.glue_done.values():
-            self.edge(t, out[0])
+            self.edge(t, out[0].first)
         return out
 
     def end_window(self, after):
@@ -651,7 +652,7 @@ class LayerBuild(cm.ChipletBuild):
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
         start = self.stamp("start", ends)
         for k in self.chips:
-            self.edge(start, self.attn.prefetch[k])
+            self.pushes_after(self.attn, k, [start])
         self.go = {k: start for k in self.chips}
         self.input_norm(start)
         return self.go
@@ -768,10 +769,10 @@ class LayerBuild(cm.ChipletBuild):
         # store), the attention's end
         self.glue_done = {k: self.probe(k, "glue_done", list(self.attn_ends) + last.get(k, [])) for k in self.chips}
 
-    def mlp_window(self, extra, prefetch, n):
-        """Where the MoE / FFN (pass n) starts on each chip: behind the chip's glue probe (pass n > 0: behind the pass
-        before's end on every chip, the root's last stores), then the block's own setup tasks; its prefetchers behind
-        it."""
+    def mlp_window(self, extra, part, n):
+        """Where the MoE / FFN `part` (pass n) starts on each chip: behind the chip's glue probe (pass n > 0: behind the
+        pass before's end on every chip, the root's last stores), then the block's own setup tasks; its pushes behind
+        it (its prefetchers, or its rings' first posts)."""
         go = {}
         for k in self.chips:
             if n:
@@ -785,7 +786,7 @@ class LayerBuild(cm.ChipletBuild):
             for t in pre:
                 self.edge(opened, t)
             go[k] = self.probe(k, f"{self.mlps[n].TAG}_go", [opened] + pre) if pre else opened
-            self.edge(go[k], prefetch[k])
+            self.pushes_after(part, k, [go[k]])
         return go
 
     def final(self, after):

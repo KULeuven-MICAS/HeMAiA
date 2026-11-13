@@ -459,7 +459,7 @@ class FaDecode(fs.FaStages):
         cw = self.node(o, c, dm, "cache_wait", "__snax_bingo_kernel_wait_flags",
                        SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_cflag", offset=(self.NT - 2) * 64), 1, 1),
                        [go[o]])
-        self.dfg.bingo_add_order_edge(cache_mc, cw)
+        self.dfg.bingo_add_order_edge(self.queued_of(cache_mc), cw)
         src = BingoMemSymbol(f"{T}_kv", offset=q * KVP)
         self.kv_mc = [self.node(o, c, dm, f"kv_bput_q{q}", "__snax_bingo_kernel_idma_put_flagged",
                                 SnaxBingoKernelIdmaPutFlaggedArgs(src, src, KVP, BingoMemSymbol(f"{T}_kvflag"), value=1,
@@ -474,7 +474,7 @@ class FaDecode(fs.FaStages):
             w = self.node(k, c, dm, f"c_wait_j{j}", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_cflag", offset=j * 64), 1, 1),
                           [self.go[k]])
-            self.dfg.bingo_add_order_edge(self.cache_mc, w)
+            self.dfg.bingo_add_order_edge(self.queued_of(self.cache_mc), w)
             return w
         if k == self.owner:
             return self.piece_ready
@@ -542,17 +542,19 @@ class FaDecode(fs.FaStages):
                                            for c, rs in self.p["relay_prefer"].items()}
         # stage 0 and the cache on the root's engine of its memory chip, the root's ring split around the cache
         m = self.mem[R]
-        bcast = lambda name, src, dst, flag, nb, n, after: self.cx_chip(R).host_node(    # noqa: E731
-            f"{name}_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
+        # ChipletBuild.hbm_cast: one host task, or with hbm_cast.mode posts its posts and waits (first_of, done_of,
+        # queued_of name its tasks)
+        bcast = lambda name, src, dst, flag, nb, n, after: self.hbm_cast(    # noqa: E731
+            R, f"{name}_k{R:02x}",
             HostBingoKernelHbmBcastArgs(src, BingoMemSymbol(dst), BingoMemSymbol(flag), self.h_seq[m].address + 64, 1,
                                         nb, n, m, self.engine[R]), after=after)
         xm = self.x_multicast(go, bcast)
         self.x_puts = [xm]
         head = self._root_ring_split(go)
-        self.edge(xm, head)
+        self.edge(self.done_of(xm), head)
         self.cache_mc = bcast("cache_hbm_bcast", self.h_cache.address, f"{T}_kv", f"{T}_cflag", TILE_PIECES * KVP,
                               self.NT - 1, [head])
-        self.edge(self.cache_mc, self.prefetch[R])
+        self.edge(self.done_of(self.cache_mc), self.prefetch[R])
         # stage 1 (every key cluster; the ring's chunk 0 first on every chip)
         self.stage_new_key(go)
         # stage 4 (every query cluster)
@@ -639,20 +641,19 @@ class FaDecode(fs.FaStages):
         (dependencies and flag edges): concurrent multicast sources, or a multicast beside a chain, deadlock the
         fabric. Raises otherwise."""
         import networkx as nx
+        spans = self.collectives()                          # (first task, done task, kind), before the graph's copy
         gr = nx.DiGraph(self.dfg)
         gr.add_edges_from(self.dfg.order_edges)
-        nodes = self.dfg.node_list
-        mc = [t for t in nodes if (t.kernel_name or "").endswith("hbm_bcast")
-              or ((t.kernel_name or "").endswith("idma_put_flagged") and getattr(t.kernel_args, "bcast", 0))]
-        ch = [t for t in nodes if (t.kernel_name or "").endswith("xdma_chain_gather")]
-        desc = {t: nx.descendants(gr, t) for t in mc + ch}
+        mc = [c[:2] for c in spans if c[2] != "chain"]
+        ch = [c[:2] for c in spans if c[2] == "chain"]
+        desc = {c: nx.descendants(gr, c[1]) for c in mc + ch}
         coll = mc + ch
-        bad = [(a.node_name, b.node_name) for i, a in enumerate(coll) for b in coll[i + 1:]
-               if (a in mc or b in mc) and b not in desc[a] and a not in desc[b]]
+        bad = [(a[0].node_name, b[0].node_name) for i, a in enumerate(coll) for b in coll[i + 1:]
+               if (a in mc or b in mc) and b[0] not in desc[a] and a[0] not in desc[b]]
         if bad:
             raise ValueError(f"the decode: {len(bad)} multicast / chain pair(s) may run at once: {bad[:6]}")
         hbm = list(self._y_stores) + [self.append]
-        late = [(a.node_name, w.node_name) for a in coll for w in hbm if w not in desc[a]]
+        late = [(a[0].node_name, w.node_name) for a in coll for w in hbm if w not in desc[a]]
         if late:
             raise ValueError(f"the decode: {len(late)} HBM write(s) not after a multicast or chain: {late[:6]}")
         print(f"[{self.TAG}] decode: {len(mc)} multicasts and {len(ch)} chains, each ordered with every multicast; "

@@ -329,7 +329,7 @@ class DBuild(fp.PBuild):
                                                                        BingoMemSymbol(f"{T}_xtflag"), 1, 1),
                                    list(after.get(cl, [])))
                 # the multicast's flag says the row has landed: an order edge, not a dependency
-                self.dfg.bingo_add_order_edge(src, out[cl])
+                self.dfg.bingo_add_order_edge(self.x_post(src, 0, k), out[cl])
             return out
         out = {}
         for cl in range(self.N_CL):
@@ -337,7 +337,7 @@ class DBuild(fp.PBuild):
             w = self.node(k, c, dm, f"x_flag", "__snax_bingo_kernel_wait_flags",
                           SnaxBingoKernelWaitFlagsArgs(BingoMemSymbol(f"{T}_xtflag"), 1, 1), list(after.get(cl, [])))
             # the multicast's flag says the row has landed: an order edge, not a dependency
-            self.dfg.bingo_add_order_edge(src, w)
+            self.dfg.bingo_add_order_edge(self.x_post(src, 0, k), w)
             out[cl] = self.node(k, c, dm, f"x_wait_i{i}", "__snax_bingo_kernel_idma_2d_copy",
                                SnaxBingoKernelIdma2dCopyArgs(self._xland(0), self.xbuf[cl][0], ts, ts, ROWS * ts,
                                                              self.D // ts), [w])
@@ -481,7 +481,7 @@ class DBuild(fp.PBuild):
                 # the A8 copies into cluster c precede its gathers through its own down GEMMs
                 first = [last_red] if last_red is not None else []
                 if j0 == 0 and c == 0:
-                    first.append(self.x_bc[-1])     # X's multicast before the first gather
+                    first.append(self.done_of(self.x_bc[-1]))    # X's multicast before the first gather
                     first += list(last_dn)
                 # chains_after_stream: a gather after the first follows it (last_red), and so every down GEMM already
                 ins = [] if after_stream and last_red is not None else [dn[cl] for cl in range(self.N_CL)

@@ -1168,7 +1168,9 @@ class MBuild(cm.ChipletBuild):
         if self.x_hbm:
             if not self.route_dist:
                 raise ValueError("params x_hbm: needs route dist")
-            self.rw_bcast, self.x_bcast = self.hbm_bcasts(go)
+            self.rw_hbm_cast, self.x_hbm_cast = self.hbm_bcasts(go)
+            # what the waits on the multicasts' flags are ordered after: the task that queues each one's last tile
+            self.rw_bcast, self.x_bcast = self.rw_hbm_cast.posts[-1], self.x_hbm_cast.posts[-1]
             # every routing cluster's router weights and factors into L1 once the multicast has landed them
             for cl in range(N_CL):
                 if self.rt_tiles[cl]:
@@ -1523,21 +1525,25 @@ class MBuild(cm.ChipletBuild):
                     if b == self.XB - 1:
                         self._release(cl, si, sg_gms[(cl, j)], sw, sc)
 
+        # weight_ring.mode cluster: no prefetcher; what a prefetcher would follow, each chip's rings' first posts do
+        # (start_after), and hbm_cast already queues X ahead of the root's rings
+        cluster = self.ring_mode == "cluster"
         if self.x_hbm:
             # the root's prefetcher drives the multicast's engine: it pushes once X has landed
-            x_last = {0: self.x_bcast}
-            self.edge(self.x_bcast, self.prefetch[R])
+            x_last = {0: self.x_hbm_cast.end}
+            if not cluster:
+                self.edge(self.x_hbm_cast.end, self.prefetch[R])
         if self.prefetch_after_x:
             if not puts:
                 raise ValueError("params prefetch_after_x: needs the X multicast (bcast_l1)")
             for k in self.chips:
                 if self.prefetch_hold_rows is not None and (k & 15) not in self.prefetch_hold_rows:
                     continue
-                if self.sync == "barrier":
-                    self.edge(self.x_landed[k], self.prefetch[k])
-                    continue
-                for t in x_last.values():
-                    self.edge(t, self.prefetch[k])
+                for t in ([self.x_landed[k]] if self.sync == "barrier" else list(x_last.values())):
+                    if cluster:
+                        self.rings[k].start_after(t)
+                    else:
+                        self.edge(t, self.prefetch[k])
 
         # ---- the route: the top 6, the table to every chip, each cluster's row lists ---------------
         # after every core's X-stage tasks in each core's order, as topk_plan assumes
@@ -2140,8 +2146,9 @@ class MBuild(cm.ChipletBuild):
     def hbm_bcasts(self, go):
         """x_hbm: the root's host queues its memory chip's push engine (the root's prefetch engine, which pushes the
         root's weights only after these): the router's weights behind one flag, then X a tile at a time, each tile
-        and its flag multicast into every chip's L3. Returns the two host tasks; the second ends when X's last flag
-        has landed on the root."""
+        and its flag multicast into every chip's L3 (ChipletBuild.hbm_cast: one host task each, or with hbm_cast.mode
+        posts their posts and waits). Returns the two casts (HbmCast); X's `end` is the task after which its last
+        flag has landed on the root."""
         R, T = self.ROOT, self.TAG
         m = self.mem[R]
         one = self.h_seq[m].address + 64                    # a word holding 1 in the memory chip's HBM: the flags' value
@@ -2149,29 +2156,19 @@ class MBuild(cm.ChipletBuild):
             # params x_cast unicast: the same tiles and flags written into each chip's L3 in turn (self.order: the root
             # first), with a progress flag a (chip, tile) on the root; each task ends once its last progress flag has
             # landed
-            rw = self.cx_chip(R).host_node(
-                f"rw_hbm_ucast_k{R:02x}", "__host_bingo_kernel_hbm_ucast",
-                HostBingoKernelHbmUcastArgs(self.h_rwhbm.address, BingoMemSymbol(f"{T}_rwland"),
-                                            BingoMemSymbol(f"{T}_rwflag"), BingoMemSymbol(f"{T}_rwuprog"), one, 1,
-                                            self.rw_bytes, 1, m, self.engine[R], self.order),
-                after=[go[R]])
-            x = self.cx_chip(R).host_node(
-                f"x_hbm_ucast_k{R:02x}", "__host_bingo_kernel_hbm_ucast",
-                HostBingoKernelHbmUcastArgs(self.h_xhbm.address, self.xland(), BingoMemSymbol(f"{T}_xtflag"),
-                                            BingoMemSymbol(f"{T}_xuprog"), one, 1, self.XT, self.NXT, m, self.engine[R],
-                                            self.order),
-                after=[rw])
+            rw = self.hbm_cast(R, f"rw_hbm_ucast_k{R:02x}", HostBingoKernelHbmUcastArgs(
+                self.h_rwhbm.address, BingoMemSymbol(f"{T}_rwland"), BingoMemSymbol(f"{T}_rwflag"),
+                BingoMemSymbol(f"{T}_rwuprog"), one, 1, self.rw_bytes, 1, m, self.engine[R], self.order), after=[go[R]])
+            x = self.hbm_cast(R, f"x_hbm_ucast_k{R:02x}", HostBingoKernelHbmUcastArgs(
+                self.h_xhbm.address, self.xland(), BingoMemSymbol(f"{T}_xtflag"), BingoMemSymbol(f"{T}_xuprog"), one, 1,
+                self.XT, self.NXT, m, self.engine[R], self.order), after=[rw])
             return rw, x
-        rw = self.cx_chip(R).host_node(
-            f"rw_hbm_bcast_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
-            HostBingoKernelHbmBcastArgs(self.h_rwhbm.address, BingoMemSymbol(f"{T}_rwland"),
-                                        BingoMemSymbol(f"{T}_rwflag"), one, 1, self.rw_bytes, 1, m, self.engine[R]),
-            after=[go[R]])
-        x = self.cx_chip(R).host_node(
-            f"x_hbm_bcast_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
-            HostBingoKernelHbmBcastArgs(self.h_xhbm.address, self.xland(), BingoMemSymbol(f"{T}_xtflag"), one, 1,
-                                        self.XT, self.NXT, m, self.engine[R]),
-            after=[rw])
+        rw = self.hbm_cast(R, f"rw_hbm_bcast_k{R:02x}", HostBingoKernelHbmBcastArgs(
+            self.h_rwhbm.address, BingoMemSymbol(f"{T}_rwland"), BingoMemSymbol(f"{T}_rwflag"), one, 1, self.rw_bytes,
+            1, m, self.engine[R]), after=[go[R]])
+        x = self.hbm_cast(R, f"x_hbm_bcast_k{R:02x}", HostBingoKernelHbmBcastArgs(
+            self.h_xhbm.address, self.xland(), BingoMemSymbol(f"{T}_xtflag"), one, 1, self.XT, self.NXT, m,
+            self.engine[R]), after=[rw])
         return rw, x
 
     def xsrc(self, off=0):

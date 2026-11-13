@@ -75,8 +75,10 @@ class MStages(mp.MBuild):
             return super().build()
         R, Tg, dm = self.ROOT, self.TAG, self.roles["dm"]
         go = self.setup()
-        self.rw_bcast, self.x_bcast = self.hbm_bcasts(go)
-        self.edge(self.x_bcast, self.prefetch[R])         # the root's prefetcher drives the same engine
+        self.rw_hbm_cast, self.x_hbm_cast = self.hbm_bcasts(go)
+        self.rw_bcast, self.x_bcast = self.rw_hbm_cast.posts[-1], self.x_hbm_cast.posts[-1]
+        if self.ring_mode == "prefetcher":                 # the root's prefetcher drives the same engine
+            self.edge(self.x_hbm_cast.end, self.prefetch[R])
         last = {k: [] for k in self.chips}
         for k in self.chips:
             for c in range(self.NC):
@@ -87,7 +89,7 @@ class MStages(mp.MBuild):
                     self.dfg.bingo_add_order_edge(src, w)
                     last[k].append(w)
         ends = [self.probe(k, f"fin{k:02x}", last[k]) for k in self.chips if k != R]
-        ends.append(self.probe(R, f"fin{R:02x}", last[R] + [self.x_bcast]))
+        ends.append(self.probe(R, f"fin{R:02x}", last[R] + [self.x_hbm_cast.end]))
         self.end_window(ends)
         n = 2048
         hq = np.asarray(self.d.hq, dtype=np.int8).reshape(-1)

@@ -487,9 +487,17 @@ class FaDecodeKs(FaBuild):
 
     def _make_ring(self):
         """One ring a chip (every chunk of both clusters, in ring order), pushed by its memory chip's engine under the
-        chip's host prefetcher; each chunk is read and released by one cluster."""
+        chip's host prefetcher; each chunk is read and released by one cluster. weight_ring.mode cluster: no
+        prefetcher, each run posted by the DM core of the cluster that reads its first chunk (WeightRings post_chunk,
+        made by load() in ring order), the queue's weight_ring.queue entries the ring's share."""
         p, st, T = self.p, self.st, self.TAG
         wr = p.get("weight_ring", {})
+        self.ring_mode = str(wr.get("mode", "prefetcher"))
+        if self.ring_mode not in ("prefetcher", "cluster"):
+            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
+        self.ring_queue = int(wr.get("queue", 32))
+        if self.ring_mode == "cluster" and not 2 <= self.ring_queue <= 32:
+            raise ValueError(f"params weight_ring.queue={self.ring_queue}: 2..32 entries (two a run, one ring)")
         self.n_slots, self.ring_batch = int(wr.get("slots", 16)), int(wr.get("batch", 4))
         self.ring_head, self.ring_batch_head = int(wr.get("head", 0)), int(wr.get("batch_head", 0))
         self.ring_trailer, self.ring_queued = False, 0
@@ -502,7 +510,9 @@ class FaDecodeKs(FaBuild):
         self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", self.n_slots * 64)
         self.h_rec = st.put_zeros(f"{T}_rec_l3", "uint8_t", 128)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", self.n_slots * self.slot_bytes, preload=True)
-        self.rings, self.prefetch, self.tk, self.ring_bytes = {}, {}, {}, {}
+        self.rings, self.tk, self.ring_bytes = {}, {}, {}
+        self.prefetch = {} if self.ring_mode == "prefetcher" else cm._NoPrefetcher(T)
+        self.ring_posted = {k: 0 for k in self.chips}       # cluster mode: the chunks posted, in ring order
         self.last_chunk = {k: None for k in self.chips}
         for k in self.chips:
             rings = self.rings[k] = WeightRings(
@@ -516,8 +526,15 @@ class FaDecodeKs(FaBuild):
             for nm, src, nb, c in order:
                 if nb > self.slot_bytes:
                     raise ValueError(f"chunk {nm}: {nb} B over a {self.slot_bytes}-B slot")
-                self.tk[k][nm] = rings.take_ex(0, src=src, nbytes=nb) + (nb, c, rings.last_take)
             self.ring_bytes[k] = sum(nb for _, _, nb, _ in order)
+            if self.ring_mode == "cluster":
+                rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
+                                edge=self.edge, depth=self.ring_queue)
+                self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
+                                  rings.queue_span)
+                continue
+            for nm, src, nb, c in order:
+                self.tk[k][nm] = rings.take_ex(0, src=src, nbytes=nb) + (nb, c, rings.last_take)
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
@@ -544,10 +561,26 @@ class FaDecodeKs(FaBuild):
         return None if k == self.ROOT else self.ROOT
 
     def load(self, k, name, dst, deps=()):
-        """Chip k's ring chunk `name` into the L1 buffer dst, on its reader's DM core: waits for the chunk's flag."""
-        sl, fl, rl, seq, _, _, nb, c, ex = self.tk[k][name]
+        """Chip k's ring chunk `name` into the L1 buffer dst, on its reader's DM core: waits for the chunk's flag.
+        weight_ring.mode cluster: every chunk of the ring up to this one posted first, in ring order (WeightRings
+        post_chunk on the DM core of the cluster that reads the run's first chunk), and the load follows its post."""
+        cluster = self.ring_mode == "cluster"
+        if cluster:
+            order = self.ring_order(k)
+            i = next(j for j, o in enumerate(order) if o[0] == name)
+            while self.ring_posted[k] <= i:
+                nm, src, nb_, c_ = order[self.ring_posted[k]]
+                tk, post = self.rings[k].post_chunk(
+                    lambda n, core, kern, args, after, c_=c_: self.node(k, c_, core, n, kern, args, after), 0,
+                    f"Ld_{nm}", src=src, nbytes=nb_, dm=self.roles["dm"])
+                self.tk[k][nm] = tk + (nb_, c_, self.rings[k].last_take, post)
+                self.ring_posted[k] += 1
+        sl, fl, rl, seq, _, _, nb, c, ex = self.tk[k][name][:9]
         ld = self.nd(k, c, "dm", f"Ld_{name}", "__snax_bingo_kernel_idma_ring_load",
-                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb, rl), deps)
+                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb, rl),
+                     list(deps) + ([self.tk[k][name][9]] if cluster else []))
+        if cluster:
+            self.rings[k].read_chunk(0, seq - 1, ld, last=True)
         ld.exec_chunk = ex
         if name == self.last_name[k]:
             self.last_chunk[k] = ld
@@ -692,13 +725,17 @@ class FaDecodeKs(FaBuild):
         m = self.mem[R]
 
         def bcast(name, src, dst, flag, nb, n, after):
-            return self.cx_chip(R).host_node(
-                f"{name}_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
+            # ChipletBuild.hbm_cast: one host task, or with hbm_cast.mode posts its posts and waits
+            return self.hbm_cast(
+                R, f"{name}_k{R:02x}",
                 HostBingoKernelHbmBcastArgs(src, BingoMemSymbol(dst), BingoMemSymbol(flag), self.h_seq[m].address + 64,
                                             1, nb, n, m, self.engine[R]), after=after)
         xm = self.x_put = self.x_multicast(go, bcast)
-        if self.x_on_host:
-            self.edge(xm, self.prefetch[R])          # x first on the root memory chip's engine, then the root's ring
+        if self.x_on_host:                                  # x first on the root memory chip's engine, then its ring
+            if self.ring_mode == "cluster":
+                self.rings[R].start_after(self.done_of(xm))
+            else:
+                self.edge(self.done_of(xm), self.prefetch[R])
         # ---- x into every cluster's L1 ------------------------------------------------------------------------------
         xa, xw = {}, {}
         for k in self.chips:
@@ -707,7 +744,7 @@ class FaDecodeKs(FaBuild):
                 w = self.nd(k, c, "dm", "x_wait", "__snax_bingo_kernel_idma_fetch_flagged",
                             SnaxBingoKernelIdmaFetchFlaggedArgs(self.l3("xland"), xa[k, c], XB, self.l3("xtflag"), 1,
                                                                 1), [go[k]])
-                self.dfg.bingo_add_order_edge(xm, w)
+                self.dfg.bingo_add_order_edge(self.queued_of(xm), w)
                 xw[k, c] = w
         # ---- the new key's columns: a GEMV a W_KVA chunk on the clusters 1, each row put into the root's L3 ----------
         kv_puts = []
@@ -1027,14 +1064,14 @@ class FaDecodeKs(FaBuild):
         (dependency and flag edges); every write into HBM after all of them and after every chip's last ring load.
         Raises otherwise."""
         import networkx as nx
+        spans = self.collectives()      # each collective by its first task, descendants of its done one; before the copy
         gr = nx.DiGraph(self.dfg)
         gr.add_edges_from(self.dfg.order_edges)
-        nodes = self.dfg.node_list
-        mc = [t for t in nodes if (t.kernel_name or "").endswith("hbm_bcast")
-              or ((t.kernel_name or "").endswith("idma_put_flagged") and getattr(t.kernel_args, "bcast", 0))]
-        ch = [t for t in nodes if (t.kernel_name or "").endswith("xdma_chain_gather")]
+        done = {s: e for s, e, _ in spans}
+        mc = [s for s, _, kind in spans if kind != "chain"]
+        ch = [s for s, _, kind in spans if kind == "chain"]
         coll = mc + ch
-        desc = {t: nx.descendants(gr, t) for t in coll + [self.last_chunk[k] for k in self.chips]}
+        desc = {t: nx.descendants(gr, done.get(t, t)) for t in coll + [self.last_chunk[k] for k in self.chips]}
         bad = [(a.node_name, b.node_name) for i, a in enumerate(coll) for b in coll[i + 1:]
                if (a in mc or b in mc) and b not in desc[a] and a not in desc[b]]
         if bad:

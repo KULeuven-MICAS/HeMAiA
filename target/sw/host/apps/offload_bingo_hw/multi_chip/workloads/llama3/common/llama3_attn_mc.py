@@ -655,29 +655,30 @@ class ABuild(cm.ChipletBuild):
         """A task, or a list of them (a fetch or gather split over two engines), as a list of dependencies."""
         return list(t) if isinstance(t, (list, tuple)) else [t]
 
-    def stage_x_put(self, i, after):
+    def stage_x_put(self, i, after, ahead_of_rings=True):
         T, R = self.TAG, self.ROOT
         if self.x_mem and getattr(self, "x_cast", "multicast") == "unicast":
             # params x_cast unicast: a copy a chip in turn, in the fold order, the same tiles and flags
+            # ChipletBuild.hbm_cast (an HbmCast: one host task, or with hbm_cast.mode posts its posts and waits)
             from bingo_kernel_args import HostBingoKernelHbmUcastArgs
             m = self.mem[R]
-            return self.cx_chip(R).host_node(
-                f"x_hbm_ucast_i{i}", "__host_bingo_kernel_hbm_ucast",
+            return self.hbm_cast(
+                R, f"x_hbm_ucast_i{i}",
                 HostBingoKernelHbmUcastArgs(self.h_xhbm.address + i * self.XB, self.xland(i * self.XB),
                                             BingoMemSymbol(f"{T}_xtflag", offset=i * self.NXT * 64),
                                             BingoMemSymbol(f"{T}_xuprog", offset=i * len(self.chips) * self.NXT * 64),
                                             self.h_seq[m].address + 64, 1, self.XT, self.NXT, m, self.engine[R],
                                             self.order),
-                after=list(after))
+                after=list(after), ahead_of_rings=ahead_of_rings)
         if self.x_mem:
             from bingo_kernel_args import HostBingoKernelHbmBcastArgs
             m = self.mem[R]
-            return self.cx_chip(R).host_node(
-                f"x_hbm_bcast_i{i}", "__host_bingo_kernel_hbm_bcast",
+            return self.hbm_cast(
+                R, f"x_hbm_bcast_i{i}",
                 HostBingoKernelHbmBcastArgs(self.h_xhbm.address + i * self.XB, self.xland(i * self.XB),
                                             BingoMemSymbol(f"{T}_xtflag", offset=i * self.NXT * 64),
                                             self.h_seq[m].address + 64, 1, self.XT, self.NXT, m, self.engine[R]),
-                after=list(after))
+                after=list(after), ahead_of_rings=ahead_of_rings)
         return self.node(R, 0, self.roles["dm"], f"x_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
                          SnaxBingoKernelIdmaPutFlaggedArgs(
                              self.xsrc(i * self.XB), self.xland(i * self.XB),
@@ -695,7 +696,8 @@ class ABuild(cm.ChipletBuild):
         if self.x_mem:
             for i in range(1, self.NP):
                 puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
-            self.edge(puts[-1], self.prefetch[R])
+            if self.ring_mode == "prefetcher":         # weight_ring.mode cluster: no prefetcher on the root's host
+                self.edge(puts[-1], self.prefetch[R])
             # every o8 multicast of the root's waits for the last of these: two multicast sources at once stall the
             # fabric, and the task ends only once its last flag has landed
             self._x_put_last = puts[-1]
@@ -706,6 +708,8 @@ class ABuild(cm.ChipletBuild):
         start; the prefetcher then starts at the next chunk. Returns the first part."""
         from bingo_kernel_args import HostBingoKernelWeightPrefetchRangeArgs
         R = self.ROOT
+        if self.ring_mode != "prefetcher":
+            raise ValueError("params x_pf_split: splits the root's prefetcher, which weight_ring.mode cluster has none of")
         n = int(self.p.get("x_pf_chunks", self.WO0))
         if not 0 < n <= self.n_slots:
             raise ValueError(f"params x_pf_chunks={n}: 1..{self.n_slots} (the ring's slots: the first part never waits)")
@@ -743,7 +747,7 @@ class ABuild(cm.ChipletBuild):
                 if xd:
                     w = self.nd(cl, "xdma", f"x_xw_i{i}t{t}", "__snax_bingo_kernel_wait_flags",
                                 SnaxBingoKernelWaitFlagsArgs(f, tpr, 1), list(deps))
-                    self.dfg.bingo_add_order_edge(put, w)
+                    self.dfg.bingo_add_order_edge(self.queued_of(put), w)
                     if not out:
                         self._x_first[cl, i] = w
                     out.append(self.nd(cl, "xdma", f"x_xcp_i{i}t{t}", "__snax_bingo_kernel_xdma_1d_copy",
@@ -755,7 +759,7 @@ class ABuild(cm.ChipletBuild):
                             SnaxBingoKernelIdmaFetchFlaggedArgs(
                                 self.xland(i * self.XB + t * rb), self.pb(cl, i)["x"].view(t * rb), rb, f, tpr, 1),
                             list(deps))
-                self.dfg.bingo_add_order_edge(put, w)
+                self.dfg.bingo_add_order_edge(self.queued_of(put), w)
                 out.append(w)
             if not xd:
                 self._x_first[cl, i] = out[0]
@@ -767,7 +771,7 @@ class ABuild(cm.ChipletBuild):
                 raise ValueError("params x_split_frac: not with x_ahead (it orders the fetch as one task)")
             w = self.nd(cl, "dm", f"x_wait_i{i}", "__snax_bingo_kernel_wait_flags",
                         SnaxBingoKernelWaitFlagsArgs(flag, 1, 1), list(deps))
-            self.dfg.bingo_add_order_edge(put, w)
+            self.dfg.bingo_add_order_edge(self.queued_of(put), w)
             self._x_first[cl, i] = self._x_last[cl, i] = w
             a = self.XB - xx
             dst = self.pb(cl, i)["x"]
@@ -780,7 +784,7 @@ class ABuild(cm.ChipletBuild):
                          self.xland(i * self.XB), self.pb(cl, i)["x"], self.XB, flag, 1, 1),
                      list(deps) + ([put] if own else []))
         if not own:
-            self.dfg.bingo_add_order_edge(put, nd)
+            self.dfg.bingo_add_order_edge(self.queued_of(put), nd)
         self._x_first[cl, i] = self._x_last[cl, i] = nd
         return nd
 

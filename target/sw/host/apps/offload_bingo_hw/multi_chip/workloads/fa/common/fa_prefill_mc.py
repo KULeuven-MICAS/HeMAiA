@@ -452,7 +452,9 @@ class FaBuild(cm.ChipletBuild):
         self._chains = []                           # every reduce chain, in creation order
         # last_pair_chains (with serial chains): the last chunk's two clusters' chains of a W_O block run at the same
         # time, once every chip's prefetcher has pushed its last chunk (no memory-chip push then transits a hop chip,
-        # the third party of the concurrent-chain deadlock); the blocks stay in series
+        # the third party of the concurrent-chain deadlock); the blocks stay in series. With weight_ring.mode cluster
+        # these chains (and chain_gate_prefetch's) wait instead for every chip's ring to land its last chunk
+        # (after_pushes_landed)
         self.last_pair_chains = bool(p.get("last_pair_chains", False))
         # chain_gate_prefetch: every reduce chain waits for every chip's prefetcher (all its pushes done), so with
         # chain_concurrent no memory-chip push can transit a hop chip while two chains run
@@ -659,9 +661,15 @@ class FaBuild(cm.ChipletBuild):
         self.C_BYTES = self.C_MASK + (len(d.mask_patterns) * self.MASK_B if self.fresh else 0)
 
     def _make_rings(self):
-        """One ring a chip, shared by its two clusters: the per-chip schedule is the same for both."""
+        """One ring a chip, shared by its two clusters: the per-chip schedule is the same for both. weight_ring.mode
+        cluster: no prefetcher; the cluster that first asks for a chunk posts its run (WeightRings.post_chunk), and
+        weight_ring.queue is the entries of the push engine's queue the ring may hold (ChipletBuild.make_rings)."""
         p, st, T = self.p, self.st, self.TAG
         wr = p.get("weight_ring", {})
+        self.ring_mode = wr.get("mode", "prefetcher")
+        if self.ring_mode not in ("prefetcher", "cluster"):
+            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
+        self.ring_queue = int(wr.get("queue", 32))
         self.n_slots = int(wr.get("slots", 16))
         self.ring_batch = int(wr.get("batch", 4))
         self.ring_trailer = False
@@ -677,7 +685,8 @@ class FaBuild(cm.ChipletBuild):
         self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", self.n_slots * 64)
         self.h_rec = st.put_zeros(f"{T}_rec_l3", "uint8_t", 128)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", self.n_slots * self.slot_bytes, preload=True)
-        self.rings, self.prefetch, self.ring_take, self.ring_pos = {}, {}, {}, {}
+        self.rings, self.ring_take, self.ring_pos = {}, {}, {}
+        self.prefetch = {} if self.ring_mode == "prefetcher" else cm._NoPrefetcher(T)
         from bingo_kernel_args import HostBingoKernelWeightPrefetchArgs
         for k in self.chips:
             self.rings[k] = WeightRings(
@@ -686,6 +695,12 @@ class FaBuild(cm.ChipletBuild):
                 batch_head=self.ring_batch_head)
             self.ring_take[k] = []
             self.ring_pos[k] = {}
+            if self.ring_mode == "cluster":
+                self.rings[k].push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
+                                        edge=self.edge, depth=self.ring_queue)
+                self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
+                                  self.rings[k].queue_span)
+                continue
             self.prefetch[k] = self.cx_chip(k).host_node(
                 f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
                 HostBingoKernelWeightPrefetchArgs(
@@ -849,8 +864,16 @@ class FaBuild(cm.ChipletBuild):
                 raise ValueError(f"ring chunk {n} of chip {k:#04x} asked for before {len(takes)}")
             src, nb = self._src(k, n)
             pos[n] = len(takes)
-            takes.append(self.rings[k].take_ex(0, src=src, nbytes=nb) + (nb, self.rings[k].last_take))
-        sl, fl, rl, seq, _, _, nb, ex = takes[pos[n]]
+            if self.ring_mode == "cluster":
+                # the run's post on this cluster's DM core; release word 0: the post that reuses the slot follows its
+                # last reader (read_chunk below)
+                tup, post = self.rings[k].post_chunk(
+                    lambda nm, core, kern, args, after: self.node(k, c, core, nm, kern, args, after), 0, name,
+                    src=src, nbytes=nb, dm=dm)
+                takes.append(tup + (nb, self.rings[k].last_take, post))
+            else:
+                takes.append(self.rings[k].take_ex(0, src=src, nbytes=nb) + (nb, self.rings[k].last_take, None))
+        sl, fl, rl, seq, _, _, nb, ex, post = takes[pos[n]]
         ls = self.ls[cl]
         if dst is not None:
             si, slab, war = None, dst, []
@@ -864,7 +887,9 @@ class FaBuild(cm.ChipletBuild):
             if c == rel else []
         ld = self.node(k, c, dm, f"{name}", "__snax_bingo_kernel_idma_ring_load",
                        SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl if c == rel else 0),
-                       list(dict.fromkeys(war + prev + list(deps) + readers)))
+                       list(dict.fromkeys(war + prev + list(deps) + readers + ([post] if post is not None else []))))
+        if post is not None:
+            self.rings[k].read_chunk(0, seq - 1, ld, last=c == rel)
         if c != rel and (k, rel, n) in self.ld_node:
             self.dfg.bingo_add_edge(ld, self.ld_node[(k, rel, n)])
         self.last_ld[cl] = ld
@@ -1561,14 +1586,21 @@ class FaBuild(cm.ChipletBuild):
                     cm.remote, R, c, others, src=self.xch_addr(c, src_off), dst=dst, size=size,
                     junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[dstb] if dstb is not None else [])
                 serial = [] if self.chain_concurrent or self._last_chain is None else [self._last_chain]
+                # the chains that wait for every chip's pushes: after its prefetcher, or with weight_ring.mode cluster
+                # after the landing of its rings' last chunk (after_pushes_landed)
+                cluster, landed = self.ring_mode == "cluster", False
                 if self.last_pair_chains and i == self.NCH - 1 and half is not None and len(cs) == self.NC:
                     if self._pair_prev is None:
                         self._pair_prev = [self._last_chain] if self._last_chain is not None else []
-                    serial = list(self._pair_prev) + [self.prefetch[k] for k in self.chips]
+                    serial = list(self._pair_prev) + ([] if cluster else [self.prefetch[k] for k in self.chips])
+                    landed = cluster
                 if self.chain_gate_prefetch:
-                    serial = list(serial) + [self.prefetch[k] for k in self.chips]
+                    serial = list(serial) + ([] if cluster else [self.prefetch[k] for k in self.chips])
+                    landed = landed or cluster
                 out[c] = self.node(R, c, xdma, f"y_chain_c{c}_i{i}{tag}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                    before[c] + list(war.get(c, [])) + serial)
+                if landed:
+                    self.after_pushes_landed(self, out[c])
                 self._last_chain = out[c]
                 self._chains.append(out[c])
                 continue

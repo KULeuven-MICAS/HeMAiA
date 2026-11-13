@@ -98,7 +98,9 @@ still wait for the device's route). The two blocks' rings are separate L3 region
 attention's cache multicast and serial chains beside more pushes than the attention block alone. early_cache: as early,
 but the chips fed by the root's memory chip (whose two links also carry the cache multicast) start their second-block
 prefetchers only once the cache multicast is done, so the cache, which the attention's sweep waits for, has those links
-to itself.
+to itself. weight_ring.mode cluster (both blocks, key-split attention only): no prefetcher task; each block's rings
+start after the same tasks (pushes_after), their first posts in place of the prefetchers, and the streams' check takes
+a block's first posts as its first pushes.
 
 THE PUSH STREAMS. check_collectives also proves, for every ChainGather and every block's ring pushes on every chip,
 that the chain either follows the landing of the last chunk of each of the chip's rings of that block or precedes the
@@ -128,7 +130,8 @@ static_l1, l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, de
 d2d_rx_yield, relay_per_gather), then `attn` (fa_decode_mc.py's), `moe` (moe_decode_mc.py's) or `ffn`
 (ffn_decode_mc.py's, with y_dequant), and `layer`: attn (hp | ks: the attention block; ks takes fa_decode_ks_mc.py's
 params in `attn`), mlp (moe | ffn: the second block), stop (full | attn), mlp_prefetch (after | early | early_cache; ks:
-after), x_arow (stop attn: X in a_row; stop full takes the second block's form), chains_after_stream.
+after), x_arow (stop attn: X in a_row; stop full takes the second block's form), chains_after_stream, x_load_first
+(ks: the attention rings of the other chips the root's memory chip feeds start after the input norm's HBM read of x).
 """
 
 import os
@@ -182,7 +185,10 @@ def _spread_args(src, dst, n):
 
 
 def _reads_hbm(t):
-    """Whether task t is a copy whose source is in HBM (an address, or a handle of mem_level HBM)."""
+    """Whether task t is a copy whose source is in HBM (an address, or a handle of mem_level HBM). A ring's post
+    (engine_post, weight_ring.mode cluster) reads none: it queues the memory chip's push of its run."""
+    if t.kernel_name == "__snax_bingo_kernel_engine_post":
+        return False
     src = getattr(t.kernel_args, "src_addr", None)
     return isinstance(src, int) or getattr(src, "mem_level", None) == "HBM"
 
@@ -307,6 +313,9 @@ class MoePart(mdm.DBuild):
             return super()._split_prefetch(go, after)
         first = super()._split_prefetch({k: L.start for k in self.chips}, [])
         for k in self.chips:
+            if L.cluster_rings:
+                L.pushes_after(self, k, L.early_deps(k))
+                continue
             for dep in L.early_deps(k):
                 self.edge(dep, first[k])
         return first
@@ -356,8 +365,7 @@ class FfnPart(ffd.DBuild):
         prefetcher (early)."""
         L = self.layer
         for k in self.chips:
-            for dep in (L.early_deps(k) if L.early else [L.mlp_put]):
-                self.edge(dep, self.prefetch[k])
+            L.pushes_after(self, k, L.early_deps(k) if L.early else [L.mlp_put])
         return [L.mlp_put]
 
     def y_out(self, ready):
@@ -413,7 +421,19 @@ class LayerBuild(cm.ChipletBuild):
                              f"after the attention's chains)")
         self.early = pf in ("early", "early_cache")
         self.early_cache = pf == "early_cache"
+        # weight_ring.mode: both blocks' rings filled by prefetchers, or both posted by their clusters (key split only)
+        modes = {str(dict(common, **p[b]).get("weight_ring", {}).get("mode", "prefetcher"))
+                 for b in ["attn"] + ([self.mlp_kind] if self.stop == "full" else [])}
+        if len(modes) != 1:
+            raise ValueError(f"params attn / {self.mlp_kind} weight_ring.mode: one mode for both blocks, not "
+                             f"{sorted(modes)}")
+        self.cluster_rings = modes == {"cluster"}
+        if self.cluster_rings and self.attn_kind != "ks":
+            raise ValueError("params weight_ring.mode cluster: the key-split attention (layer.attn ks) only")
         self.chains_after_stream = bool(lp.get("chains_after_stream", False))
+        self.x_load_first = bool(lp.get("x_load_first", False))
+        if self.x_load_first and self.attn_kind != "ks":
+            raise ValueError("params layer.x_load_first: the key-split attention (layer.attn ks) only")
         self.part_checks, self.hbm_writes, self.check_copies = [], [], []
 
         # ---- the parts -------------------------------------------------------------------------------------------
@@ -585,12 +605,17 @@ class LayerBuild(cm.ChipletBuild):
         self.start = start = self.stamp("start", ends)
         self.go = {k: start for k in self.chips}
         for k in self.chips:
-            self.edge(start, self.attn.prefetch[k])
+            self.pushes_after(self.attn, k, [start])
         if self.attn_kind == "ks":
             self.input_norm_ks(start)
             # the root's ring after x's multicast: no push into C00's L3 beside the input norm's HBM read and x's
             # landing there
-            self.edge(self.attn_x_put, self.attn.prefetch[self.ROOT])
+            self.pushes_after(self.attn, self.ROOT, [self.attn_x_put])
+            if self.x_load_first:
+                # the other chips the root's memory chip feeds: their attention rings after the input norm's HBM read
+                for k in self.chips:
+                    if k != self.ROOT and self.mem[k] == self.mem[self.ROOT]:
+                        self.pushes_after(self.attn, k, [self.n_ld])
         else:
             self.input_norm(start)
         return dict(self.go)
@@ -629,7 +654,7 @@ class LayerBuild(cm.ChipletBuild):
     def early_deps(self, k):
         """What chip k's second-block prefetcher waits for with mlp_prefetch early: the chip's attention prefetcher;
         with early_cache, on the chips the root's memory chip feeds, also the attention's cache multicast."""
-        deps = [self.attn.prefetch[k]]
+        deps = self.push_heads(self.attn, k)
         if self.early_cache and self.mem[k] == self.mem[self.ROOT]:
             deps.append(self.attn.cache_mc)
         return deps
@@ -905,14 +930,14 @@ class LayerBuild(cm.ChipletBuild):
         every write into HBM after every multicast and chain; the window's one device read of HBM (the input norm's x)
         before every multicast and chain. Raises otherwise."""
         import networkx as nx
+        spans = self.collectives()      # each collective by its first task, descendants of its done one; before the copy
         gr = nx.DiGraph(self.dfg)
         gr.add_edges_from(self.dfg.order_edges)
-        nodes = self.dfg.node_list
-        mc = [t for t in nodes if (t.kernel_name or "").endswith("hbm_bcast")
-              or ((t.kernel_name or "").endswith("idma_put_flagged") and getattr(t.kernel_args, "bcast", 0))]
-        ch = [t for t in nodes if (t.kernel_name or "").endswith("xdma_chain_gather")]
+        done = {s: e for s, e, _ in spans}
+        mc = [s for s, _, kind in spans if kind != "chain"]
+        ch = [s for s, _, kind in spans if kind == "chain"]
         coll = mc + ch
-        desc = {t: nx.descendants(gr, t) for t in coll}
+        desc = {t: nx.descendants(gr, done[t]) for t in coll}
         bad = [(a.node_name, b.node_name) for i, a in enumerate(coll) for b in coll[i + 1:]
                if (a in mc or b in mc) and b not in desc[a] and a not in desc[b]]
         if bad:
@@ -937,7 +962,9 @@ class LayerBuild(cm.ChipletBuild):
         chains in opposite directions and on a GEMV before a wait, and prints the rest."""
         import networkx as nx
         A, M, nodes = self.attn, self.mlp, self.dfg.node_list
-        pref = [t for t in nodes if "weight_prefetch" in (t.kernel_name or "")]
+        # a block's pushes on a chip start with its prefetcher tasks, or with weight_ring.mode cluster its ring posts
+        pref = [t for t in nodes if "weight_prefetch" in (t.kernel_name or "")
+                or t.kernel_name == "__snax_bingo_kernel_engine_post"]
         streams = {}
         parts = [("attention", A, self.attn_ids)] + ([("second block", M, self.mlp_ids)] if M else [])
         for name, part, (lo, hi) in parts:

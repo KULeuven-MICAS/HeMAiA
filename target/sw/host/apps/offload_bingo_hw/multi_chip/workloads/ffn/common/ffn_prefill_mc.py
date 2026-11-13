@@ -429,9 +429,10 @@ class PBuild(cm.ChipletBuild):
         return self.xbuf[cl][0].view((so - self.xch_slots) * self.SLICE)
 
     def x_hbm_bcasts(self, go):
-        """The root's host queues its memory chip's push engine, one task a pass: the pass's X a tile at a time
-        into every chip's L3, each tile behind its flag. The root's prefetcher drives the same engine and holds the host
-        for the whole window, so it starts after the last of them. Returns the tasks, one a pass."""
+        """The root's host queues its memory chip's push engine, one cast a pass (ChipletBuild.hbm_cast: one host task,
+        or with hbm_cast.mode posts a post a group of tiles): the pass's X a tile at a time into every chip's L3, each
+        tile behind its flag. The root's prefetcher drives the same engine and holds the host for the whole window, so
+        it starts after the last of them. Returns the casts (HbmCast), one a pass."""
         R, T = self.ROOT, self.TAG
         m = self.mem[R]
         one = self.h_seq[m].address + 64                    # a word holding 1 in the memory chip's HBM: the flags' value
@@ -441,18 +442,25 @@ class PBuild(cm.ChipletBuild):
             flag = BingoMemSymbol(f"{T}_xtflag", offset=64 * i * self.TPP)
             if self.x_cast == "unicast":                # params x_cast unicast: a copy a chip, in the fold order
                 prog = BingoMemSymbol(f"{T}_xuprog", offset=64 * i * len(self.chips) * self.TPP)
-                kern, kargs = "__host_bingo_kernel_hbm_ucast", HostBingoKernelHbmUcastArgs(
-                    src, dst, flag, prog, one, 1, self.XT, self.TPP, m, self.engine[R], self.order)
+                kargs = HostBingoKernelHbmUcastArgs(src, dst, flag, prog, one, 1, self.XT, self.TPP, m, self.engine[R],
+                                                    self.order)
             else:
-                kern, kargs = "__host_bingo_kernel_hbm_bcast", HostBingoKernelHbmBcastArgs(
-                    src, dst, flag, one, 1, self.XT, self.TPP, m, self.engine[R])
-            out.append(self.cx_chip(R).host_node(f"x_hbm_bcast_i{i}_k{R:02x}", kern, kargs, after=[go[R]] + out[-1:]))
-        self.edge(out[-1], self.prefetch[R])
+                kargs = HostBingoKernelHbmBcastArgs(src, dst, flag, one, 1, self.XT, self.TPP, m, self.engine[R])
+            out.append(self.hbm_cast(R, f"x_hbm_bcast_i{i}_k{R:02x}", kargs, after=[go[R]] + out[-1:]))
+        if getattr(self, "ring_mode", "prefetcher") == "prefetcher":
+            self.edge(out[-1].end, self.prefetch[R])
         return out
 
+    def x_post(self, cast, t, k):
+        """The task of `cast` (x_hbm_bcasts: an HbmCast, or the task a layer puts X with) that queues pass-local tile t
+        for chip k: what a fetch of that tile spins behind (its order edge's producer)."""
+        if not isinstance(cast, cm.HbmCast):
+            return cast
+        return cast.tile(t, chip=k if self.x_cast == "unicast" else None)
+
     def _x_fetch(self, cl, i, off, nb, src, after, name, block=False):
-        """Bytes off .. off + nb of X_i into cluster cl's L1, behind their tiles' flags. `src` is the multicast task
-        (the hbm_bcast of pass i)."""
+        """Bytes off .. off + nb of X_i into cluster cl's L1, behind their tiles' flags. `src` is pass i's cast
+        (x_hbm_bcasts); the order edge comes from the task that queues the last of those tiles."""
         T, dm = self.TAG, self.roles["dm"]
         k, c = self.chip(cl), self.local(cl)
         xb = self.xbuf[cl][0]
@@ -462,7 +470,7 @@ class PBuild(cm.ChipletBuild):
                        SnaxBingoKernelIdmaFetchFlaggedArgs(self._xland(i * self.XB + off), xb.view(off) if block else xb,
                                                            nb, flag, nf, 1),
                        list(after))
-        self.dfg.bingo_add_order_edge(src, nd)
+        self.dfg.bingo_add_order_edge(self.x_post(src, off // self.XT + nf - 1, k), nd)
         return nd
 
     def x_wait_block(self, cl, b, src, after=()):
@@ -841,7 +849,7 @@ class PBuild(cm.ChipletBuild):
                                      + self.ex_push[(self.clusters(self.chip(cl))[1 - self.local(cl)], i)])
             dn_pass = {cl: [] for cl in range(self.N_CL)}
             if i == 0:
-                next_put = self.x_bc[-1]            # every multicast before the first gather
+                next_put = self.done_of(self.x_bc[-1])   # every multicast before the first gather
             lds = load(i, 0)
             prev_dn = {}
             for jl in range(h):
