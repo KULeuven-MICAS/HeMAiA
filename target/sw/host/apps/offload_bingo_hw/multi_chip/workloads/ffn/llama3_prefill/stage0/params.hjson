@@ -8,5 +8,4 @@
   rows: 64
   per_chip_image: true
   desc_in_image: true
-  d2d_rx_yield: [255, 0]
 }

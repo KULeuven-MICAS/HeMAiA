@@ -1,5 +1,5 @@
 // stage1: stage 0 + the keys by columns (common/fa_stages_mc.py), the optimised mapping. X multicast by the root's
-// memory chip (x_bcast memchip), the root's W_KVA pushed before it on the shared engine (x_bcast_after_prefetch),
+// memory chip (x_bcast memchip), the root's ring pushed behind it on the shared engine,
 // every other chip's at once. Each cluster copies its chip's W_KVA pair into L1 first (kv_wkva_first), then each of
 // its tiles of X as it lands, 70 % by the iDMA and 30 % by the xDMA (split_loads, split_frac 0.3); a GEMM a tile; each
 // [16 x 32] slice into the tile owner's L3 behind a flag. 0x41 and 0x43, two INT4 pairs each, make their second pair
@@ -12,7 +12,6 @@
   "kv_balance_ways": 4,
   "kv_wkva_first": true,
   "kv_balance": true,
-  "x_bcast_after_prefetch": true,
   "split_loads": true,
   "split_frac": 0.3,
   "num_chiplets": 16,
@@ -20,10 +19,6 @@
   "tokens": 256,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_rx_yield": [
-    255,
-    0
-  ],
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -42,7 +37,6 @@
   "y_store_halves": false,
   "y_windows": 4,
   "kv_slabs": "split",
-  "prefetch_after_x": false,
   "chain_concurrent": false,
   "checks": "y",
   "rope_fused": true,

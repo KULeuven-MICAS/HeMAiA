@@ -29,16 +29,15 @@
   x_cast: unicast
   per_chip_image: true
   desc_in_image: true
-  d2d_rx_yield: [255, 0]
   remote_broadcast: false
   // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
   // then every pass's y at its head, middle and tail
   checks: stages
   mask_c: true,
-  // the confirmed stage levers (28 Oct): X from HBM with the root's prefetch split around it (stage1234_xp), the
-  // sweep's o~ straight into o8 and its geometry on the xDMA (stage5_og), W_O by columns with the weights loaded
-  // ahead and the gather on the xDMA (stage678_oe without o_overlap: in the block, pass i + 1's o8 waits for that
-  // pass's x fetch, which follows pass i's y stores on the DM core, so o_overlap's order closes a cycle)
+  // x from HBM with the first chunks of each of the root's rings ahead of its multicasts (x_pf_split), the sweep's o~
+  // straight into o8 and its geometry on the xDMA, W_O by columns with the weights loaded ahead and the gather on the
+  // xDMA (no o_overlap: in the block, pass i + 1's o8 waits for that pass's x fetch, which follows pass i's y stores
+  // on the DM core, so o_overlap's order closes a cycle)
   x_bcast: "memchip",
   x_pf_split: true,
   ot8_fused: true,

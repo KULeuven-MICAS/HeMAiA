@@ -2,7 +2,7 @@
 // W_KVA ring chunk before the X multicast, the rest after) + sm_geom_xdma (stage 5 73.9 -> 70.65 us: each arena's
 // softmax geometry on the xDMA core; prime_fa_softmax CSR-primes those softmaxes).
 // full, the best full chain (measured as run stg_fresh_full_v3): as below + last_pair_chains (the last chunk's two clusters' reduce chains of a W_O block at the same time,
-// once every chip's prefetcher is done; the blocks in series).
+// once every chip's ring has landed its last chunk; the blocks in series).
 // full_v2: full + the stage 4-8 levers of 28 Oct: s4_reorder, s4_tile_absorb, s4_overlap (a chunk's rows land
 // without waiting for the previous chunk's sweep readers), skip_masked + row_swap (no wholly masked key tile; the
 // clusters take the other halves in chunk 1), ot8_fused (the sweep's normalisation quantises o~ into W_UV's A operand).
@@ -26,7 +26,6 @@
   "kv_balance_ways": 4,
   "kv_wkva_first": true,
   "kv_balance": true,
-  "x_bcast_after_prefetch": false,
   "split_loads": true,
   "split_frac": 0.3,
   "num_chiplets": 16,
@@ -34,10 +33,6 @@
   "tokens": 256,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_rx_yield": [
-    255,
-    0
-  ],
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -56,7 +51,6 @@
   "y_store_halves": true,
   "y_windows": 4,
   "kv_slabs": "split",
-  "prefetch_after_x": false,
   "chain_concurrent": false,
   "checks": "y",
   "rope_fused": true,

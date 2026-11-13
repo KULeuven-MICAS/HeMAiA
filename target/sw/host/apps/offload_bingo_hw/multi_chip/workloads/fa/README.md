@@ -15,8 +15,9 @@ fa/
     fa_llama_data.py       the Llama decode's cache, query, scales and golden (synthetic INT4 weights, llama3_data's
                            draw), and the softmax-statistics junction's arithmetic the decode ladder's golden uses
                            (../llama3/common/llama3_decode_ks_mc.py)
-    fa_decode_mc.py,       DSv2-Lite's MLA decode mapped as the prefill (head parallel) or split by key, used by
-    fa_decode_ks_mc.py     ../dsv2/layer1/decode/
+    fa_decode_ks_mc.py     DSv2-Lite's MLA decode split by key, used by ../dsv2/layer<N>/decode/layer
+    fa_decode_data.py      the MLA decode's data (a fresh causal prompt, the token its last) and the D2D route
+                           helpers fa_decode_ks_mc.py and the layer's stream report use
     fa_prefill_mc.py       driver and generator of the prefill workloads (the mapping below); its docstring
                            lists the parameters
     fa_stages_mc.py        the prefill split into stages (stage0 .. stage678) and chained again (full)

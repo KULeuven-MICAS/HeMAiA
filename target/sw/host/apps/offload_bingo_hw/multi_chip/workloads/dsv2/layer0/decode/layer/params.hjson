@@ -20,7 +20,6 @@
   per_chip_image: true
   desc_in_image: true
   fast_host_init: true
-  d2d_rx_yield: [255, 0]
   // the key-split MLA decode (dsv2/layer1/decode/mla_ks): one cached 64-key tile a chip on its cluster 0, the
   // token's tile on C00's cluster 1, every weight multiply a GEMV; x is the input norm's a_row multicast from C00's L1
   attn:
@@ -40,8 +39,6 @@
     weight_ring:
     {
       slots: 16
-      batch: 4
-      policy: 1
       head: 11
       batch_head: 1
     }
@@ -64,8 +61,6 @@
     weight_ring:
     {
       slots: 16
-      batch: 4
-      policy: 1
       head: 4
       batch_head: 1
     }
@@ -82,14 +77,12 @@
     gu_gemv: true
     y_dequant: true
   }
-  // the layer: the key-split attention, the second block, where the layer stops, the second block's weights pushed
-  // once X's multicast is done, and its first gather after its every ring's last chunk
+  // the layer: the second block, where the layer stops, and the second block's first gather after its every ring's
+  // last chunk (its weights are pushed once X's multicast is done)
   layer:
   {
-    attn: ks
     mlp: ffn
     stop: full
-    mlp_prefetch: after
     chains_after_stream: true
   }
 }

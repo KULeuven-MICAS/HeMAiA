@@ -5,9 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # DeepSeek-V2-Lite's layer-1 MoE prefill, the ablation's rung all; the code is
-# ../../common/moe_prefill_mc.py. The host weight prefetcher's build flags: host_kernel_lib.h
-# WEIGHT_PREFETCH_LEAN / WEIGHT_PREFETCH_PROFILE.
+# ../../common/moe_prefill_mc.py.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = moe/dsv2_l1_prefill_ablation/all
-PREFETCH_LEAN = 1
 include $(MK_DIR)../../common/moe.mk

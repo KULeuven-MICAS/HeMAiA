@@ -33,7 +33,6 @@
   per_chip_image: true
   desc_in_image: true
   l3_overlay: true
-  d2d_rx_yield: [255, 0]
   deq_per_row: true
   x_blocks: 4
   post_blocks: 4

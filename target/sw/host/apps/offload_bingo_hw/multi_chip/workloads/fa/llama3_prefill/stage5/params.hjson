@@ -24,7 +24,6 @@
   sync: edge
   per_chip_image: true
   desc_in_image: true
-  d2d_rx_yield: [255, 0]
   remote_broadcast: false
   // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
   // then every pass's y at its head, middle and tail

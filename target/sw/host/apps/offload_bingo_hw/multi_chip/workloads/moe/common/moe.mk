@@ -80,13 +80,5 @@ RISCV_CFLAGS += -DBINGO_CHECK_QUIET=$(CHECK_QUIET)
 # difference (bingo_api.h BINGO_CHECK_STATIC_ARGS)
 CHECK_STATIC_ARGS ?= 0
 RISCV_CFLAGS += -DBINGO_CHECK_STATIC_ARGS=$(CHECK_STATIC_ARGS)
-# 1: the host weight prefetcher counts its cycles by bucket and prints them after each quarter of
-# its chunks (host_kernel_lib.h WEIGHT_PREFETCH_PROFILE)
-PREFETCH_PROFILE ?= 0
-RISCV_CFLAGS += -DWEIGHT_PREFETCH_PROFILE=$(PREFETCH_PROFILE)
-# 1: the host weight prefetcher writes only the engine registers that change and keeps each ring's
-# next run once found (host_kernel_lib.h WEIGHT_PREFETCH_LEAN)
-PREFETCH_LEAN ?= 0
-RISCV_CFLAGS += -DWEIGHT_PREFETCH_LEAN=$(PREFETCH_LEAN)
 
 include $(APP_ROOT)/../../common.mk

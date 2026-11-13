@@ -21,8 +21,7 @@ ffn/
     ffn.mk                 the build every DeepSeek variant's Makefile includes
     (chiplet_mc.py, the multi-chiplet base every block builds on, and fabric.py are util/sim/multichip's, driver.py
      util/sim/common's, model_data.py util/sim/llm's, the GEMV helpers util/sim/gemm/gemv_utils.py's: see util/sim/multichip/README.md)
-  dsv2_l0_prefill/       DeepSeek-V2-Lite over a fresh 256-token prompt: stage0, stage123, stage45, full;
-                         stage123_cluster and stage123_cluster_s4, stage123 with the rings in cluster mode
+  dsv2_l0_prefill/       DeepSeek-V2-Lite over a fresh 256-token prompt: stage0, stage123, stage45, full
   dsv2_l0_prefill_ablation/  the paper's ablation at 64 tokens on 16 chips: base, bcast, bcast_reduce, all
   llama3_prefill/        Llama-3-8B over a fresh 256-token prompt at the model's size: stage0, stage123, stage45,
                          full; t64, the paper's one-pass Llama run; built with ../llama3/common/llama3.mk
@@ -38,8 +37,9 @@ Both models use the one mapping of `common/ffn_prefill_mc.py`: the tokens in pas
 cluster's L1; each weight chunk, as it streams in, used for all the pass's rows in one GEMM; the down projection split
 by output columns over a chip's two clusters and reduced slice by slice by ChainGathers into the root, under the next
 slices' GEMMs. **X comes from HBM**: every pass's X sits in the HBM of the root's memory chip (0x20), and the root's
-host queues that chip's push engine to multicast it into every chip's L3, a 64 KiB tile and its flag at a time, before
-the root's weight prefetcher starts. Rows a pass: an L1 holds a pass's X (256 KiB) beside the weight slabs and the A16/A8 buffers, so 128 rows for
+host queues that chip's push engine to multicast it into every chip's L3, a 64 KiB tile and its flag at a time, ahead
+of the root's weight-ring posts in that engine's queue. Each cluster posts its weight ring's runs to its memory chip's
+push engine from its DM core (`WeightRings.push_from`), so a ring's pushes are graph tasks. Rows a pass: an L1 holds a pass's X (256 KiB) beside the weight slabs and the A16/A8 buffers, so 128 rows for
 DeepSeek (hidden 2,048) and 64 for Llama (hidden 4,096).
 
 Each model's block in stage apps (`<model>_prefill/stage*/main_bingo.py`, each a standalone program of its stage on
@@ -52,7 +52,6 @@ copied from an HBM image), so a window is the stage alone:
 | `stage123` | one pass (tokens = rows), X in L1 before the window: gate\|up over the weight stream, dequantise and SwiGLU, the reshape D -> A, the quantise and the A8 exchange between a chip's clusters |
 | `stage45` | one pass, the chip's A8 in L1 before the window: the down slices over the weight stream, the ChainGathers into the root, the stores |
 | `full` | the whole 256-token block |
-| `stage123_cluster`, `stage123_cluster_s4` | `dsv2_l0_prefill` only: `stage123` with `weight_ring.mode: cluster`, every cluster's DM core posting its own ring's runs to its memory chip's push engine (no host prefetcher); `_s4` with 4 ring slots, so a ring wraps |
 
 `dsv2_l0_prefill`: two passes of 128 rows; the second copies each chunk from the L3 ring slot it landed in (the ring
 holds all of a cluster's chunks), so the weights stream from HBM once. `llama3_prefill`: four passes of 64 rows; every

@@ -17,7 +17,6 @@
   "kv_balance_ways": 4,
   "kv_wkva_first": true,
   "kv_balance": true,
-  "x_bcast_after_prefetch": false,
   "split_loads": true,
   "split_frac": 0.3,
   "num_chiplets": 16,
@@ -25,10 +24,6 @@
   "tokens": 1024,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_rx_yield": [
-    255,
-    0
-  ],
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -47,7 +42,6 @@
   "y_store_halves": true,
   "y_windows": 4,
   "kv_slabs": "split_kb",
-  "prefetch_after_x": false,
   "chain_concurrent": false,
   "checks": "y",
   "rope_fused": true,
@@ -100,8 +94,8 @@
   "kc_xs_late": true,
   "kx_mid_double": true,
   "yr_rel1": true,
-  // x_rest_early: the rest of x (chunks 2 on) behind chunk 0's key multicast and ahead of the root's prefetcher, not
-  // behind it (behind it, a full block's chunk 2 never gets its x)
+  // x_rest_early: the rest of x (chunks 2 on) behind chunk 0's key multicast and ahead of the rest of the root's
+  // ring, not behind its last run (behind it, a full block's chunk 2 never gets its x)
   "x_rest_early": true,
   // kx_per_chunk: each chunk's key tiles in buffers (and W_KVA / helped-pair copies) of their own, behind the chunk
   // before's q projections, so the key loop never sits beside a collector's held y block in L1

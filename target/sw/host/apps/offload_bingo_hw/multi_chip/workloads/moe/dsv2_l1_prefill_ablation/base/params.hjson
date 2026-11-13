@@ -22,7 +22,6 @@
     slots: 18
     head: 4
     batch_head: 1
-    queued: true
   }
   bcast: bcast_l1
   reduce: root
@@ -32,7 +31,6 @@
   warm_root: true
   dispatch_blocks: true
   route: dist
-  d2d_rx_yield: [255, 0]
   chain_concurrent: false
   l3_overlay: true
   prefetch_after_x: true

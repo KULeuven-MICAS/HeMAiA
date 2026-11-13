@@ -50,8 +50,8 @@ Weights stream plain.
 
 ## Measurement
 
-Two stamps on chip 0x00 bracket the block (the prefetchers start after the first, so the whole weight and cache
-stream counts); the window runs from the start stamp's end to the end stamp's. **Checks**, byte-exact: the decode
+Two stamps on chip 0x00 bracket the block (the rings' first posts and the HBM casts start after the first, so the
+whole weight and cache stream counts); the window runs from the start stamp's end to the end stamp's. **Checks**, byte-exact: the decode
 ladder's nine (the q halves, a far cluster's q, the root's statistics, a far chip's partial, y, and the appended K
 and V^T tiles, the last five copied from HBM into the root's L3 first); the prefill's y and per-stage stashes.
 

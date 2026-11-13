@@ -15,7 +15,6 @@
   per_chip_image: true
   desc_in_image: true
   fast_host_init: true
-  d2d_rx_yield: [255, 0]
   remote_broadcast: false
   bcast: bcast_l1
   reduce: chain
@@ -40,7 +39,6 @@
     checks: y
     mask_c: true
     x_bcast: "memchip"
-    x_pf_split: true
     ot8_fused: true
     sm_geom_xdma: true
     y_scatter: true

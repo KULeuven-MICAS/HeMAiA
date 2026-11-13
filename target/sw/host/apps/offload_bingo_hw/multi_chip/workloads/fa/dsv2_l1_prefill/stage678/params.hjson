@@ -1,10 +1,10 @@
 // stage678, the best of its ladder (measured as run stg_fresh_stage678_q8s): as below without post_root_first, + store_late (chunk 0's y stores after chunk 1's W_O loads on the root's DM
 // core; chunk 0's chains first on its xDMA).
 // stage678_q8c: as below + chain_concurrent (the two clusters' chains at once) + chain_gate_prefetch (every chain behind
-// every chip's prefetcher: no push in flight) + post_root_first (the root's chunk 1 W_UV ahead of chunk 0's stores).
+// every chip's last ring chunk: no push in flight) + post_root_first (the root's chunk 1 W_UV ahead of chunk 0's stores).
 // stage678_q8pt: as below + post_tiles (o_h's relayout and quantisation a query tile at a time behind its W_UV GEMM).
 // stage678_q8p: as below + last_pair_chains (the last chunk's two clusters' reduce chains of a W_O block at the same time,
-// once every chip's prefetcher is done; the blocks in series).
+// once every chip's ring has landed its last chunk; the blocks in series).
 // stage678_q8: as below + ot8_fused (the sweep's normalisation quantises o~ straight into W_UV's A operand:
 // simd_mla_normalise_q8; no transpose, no row-major -> A conversion, no separate quantisation).
 // stage678: W_UV, W_O and the reduce (stages 6, 7, 8), alone (common/fa_stages_mc.py stage "678"): every
@@ -18,10 +18,6 @@
   "tokens": 256,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_rx_yield": [
-    255,
-    0
-  ],
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -40,7 +36,6 @@
   "y_store_halves": true,
   "y_windows": 4,
   "kv_slabs": "split",
-  "prefetch_after_x": false,
   "chain_concurrent": true,
   "checks": "y",
   "rope_fused": true,

@@ -15,10 +15,6 @@
   "tokens": 256,
   "per_chip_image": true,
   "desc_in_image": true,
-  "d2d_rx_yield": [
-    255,
-    0
-  ],
   "model": "dsv2-lite-l1",
   "chunk": 128,
   "fresh": true,
@@ -37,7 +33,6 @@
   "y_store_halves": false,
   "y_windows": 4,
   "kv_slabs": "split",
-  "prefetch_after_x": true,
   "chain_concurrent": false,
   "checks": "y",
   "rope_fused": true,

@@ -15,12 +15,17 @@
   wbits: 4
   per_chip_image: true
   desc_in_image: true
-  d2d_rx_yield: [255, 0]
   remote_broadcast: false
   fast_host_init: true
   bcast: bcast_l1
   reduce: chain
   sync: edge
+  // each memory chip's push engine queue (32 entries): 12 for the attention's ring runs, 12 for the FFN's, 8 for the
+  // HBM casts (the KV cache unicasts)
+  hbm_cast:
+  {
+    queue: 8
+  }
   // the key-split attention decode block (../../common/llama3_decode_ks_mc.py), as llama3/decode/attn_ks runs it: one
   // cached tile of 64 keys a chip, the new key in a 16-key tile on the root's chip, two passes, the row maxima met by
   // the FP16 MAX junction, each chip's W_O pushes behind the partials' ChainGather
@@ -32,7 +37,7 @@
     w4_paired: true
     w_chunk_bytes: 65536
     w_buffers: 2
-    weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+    weight_ring: { slots: 8, head: 4, batch_head: 1, queue: 12 }
     passes: 2
     stats: max
     wo_push: after_reduce
@@ -48,7 +53,7 @@
     dn_cols: 128
     w_chunk_bytes: 98304
     w_buffers: 2
-    weight_ring: { slots: 8, batch: 4, policy: 1, head: 4, batch_head: 1 }
+    weight_ring: { slots: 8, head: 4, batch_head: 1, queue: 12 }
     x_row: true
     out_slots: 16
     start_per_chip: true

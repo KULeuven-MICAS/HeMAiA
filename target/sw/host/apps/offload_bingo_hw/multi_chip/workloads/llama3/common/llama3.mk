@@ -84,9 +84,5 @@ RISCV_CFLAGS += -DBINGO_CHECK_FAIL_DRAIN_CYCLES=$(CHECK_FAIL_DRAIN)
 # difference (bingo_api.h BINGO_CHECK_STATIC_ARGS)
 CHECK_STATIC_ARGS ?= 0
 RISCV_CFLAGS += -DBINGO_CHECK_STATIC_ARGS=$(CHECK_STATIC_ARGS)
-# 1: the host weight prefetchers write only the engine registers that change and keep each ring's next run
-# once found (host_kernel_lib.h WEIGHT_PREFETCH_LEAN), as the MoE block's best runs
-PREFETCH_LEAN ?= 1
-RISCV_CFLAGS += -DWEIGHT_PREFETCH_LEAN=$(PREFETCH_LEAN)
 
 include $(APP_ROOT)/../../common.mk

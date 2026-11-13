@@ -14,7 +14,6 @@
   per_chip_image: true
   desc_in_image: true
   fast_host_init: true
-  d2d_rx_yield: [255, 0]
   // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
   list_phases: true
   layer:
@@ -54,7 +53,6 @@
     kv_balance_ways: 4
     kv_wkva_first: true
     kv_balance: true
-    x_bcast_after_prefetch: false
     split_loads: true
     split_frac: 0.3
     wo_cols: false
@@ -72,7 +70,6 @@
     y_store_halves: true
     y_windows: 4
     kv_slabs: split_kb
-    prefetch_after_x: false
     chain_concurrent: false
     checks: y
     rope_fused: true
@@ -121,7 +118,6 @@
       slots: 18
       head: 4
       batch_head: 1
-      queued: true
     }
     bcast: bcast_l1
     reduce: chain

@@ -1,6 +1,6 @@
-// stage1234 (the optimal stages 1-4; was stage1234_xpa, run stg_llama3_stage1234_xpa): stage1234_xp + x_pf_chunks 1 + x_ahead; stage1234 + + the root's prefetcher split: its pass-0 chunks before the multicasts
-// stage1234: Llama-3-8B's attention, stages 1-4 alone (x, the projections, the K/V trade): its inputs in place before the window, its outputs checked
-// (llama3_stages_mc.py stage "1234"); otherwise full's mapping.
+// stage1234: Llama-3-8B's attention, stages 1-4 alone (x, the projections, the K/V trade): its inputs in place before
+// the window, its outputs checked (llama3_stages_mc.py stage "1234"); otherwise full's mapping, with one chunk of each
+// of the root's rings ahead of the x multicasts and the next pass's x work ahead of the K/V trade.
 {
   num_chiplets: 16
   num_clusters: 2
@@ -24,7 +24,6 @@
   sync: edge
   per_chip_image: true
   desc_in_image: true
-  d2d_rx_yield: [255, 0]
   remote_broadcast: false
   // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
   // then every pass's y at its head, middle and tail
@@ -33,7 +32,7 @@
   stage: "1234",
   x_bcast: "memchip",
   x_pf_split: true,
-  // as DSv2's stage01234_p: one chunk of each ring ahead of the X multicasts, the rest after
+  // one chunk of each of the root's rings ahead of the x multicasts, the rest after the last has landed
   x_pf_chunks: 1,
   // the next pass's RoPE table, first weight chunk and x fetch ahead of the K/V trade (as DSv2's s4_early)
   x_ahead: true

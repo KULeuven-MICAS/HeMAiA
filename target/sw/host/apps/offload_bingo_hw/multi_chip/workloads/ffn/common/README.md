@@ -91,8 +91,6 @@ generator rewrites `build/hbm/` under it.
   `target/sim/automation/sweep/common/gen_check.sh ffn/<variant> <out dir> <log>`
 - Simulate with the hang guard: `target/sim/automation/sweep/llm_blocks/ffn/stages.sh <tag>` (the tags are listed in
   `../README.md`)
-- The generator's log reports the weight rings' overwrite races (`ring races`: the runs the prefetcher's byte guard
-  holds back)
 
 The workloads, the ladders and the sweeps are described in `../README.md`; the runs and results in
 `target/sim/automation/sweep/llm_blocks/ffn/README.md`.
