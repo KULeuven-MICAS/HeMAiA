@@ -49,6 +49,7 @@ from bingo_dfg_report import BingoDFGReportMixin
 from bingo_dfg_staticl1 import BingoDFGStaticL1Mixin
 from bingo_dfg_schedule import BingoDFGScheduleMixin
 from bingo_dfg_hazards import BingoDFGHazardsMixin
+from bingo_dfg_collectives import BingoDFGCollectivesMixin
 
 
 class BingoDFG(
@@ -61,6 +62,7 @@ class BingoDFG(
     BingoDFGStaticL1Mixin,
     BingoDFGScheduleMixin,
     BingoDFGHazardsMixin,
+    BingoDFGCollectivesMixin,
     DiGraphWrapper[BingoNode],
 ):
     """Data Flow Graph (DFG) for Bingo."""
@@ -280,7 +282,10 @@ class BingoDFG(
         # 0. The per-block pictures, of the graph exactly as the application built it:
         #    every pass below adds entry, exit or dummy nodes a block never stated.
         self.bingo_visualize_blocks(output_dir, app_name)
-        # 1. Memory hazards, on the graph the application built: every two tasks of which one writes bytes the other
+        # 1. Broadcasts and gathers apart: every two collectives that may not run at once ordered, the missing edges
+        #    added (bingo_dfg_collectives.py), before any pass derives an order from the edges.
+        self.bingo_order_collectives()
+        # 2. Memory hazards, on the graph the application built: every two tasks of which one writes bytes the other
         #    touches are ordered by its edges (bingo_dfg_hazards.py; enforced where the compiler orders the cores).
         #    Then each device core's program, chosen from the cost model; with async_exec the VersaCore dispatches
         #    split where that gains, numbered; the CSR reuse along each GEMM core's program. Before any pass
@@ -293,7 +298,7 @@ class BingoDFG(
         if self.args_phases:
             from bingo_args_phases import bingo_args_phases
             bingo_args_phases(self, **self.args_phases)
-        # 2. Transformations
+        # 3. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()
         # Add Exit Nodes
@@ -409,7 +414,7 @@ class BingoDFG(
         # would see a sparser graph than the hardware actually executes.
         self.bingo_plan_static_l1(static_l1, output_dir=output_dir)
 
-        # 3. Emit C Code
+        # 4. Emit C Code
         self.bingo_emit_offload_c_code(
             app_name=app_name,
             output_path=os.path.join(output_dir, output_file_name),

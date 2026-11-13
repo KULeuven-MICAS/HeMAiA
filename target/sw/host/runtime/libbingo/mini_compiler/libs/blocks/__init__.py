@@ -23,7 +23,8 @@ from .fa_sweep import FaSweepBufs, FaSweepCfg, fa_sweep, fa_sweep_alloc
 from .flash_attention import FaCfg, FlashAttention
 from .linear import Linear, LinearCfg, record_spec
 from .load_stream import LoadStream, WeightRings
-from .gather import chain_gather, fa_gather
+from .collective import broadcast_put, chain_gather
+from .gather import fa_gather
 from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, MlaDimOut, MlaDimPV,
                   MlaDimPVCfg, MlaRowMax, MlaRowMaxCfg, MlaShardCfg, MlaShardOut, MlaShardP,
                   MlaShardPV, MlaShardScores, QAssemble, QAssembleCfg, RopeRows, RopeRowsCfg)
@@ -37,7 +38,7 @@ from .simd import (AddRow, AddRowCfg, ARowPack, ARowPackCfg, NormCfg, NormRowCfg
                    ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                    SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
-__all__ = ["chain_gather", "FaCfg", "FlashAttention", "fa_gather",
+__all__ = ["broadcast_put", "chain_gather", "FaCfg", "FlashAttention", "fa_gather",
            "FaSweepBufs", "FaSweepCfg", "fa_sweep", "fa_sweep_alloc", "Gather", "Linear",
            "LinearCfg", "LoadStream", "WeightRings", "record_spec",
            "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",

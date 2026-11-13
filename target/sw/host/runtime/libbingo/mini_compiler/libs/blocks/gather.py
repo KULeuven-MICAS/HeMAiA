@@ -58,14 +58,7 @@ from bingo_platform import writer_junction_index
 
 from ..verify import checks
 
-CHAIN_GATHER = "__snax_bingo_kernel_xdma_chain_gather"
-
-
-def chain_gather(add, name, args, after=()):
-    """One ChainGather, `add(name, kernel, args, deps)` making its task on the collector's xDMA core. Returns the task
-    the gather's output is ready after and its operands are free after. With the DFG's async_exec the compiler splits
-    it into a configure, a start and a wait (passes/bingo_dfg_schedule.py), the wait keeping the gather's name."""
-    return add(name, CHAIN_GATHER, args, list(after))
+from .collective import chain_gather
 
 
 def merged_golden(cfg, m_c, l_c):
@@ -172,8 +165,8 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct=None, verify=True, tol=0.02,
     # clusters' buffers directly, and nothing in the fabric would tell it that a partial is
     # still being written. Those three edges are the entire synchronisation.
     merged = g.l1("fa_ml_merged", part_bytes)
-    gather = g.node(
-        "GatherML", ctx.xdma, "__snax_bingo_kernel_xdma_chain_gather",
+    gather = chain_gather(
+        lambda name, kernel, args, deps: g.node(name, ctx.xdma, kernel, args, deps), "GatherML",
         SnaxBingoKernelXdmaChainGatherArgs(
             local_src=parts[0], chain=parts[1:] + [merged],
             size=part_bytes,

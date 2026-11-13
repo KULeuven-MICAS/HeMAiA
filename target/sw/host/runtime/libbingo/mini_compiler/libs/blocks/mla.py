@@ -692,8 +692,8 @@ class MlaAttention(Block):
 # shard's row maximum; the clusters exchange them and each takes the lanewise max m*; pass 2
 # runs the shard's softmax SEEDED at m* (seed_state 0), so every shard quantises P on one scale
 # and its PV needs no correction across clusters; the FP16 partials and row sums are then added
-# (AddRow) and normalised on the attention's cluster. The golden (workloads/fa/common/fa_data.py
-# FaData.golden) runs the same recurrence with the same seed.
+# (AddRow) and normalised on the attention's cluster. The key-split decode's golden
+# (workloads/fa/common/fa_decode_ks_mc/golden.py) runs the same recurrence with the same seed.
 
 @dataclass(frozen=True)
 class MlaShardCfg:
