@@ -15,7 +15,7 @@ rings the memory chiplet pushes weight chunks into.
                them (Linear._build_streamed), and schedule() is the table the prefetcher walks.
 """
 
-from bingo_kernel_args import SnaxBingoKernelIdmaRingLoadArgs, SnaxBingoKernelRingPushArgs
+from bingo_kernel_args import SnaxBingoKernelEnginePostArgs, SnaxBingoKernelIdmaRingLoadArgs
 
 from ..comm import Ctx
 from ..comm.ports import at_offset
@@ -209,12 +209,21 @@ class WeightRings:
         self.pusher = None
         self._runs = [[] for _ in range(n_rings)]
         self._held = [[] for _ in range(n_rings)]
+        # post_chunk / read_chunk (a ring several clusters read): per ring, chunk -> (its bytes, its run)
+        self._chunk = [{} for _ in range(n_rings)]
+        # boundary(): per ring, chunk -> (tasks after the run before it, tasks before its run)
+        self._bounds = [{} for _ in range(n_rings)]
+        # tail_before(): per ring, the tasks its last post comes before (close())
+        self._tail = [[] for _ in range(n_rings)]
+        # cluster mode: per ring, chunk -> the post of its run (post_of)
+        self._posts = [{} for _ in range(n_rings)]
 
     def push_from(self, *, memchip: int, engine: int, seq, edge, depth: int = 32,
                   seq_entries: int = 1024) -> None:
         """Cluster mode: every run of a ring is posted by the ring's cluster, a ring push
-        (offload_hw_kernels/idma.h ring_push) on its DM core, into the descriptor queue of push
-        engine `engine` of memory chip `memchip` (`depth` transfers), instead of the host's
+        (offload_hw_kernels/idma.h engine_post) on its DM core, into the descriptor queue of push
+        engine `engine` of memory chip `memchip` (`depth`: the transfers of the queue the rings
+        may hold, all 32 or a share of them, the rest kept for other posters), instead of the host's
         prefetcher walking schedule(). `seq` is that memory chip's sequence table, `seq_entries`
         64-B entries, entry i holding i; `edge(a, b)` adds a graph edge. A push's edges are the
         protocol:
@@ -237,12 +246,87 @@ class WeightRings:
         if any(self.entries):
             raise ValueError("WeightRings.push_from: chunks were taken before the rings were set to cluster mode")
         self.pusher = dict(memchip=int(memchip), engine=int(engine), seq=seq, edge=edge, share=share,
-                           seq_entries=int(seq_entries), start=None)
+                           seq_entries=int(seq_entries), start=[])
+
+    def boundary(self, ring: int, k: int, *, before=(), after=()) -> None:
+        """Cluster mode: chunk k of `ring` starts a run, and the push engine's queue takes this
+        ring's runs up to chunk k - 1, then another poster's entries, then the rest: the post of
+        the run that ends at chunk k - 1 comes before every task of `before` (the other poster's
+        first post), and the post of chunk k's run after every task of `after` (its last post).
+        Call it before chunk k is taken; close() settles a boundary the ring never reaches."""
+        if self.pusher is None:
+            raise ValueError("WeightRings.boundary: cluster mode only (push_from)")
+        if k < 1 or k < len(self.entries[ring]):
+            raise ValueError(f"WeightRings.boundary: chunk {k} of ring {ring}; 1.. and not taken yet")
+        b, a = self._bounds[ring].setdefault(k, ([], []))
+        b += list(before)
+        a += list(after)
+
+    def runs_of(self, ring: int):
+        """Cluster mode: [(a run's post, the loads of its chunks)] of `ring`, in ring order (load_chunk and
+        read_chunk's last readers; a post_chunk ring's other readers precede those)."""
+        loads = {k: ld for _a, _b, k, ld in self._held[ring]}
+        out, order = {}, []
+        for k, post in sorted(self._posts[ring].items()):
+            if post not in out:
+                out[post] = []
+                order.append(post)
+            if k in loads:
+                out[post].append(loads[k])
+        return [(p, out[p]) for p in order]
+
+    def queue_span(self):
+        """Cluster mode: (each ring's first post, each ring's last run's first load) -- once that load has
+        run, every transfer the rings posted has left the engine's queue (push_from) -- or None if a ring's last
+        run has no load yet."""
+        runs = [r for r in self._runs if r]
+        if any(r[-1][1] is None for r in runs):
+            return None
+        return [r[0][0] for r in runs], [r[-1][1] for r in runs]
+
+    def post_of(self, ring: int, k: int):
+        """Cluster mode: the post of the run holding chunk k of `ring` (taken already)."""
+        if k not in self._posts[ring]:
+            raise ValueError(f"WeightRings.post_of: chunk {k} of ring {ring} has no post (not taken, or not cluster mode)")
+        return self._posts[ring][k]
+
+    def post_after(self, ring: int, k: int, tasks) -> None:
+        """Cluster mode: the post of the run holding chunk k of `ring` follows every task of `tasks`: an edge now if
+        chunk k is taken, else a boundary() at k (chunk k starts a run) that they join as `after`."""
+        if k < len(self.entries[ring]):
+            for t in tasks:
+                self.pusher["edge"](t, self.post_of(ring, k))
+        else:
+            self.boundary(ring, k, after=tasks)
+
+    def tail_before(self, ring: int, tasks) -> None:
+        """Cluster mode: the ring's last post (made by the time close() runs) comes before every task of
+        `tasks` (another poster's first post into the same queue: the engine runs the whole ring first)."""
+        if self.pusher is None:
+            raise ValueError("WeightRings.tail_before: cluster mode only (push_from)")
+        self._tail[ring] += list(tasks)
+
+    def close(self) -> None:
+        """Cluster mode: a boundary() past a ring's last chunk puts the ring's last post before its
+        `before` tasks (and its `after` tasks have no run to hold back); so does tail_before()."""
+        if self.pusher is None:
+            return
+        for ring, bounds in enumerate(self._bounds):
+            runs = self._runs[ring]
+            for k, (before, _after) in bounds.items():
+                if k >= len(self.entries[ring]) and runs:
+                    for t in before:
+                        self.pusher["edge"](runs[-1][0], t)
+            bounds.clear()
+            for t in self._tail[ring] if runs else ():
+                self.pusher["edge"](runs[-1][0], t)
+            self._tail[ring] = []
 
     def start_after(self, node) -> None:
-        """Cluster mode: each ring's first push follows `node` (the window's start)."""
+        """Cluster mode: each ring's first push follows `node` (the window's start; another
+        poster's last post into the same queue, so the engine runs that first). Calls add up."""
         p = self.pusher
-        p["start"] = node
+        p["start"].append(node)
         for runs in self._runs:
             if runs:
                 p["edge"](node, runs[0][0])
@@ -254,6 +338,8 @@ class WeightRings:
         stream (the same kind; kind 0: the next byte of the same address range; kind 1: the
         same record field, the next offset -- two experts adjacent in HBM never merge)."""
         run = self._run[ring]
+        if k in self._bounds[ring]:
+            return False                # boundary(): the chunk starts a run
         # k == 1: a ring's first run is chunk 0 alone (host_kernel_lib.h, the same rule)
         lim = self.batch_routed if kind & 1 else self.batch
         if run is not None and self.batch_head and k - run[1] < self.head:
@@ -348,31 +434,84 @@ class WeightRings:
             ld.ring_start = runs[0][0]
         return ld, sl
 
-    def _push(self, node, dm, name, ring, new, lo, src, nbytes, slot, flag, k):
+    def _push(self, node, dm, name, ring, new, lo, src, nbytes, slot, flag, k, shared=False):
         """Cluster mode: the push of chunk k's run, made when the chunk starts it, else grown by
-        the chunk. Its edges: push_from()."""
+        the chunk. Its edges: push_from(). `shared` (post_chunk): every last reader of the bytes
+        it overwrites, not just the newest (the readers are on more than one cluster)."""
         p, runs = self.pusher, self._runs[ring]
         if new:
             if k + 1 >= p["seq_entries"]:
                 raise ValueError(f"WeightRings: chunk {k} of ring {ring}; the sequence table has "
                                  f"{p['seq_entries']} entries")
-            deps = [runs[-1][0]] if runs else ([p["start"]] if p["start"] is not None else [])
+            deps = [runs[-1][0]] if runs else list(p["start"])
+            if k in self._bounds[ring]:
+                before, after = self._bounds[ring][k]
+                if runs:
+                    for t in before:
+                        p["edge"](runs[-1][0], t)
+                deps += after
             if len(runs) >= p["share"]:
                 deps.append(runs[-p["share"]][1])
-            deps.append(self._reader(ring, len(runs), lo, lo + nbytes))
-            push = node(f"{name}_push", dm, SnaxBingoKernelRingPushArgs.KERNEL_NAME,
-                        SnaxBingoKernelRingPushArgs(src, slot, nbytes, at_offset(p["seq"], 64 * (k + 1)), flag,
+            deps += self._readers(ring, len(runs), lo, lo + nbytes) if shared else \
+                [self._reader(ring, len(runs), lo, lo + nbytes)]
+            push = node(f"{name}_push", dm, SnaxBingoKernelEnginePostArgs.KERNEL_NAME,
+                        SnaxBingoKernelEnginePostArgs(src, slot, nbytes, at_offset(p["seq"], 64 * (k + 1)), flag,
                                                     1, p["memchip"], p["engine"]),
                         list(dict.fromkeys(d for d in deps if d is not None)))
-            runs.append([push, None, k])
+            runs.append([push, None, k, lo, lo + nbytes])
+            self._posts[ring][k] = push
             return push
         push = runs[-1][0]
         push.kernel_args.size += nbytes
         push.kernel_args.chunks += 1
-        r = self._reader(ring, len(runs) - 1, lo, lo + nbytes)
-        if r is not None:
-            p["edge"](r, push)
+        runs[-1][4] = runs[-1][3] + push.kernel_args.size
+        self._posts[ring][k] = push
+        for r in (self._readers(ring, len(runs) - 1, lo, lo + nbytes) if shared else
+                  [self._reader(ring, len(runs) - 1, lo, lo + nbytes)]):
+            if r is not None:
+                p["edge"](r, push)
         return push
+
+    def post_chunk(self, node, ring: int, name: str, *, src: int, nbytes: int, dm: int, kind: int = 0,
+                   offset: int = 0):
+        """Cluster mode, a ring several clusters read (FlashAttention's one ring a chip, both
+        clusters loading every chunk): take_ex() of the ring's next chunk and its run's post,
+        `<name>_push` on core `dm` (`node(name, core, kernel, args, deps)` names the posting
+        cluster), with no load. Returns (take_ex()'s tuple, release word 0, the post). Every load
+        of the chunk follows the post and declares itself with read_chunk(); the chunk's last
+        reader is where the post that overwrites its bytes comes after."""
+        if self.pusher is None:
+            raise ValueError("WeightRings.post_chunk: cluster mode only (push_from); else take_ex()")
+        if kind & 1:
+            raise ValueError(f"WeightRings: {name} is a routed chunk; cluster mode pushes dense chunks only")
+        sl, fl, _rl, seq, how, nb, r, new, rel = self._take_ex(ring, src=src, nbytes=nbytes, kind=kind,
+                                                               offset=offset)
+        post = self._push(node, dm, name, r, new, rel, int(src) + int(offset), nbytes, sl, fl, seq - 1,
+                          shared=True)
+        self._chunk[r][seq - 1] = (rel, rel + nbytes, len(self._runs[r]) - 1)
+        return (sl, fl, 0, seq, how, nb), post
+
+    def read_chunk(self, ring: int, k: int, load, last: bool) -> None:
+        """Cluster mode, after post_chunk(): `load` reads chunk k (its sequence number - 1) of
+        `ring`. The first load of a run's first chunk is the run's queue-share witness. `last`:
+        no other load of the chunk comes after this one (they precede it by edges): the post that
+        overwrites the chunk's bytes follows it. A post made already gets that edge here."""
+        lo, hi, m = self._chunk[ring][k]
+        runs = self._runs[ring]
+        load.ring_start = runs[0][0]
+        if runs[m][2] == k and runs[m][1] is None:
+            runs[m][1] = load
+        if not last:
+            return
+        held = self._held[ring]
+        i = len(held)
+        while i and held[i - 1][2] > k:
+            i -= 1
+        held.insert(i, (lo, hi, k, load))
+        for later in runs[m + 1:]:
+            if later[3] < hi and lo < later[4]:
+                self.pusher["edge"](load, later[0])
+                break
 
     def _reader(self, ring, m, lo, hi):
         """Cluster mode: the newest load of a chunk with bytes in [lo, hi) of `ring`, which run m
@@ -387,6 +526,13 @@ class WeightRings:
             if a < hi and lo < b:
                 return ld
         return None
+
+    def _readers(self, ring, m, lo, hi):
+        """post_chunk's _reader: the last reader of every chunk with bytes in [lo, hi) of `ring`
+        down to run m - share (the queue-share edge orders the older ones)."""
+        runs, share = self._runs[ring], self.pusher["share"]
+        floor = runs[m - share][2] if m >= share else 0
+        return [ld for a, b, k, ld in self._held[ring] if k >= floor and a < hi and lo < b]
 
     def schedule(self) -> list:
         """uint64 words: chunks per ring (4), first entry per ring (4), then 4 per entry."""

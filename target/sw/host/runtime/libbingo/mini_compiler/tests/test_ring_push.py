@@ -20,14 +20,14 @@ import networkx as nx
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import _bingo_paths  # noqa: F401,E402
 from bingo_dfg import BingoDFG                                        # noqa: E402
-from bingo_kernel_args import SnaxBingoKernelGemmFullArgs, SnaxBingoKernelRingPushArgs  # noqa: E402
+from bingo_kernel_args import SnaxBingoKernelEnginePostArgs, SnaxBingoKernelGemmFullArgs  # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol        # noqa: E402
 from bingo_node import BingoNode                                      # noqa: E402
 from libs.blocks import WeightRings                                   # noqa: E402
 
 FAILED = []
 GEMM, SIMD, XDMA, DM, HOST = 0, 1, 2, 3, 4
-PUSH = SnaxBingoKernelRingPushArgs.KERNEL_NAME
+PUSH = SnaxBingoKernelEnginePostArgs.KERNEL_NAME
 LOAD = "__snax_bingo_kernel_idma_ring_load"
 SEQ = 0x200000000000
 
@@ -169,6 +169,104 @@ for c in range(2):
     pos = {t: i for i, t in enumerate(order)}
     ok = all(pos[pp] < pos[ld] for ld, _, _ in loads[c] for pp in d.predecessors(ld) if pp.kernel_name == PUSH)
     check(f"cluster {c}: every push before its run's loads", ok)
+
+def shared_ring(defer):
+    """One ring both clusters read: a post each run (post_chunk), each chunk read by both clusters, the releasing one
+    last; that last read made `defer` chunks later. Returns (dfg, [(chunk, lo, hi, its post, its last read)], posts)."""
+    d2 = new_dfg()
+    r2s = WeightRings(slots=BingoMemSymbol("s2"), flags=BingoMemSymbol("f2"), releases=BingoMemSymbol("r2"), n_rings=1,
+                      n_slots=4, slot_bytes=8192, batch=2)
+    r2s.push_from(memchip=0x20, engine=1, seq=BingoMemFixedAddr(SEQ, mem_level="HBM"), edge=d2.bingo_add_edge, depth=8)
+    st2 = task(d2, DM, "start", "__snax_bingo_kernel_stamp", None)
+    r2s.start_after(st2)
+    chunks2, late, src2 = [], [], 0x300000000000
+    sizes2 = (8192, 4096, 4096, 8192)
+
+    def finish(jj, tt, pp, ff, rr):
+        last = task(d2, DM, f"ld{jj}_c{rr}", LOAD, None, [pp, ff], cluster=rr)
+        r2s.read_chunk(0, tt[3] - 1, last, last=True)
+        chunks2[jj] = chunks2[jj] + (last,)
+    for j in range(14):
+        nb = sizes2[j % len(sizes2)]
+        c = j % 2
+        tup, post = r2s.post_chunk(lambda n, core, kern, args, after, c=c: task(d2, core, f"{n}_c{c}", kern, args,
+                                                                              after, cluster=c),
+                                   0, f"ld{j}", src=src2, nbytes=nb, dm=DM)
+        src2 += nb
+        rel = (j // 3) % 2                      # the cluster that reads the chunk last
+        first = task(d2, DM, f"ld{j}_c{1 - rel}", LOAD, None, [post], cluster=1 - rel)
+        r2s.read_chunk(0, tup[3] - 1, first, last=False)
+        late.append((j, tup, post, first, rel))
+        chunks2.append((j, tup[0].offset, tup[0].offset + nb, post))
+        for x in [x for x in late if x[0] <= j - defer]:
+            finish(*x)
+        late = [x for x in late if x[0] > j - defer]
+    for x in late:
+        finish(*x)
+    posts2 = []
+    for j, lo, hi, post, *_ in chunks2:
+        if not posts2 or posts2[-1] is not post:
+            posts2.append(post)
+    return d2, chunks2, posts2
+
+
+for defer, what in ((0, "each last read made right away"), (6, "the last reads made six chunks late")):
+    print(f"\na ring both clusters read (post_chunk / read_chunk), {what}")
+    d2, chunks2, posts2 = shared_ring(defer)
+    overwriter = {j: next((q for q in posts2[posts2.index(post) + 1:] if q.kernel_args.dst_addr.offset < hi
+                           and lo < q.kernel_args.dst_addr.offset + q.kernel_args.size), None)
+                  for j, lo, hi, post, last in chunks2}
+    missing = [(j, overwriter[j].node_name) for j, lo, hi, post, last in chunks2
+               if overwriter[j] is not None and not nx.has_path(d2, last, overwriter[j])]
+    check("every post follows the last reader of the bytes it overwrites", not missing, missing[:4])
+    check("the shared ring's graph has no cycle", nx.is_directed_acyclic_graph(d2))
+    if defer:
+        check("some last read is made after the post that overwrites it (the late edge is needed)",
+              any(q is not None and last.node_id > q.node_id for (j, lo, hi, post, last) in chunks2
+                  for q in [overwriter[j]]))
+    else:
+        many = [q for q in posts2 if sum(1 for j, lo, hi, p, l in chunks2 if overwriter[j] is q) > 1]
+        check("some post overwrites two chunks read last by different clusters (every last reader is needed)",
+              any(len({l.assigned_cluster_id for j, lo, hi, p, l in chunks2 if overwriter[j] is q}) > 1 for q in many))
+check("post_chunk outside cluster mode", *raises(lambda: WeightRings(
+    slots=BingoMemSymbol("s3"), flags=BingoMemSymbol("f3"), releases=BingoMemSymbol("r3"), n_rings=1, n_slots=4,
+    slot_bytes=8192).post_chunk(None, 0, "x", src=0, nbytes=4096, dm=DM), "cluster mode only"))
+
+print("\nanother poster between a ring's runs: boundary, post_after, tail_before, runs_of")
+d4 = new_dfg()
+r4 = WeightRings(slots=BingoMemSymbol("s4"), flags=BingoMemSymbol("f4"), releases=BingoMemSymbol("r4"), n_rings=1,
+                 n_slots=8, slot_bytes=8192, batch=4)
+r4.push_from(memchip=0x20, engine=0, seq=BingoMemFixedAddr(SEQ, mem_level="HBM"), edge=d4.bingo_add_edge, depth=8)
+r4.start_after(task(d4, DM, "start", "__snax_bingo_kernel_stamp", None))
+cast_first = task(d4, HOST, "cast_post0", "__host_bingo_kernel_engine_post", None)
+cast_last = task(d4, HOST, "cast_post1", "__host_bingo_kernel_engine_post", None, [cast_first])
+route = task(d4, XDMA, "route", "__snax_bingo_kernel_moe_dispatch", None)
+r4.boundary(0, 5, before=[cast_first], after=[cast_last])     # the cast between chunk 4's run and chunk 5's
+r4.post_after(0, 8, [route])                                  # not taken yet: a boundary at 8 behind the route
+lds4 = []
+for j in range(12):
+    ld4, _ = r4.load_chunk(lambda n, core, kern, args, after: task(d4, core, n, kern, args, after), 0, f"ld{j}",
+                           src=0x100000000000 + j * 4096, nbytes=4096, slab=0x10000, war=lds4[-1:], dm=DM)
+    lds4.append(ld4)
+late_dep = task(d4, SIMD, "late_dep", "__snax_bingo_kernel_simd_mul_tiles", None, [lds4[0]])
+r4.post_after(0, 2, [late_dep])                               # taken already: an edge into its run's post
+tail = task(d4, HOST, "next_cast", "__host_bingo_kernel_engine_post", None)
+r4.tail_before(0, [tail])
+r4.close()
+P = lambda k: r4.post_of(0, k)                                # noqa: E731
+check("chunks 5 and 8 start runs (boundaries), chunk 2 joins chunk 1's",
+      P(5) is not P(4) and P(8) is not P(7) and P(2) is P(1), [p.node_name for p in (P(1), P(2), P(4), P(5), P(8))])
+check("the run before the boundary is posted before the cast, the run after it after the cast's last post",
+      d4.has_edge(P(4), cast_first) and d4.has_edge(cast_last, P(5)))
+check("post_after before the chunk is taken: its run's post follows the task", d4.has_edge(route, P(8)))
+check("post_after once the chunk is taken: an edge into its run's post", d4.has_edge(late_dep, P(2)))
+check("tail_before: the ring's last post before the task, once closed", d4.has_edge(P(11), tail))
+runs4 = r4.runs_of(0)
+check("runs_of: the runs' posts in ring order, each with its chunks' loads",
+      [p for p, _ in runs4] == sorted({P(k) for k in range(12)}, key=lambda t: t.node_id)
+      and [ld for _, ls in runs4 for ld in ls] == lds4, [(p.node_name, len(ls)) for p, ls in runs4])
+check("the graph with the boundaries has no cycle", nx.is_directed_acyclic_graph(d4))
+check("a boundary at a chunk taken already", *raises(lambda: r4.boundary(0, 3), "not taken yet"))
 
 print("\nwhat cluster mode refuses")
 _, r2, _, _ = build(chunks=2)

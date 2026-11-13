@@ -365,38 +365,38 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         return a
 
 
-class SnaxBingoKernelRingPushArgs(BingoKernelArgs):
-    """One run of a weight ring, posted by a cluster's DM core into the push engine queue of
-    its memory chip (offload_hw_kernels/idma.h): `size` bytes from `src_addr` in HBM into the
-    ring at `dst_addr`, then `chunks` 64-B flags from the sequence table at `seq_addr` into
-    the flag words at `flag_addr`. The engine is `engine` of memory chip `memchip`. A run
-    grows while chunks join it (WeightRings, cluster mode), so `size` and `chunks` change
-    until the graph is emitted."""
-    KERNEL_NAME = "__snax_bingo_kernel_ring_push"
+class SnaxBingoKernelEnginePostArgs(BingoKernelArgs):
+    """One post into the descriptor queue of push engine `engine` of memory chip `memchip`,
+    made by a DM core (offload_hw_kernels/idma.h engine_post): `size` bytes from `src_addr` in
+    HBM to `dst_addr`, then `chunks` 64-B flags, records from `flag_src` in HBM, to the flag
+    words from `flag_addr` on (64 B apart). Its user: a weight ring's run (WeightRings, cluster
+    mode; a run grows while chunks join it, so `size` and `chunks` change until the graph is
+    emitted). A host posts the same way: HostBingoKernelEnginePostArgs."""
+    KERNEL_NAME = "__snax_bingo_kernel_engine_post"
 
-    def __init__(self, src_addr, dst_addr, size: int, seq_addr, flag_addr, chunks: int,
+    def __init__(self, src_addr, dst_addr, size: int, flag_src, flag_addr, chunks: int,
                  memchip: int, engine: int):
         self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
-        self.seq_addr, self.flag_addr, self.chunks = seq_addr, flag_addr, int(chunks)
+        self.flag_src, self.flag_addr, self.chunks = flag_src, flag_addr, int(chunks)
         self.memchip, self.engine = int(memchip), int(engine)
 
     def accesses(self):
-        # the weights in HBM and the ring and its flags: the graph's ring edges order them
-        return [Sync("src_addr"), Sync("dst_addr"), Sync("seq_addr"), Sync("flag_addr")]
+        # the source in HBM, the destination and its flags: the graph's edges and the flags order them
+        return [Sync("src_addr"), Sync("dst_addr"), Sync("flag_src"), Sync("flag_addr")]
 
     def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_ring_push_args_t"
+        return "__snax_bingo_kernel_engine_post_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         # the struct holds the two queue entries as the queue window takes them (device_kernel_args.h)
         if self.size <= 0 or self.chunks < 1:
-            raise ValueError(f"ring push of {self.chunks} chunks, {self.size} B")
+            raise ValueError(f"engine post of {self.chunks} flags, {self.size} B")
         a = {}
         self._process_addr(self.src_addr, "data_src", a, handle_name_map)
         self._process_addr(self.dst_addr, "data_dst", a, handle_name_map)
         a["data_len_lo"], a["data_len_hi"] = str(self.size), "0"
         a["data_doorbell"], a["data_ctrl"] = "0", "0"
-        self._process_addr(self.seq_addr, "flag_src", a, handle_name_map)
+        self._process_addr(self.flag_src, "flag_src", a, handle_name_map)
         self._process_addr(self.flag_addr, "flag_dst", a, handle_name_map)
         a["flag_len_lo"], a["flag_len_hi"] = str(64 * self.chunks), "0"
         a["flag_doorbell"], a["flag_ctrl"] = "0", "0"

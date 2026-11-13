@@ -25,7 +25,7 @@ THE CONSTANTS:
   FAR_BYTES_PER_CYCLE      a transfer that leaves the chip (D2D links, the memory chip's HBM)
   DMA_LATENCY, FAR_LATENCY a transfer's first beat: in the chip, across the package
   PUSH_BYTES_PER_CYCLE     a memory chip's push of weight chunks into one compute chip's L3
-  PUSH_LATENCY             a push's first beat, from its post (the host prefetcher's, a ring push's)
+  PUSH_LATENCY             a push's first beat, from its post (the host prefetcher's, an engine post's)
   SIMD_ELEMS_PER_CYCLE     the SIMD core's FlashAttention tile: a 32-byte beat (16 FP16 elements) every 2 cycles
   SIMD_ROW_ELEMS_PER_CYCLE a rows x cols SIMD kernel (SwiGLU, RMSNorm), which reads its rows more than once
   SIMD_OVERHEAD            a SIMD task's fixed cost: its CSR writes, the streamer's start, the drain
@@ -87,7 +87,7 @@ GEMM_FULL = "__snax_bingo_kernel_gemm_full"
 GEMM_MINIMAL = "__snax_bingo_kernel_gemm_minimal"
 GEMV = "__snax_bingo_kernel_gemv"
 RING_LOAD = "__snax_bingo_kernel_idma_ring_load"
-RING_PUSH = "__snax_bingo_kernel_ring_push"
+ENGINE_POST = "__snax_bingo_kernel_engine_post"
 WEIGHT_PREFETCH = "__host_bingo_kernel_weight_prefetch"
 
 
@@ -182,7 +182,7 @@ def task_cycles(node):
         return HOST_TASK
     if k == RING_LOAD:
         return DMA_LATENCY + int(getattr(a, "size", 0)) // DMA_BYTES_PER_CYCLE
-    if k == RING_PUSH:
+    if k == ENGINE_POST:
         return DMA_LATENCY            # two 32-B writes into the push engine's queue
     if "idma" in k:
         size = getattr(a, "nbytes", None)                     # a strided copy's every run (Idma2dCopy)

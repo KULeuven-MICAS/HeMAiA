@@ -352,7 +352,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_copy_slot_args {
 // slot's flag holds `seq`, copy the slot, write `seq` into its release word. flag_addr
 // and release_addr are this chiplet's local 32-bit L3 addresses. release_addr 0: no release
 // word is written (one of several readers of the slot, where the last reader's load writes
-// it; or a ring whose cluster posts its runs, ring_push, where the graph orders the next
+// it; or a ring whose cluster posts its runs, engine_post, where the graph orders the next
 // post of the slot after the load).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t flag_addr;
@@ -370,33 +370,33 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_ring_load_args_t;
 
-// One run of a weight ring, posted by a cluster's DM core into its memory chip's push engine
-// queue (offload_hw_kernels/idma.h): the run's chunks, then their flags. The args hold the two
-// queue entries word for word as the queue window takes them (sys_dma.h sys_dma_engine_queue:
+// One post into a memory chip's push engine queue, made by a DM core (offload_hw_kernels/idma.h):
+// the data, then its flags (a weight ring's run). The args hold the two queue entries word for
+// word as the queue window takes them (sys_dma.h sys_dma_engine_queue:
 // src, dst, length, each 64-bit with the low word first, then the doorbell and the control
 // word), so the iDMA copies each entry straight from the args in L1. All addresses are full
 // 64-bit: the iDMA, not the 32-bit core, issues every access.
-__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_ring_push_args {
-  uint32_t data_src_lo;   // the data entry: the run's first chunk, in HBM
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_engine_post_args {
+  uint32_t data_src_lo;   // the data entry: its source in HBM (a run's first chunk)
   uint32_t data_src_hi;
-  uint32_t data_dst_lo;   // the run's first slot, in this chip's L3
+  uint32_t data_dst_lo;   // its destination (a run's first slot, in this chip's L3)
   uint32_t data_dst_hi;
-  uint32_t data_len_lo;   // the run's bytes
+  uint32_t data_len_lo;   // its bytes
   uint32_t data_len_hi;
   uint32_t data_doorbell; // 0: any write queues the entry
   uint32_t data_ctrl;     // 0: ignored
-  uint32_t flag_src_lo;   // the flag entry: the sequence-table entry of the run's first chunk, in HBM
+  uint32_t flag_src_lo;   // the flag entry: 64-B records in HBM, the first word of each the flag's value
   uint32_t flag_src_hi;
-  uint32_t flag_dst_lo;   // the flag word of the run's first slot, in this chip's L3
+  uint32_t flag_dst_lo;   // the first flag word, 64 B apart
   uint32_t flag_dst_hi;
-  uint32_t flag_len_lo;   // 64 B per chunk of the run
+  uint32_t flag_len_lo;   // 64 B a flag
   uint32_t flag_len_hi;
   uint32_t flag_doorbell;
   uint32_t flag_ctrl;
   uint32_t memchip;       // the push engine: its memory chip ...
   uint32_t engine;        // ... and its index there
   BINGO_KERNEL_ARGS_TRAILER;
-} __snax_bingo_kernel_ring_push_args_t;
+} __snax_bingo_kernel_engine_post_args_t;
 
 // BINGO MoE route: the top k of n FP16 probabilities (largest first, ties to the lower
 // index), and per chosen expert its record slot: its id, its weight (FP16 and as FP32

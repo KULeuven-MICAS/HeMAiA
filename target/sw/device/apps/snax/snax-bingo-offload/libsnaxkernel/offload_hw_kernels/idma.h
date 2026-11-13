@@ -369,7 +369,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
 // a pull turns the link around per request), a run of chunks at a time, then the run's 64-B
 // flags, each holding its chunk's sequence number. Same iDMA queue, one AXI ID, one link:
 // the flags land after the chunks. The runs are posted by the host's prefetcher
-// (host_kernel_lib.h weight_prefetch) or by this cluster's DM core (ring_push below,
+// (host_kernel_lib.h weight_prefetch) or by this cluster's DM core (engine_post below,
 // weight_ring.mode cluster). So: wait for the flag, copy the slot (a local L3 read), then
 // hand the slot back by writing the same number into its release word, which the
 // prefetcher polls before it reuses the slot.
@@ -416,15 +416,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
-// One run of a weight ring, posted by this cluster's DM core instead of the host's prefetcher:
-// two transfers into the descriptor queue of the memory chip's push engine (sys_dma.h
-// sys_dma_engine_queue), the run's chunks from HBM into its slots, then its flags from the
-// sequence table. The engine runs its queue in order and pushes over one link with one AXI ID,
-// so the flags land after the data, and the ring loads (idma_ring_load) poll them as before.
+// One post into the descriptor queue of a memory chip's push engine (sys_dma.h
+// sys_dma_engine_queue), made by a DM core: two transfers, the data from HBM, then its flags.
+// The engine runs its queue in order and pushes over one link with one AXI ID, so the flags land
+// after the data, and whoever reads the data polls them. Its user: a weight ring's run (the
+// run's chunks into its slots, then their flags from the sequence table; WeightRings cluster
+// mode, read by idma_ring_load). A host posts the same way: host_kernel_lib.h engine_post.
 //
 // Each transfer is written as ONE 32-B iDMA burst, [src, dst, length, doorbell], to the queue
-// window: its staged entry is shared by every writer (the chip's other cluster), and AXI does
-// not interleave write bursts, so no other writer's words fall between this burst's. The core
+// window: its staged entry is shared by every writer (other DM cores, a host), and AXI does not
+// interleave write bursts, so no other writer's words fall between this burst's. The core
 // is 32-bit and cannot name the queue; the iDMA takes 64-bit addresses. The two entries are the
 // args' first 16 words, laid out as the window takes them, so the iDMA copies them from the
 // args in L1. The engine's conf is its reset value, the plain copy every transfer needs.
@@ -434,25 +435,25 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 // just-issued transfer still waits in the frontend; the task, and with it the next post into
 // the same queue, would then go on before the entries were read.
 //
-// The graph orders the rest (WeightRings, cluster mode): the push follows the loads that last
+// The graph orders the rest (WeightRings, cluster mode): the post follows the loads that last
 // read the bytes it overwrites, and the load of the run a queue share earlier, so the queue
 // never holds more than its depth and the doorbell is never held back.
-_Static_assert(__builtin_offsetof(__snax_bingo_kernel_ring_push_args_t, data_src_lo) == 0 &&
-                   __builtin_offsetof(__snax_bingo_kernel_ring_push_args_t, flag_src_lo) == 32,
-               "ring_push args: each queue entry is 8 words, data entry first");
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_ring_push(void *arg)
+_Static_assert(__builtin_offsetof(__snax_bingo_kernel_engine_post_args_t, data_src_lo) == 0 &&
+                   __builtin_offsetof(__snax_bingo_kernel_engine_post_args_t, flag_src_lo) == 32,
+               "engine_post args: each queue entry is 8 words, data entry first");
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_engine_post(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_ring_push_args_t);
-    BINGO_REQUIRE_CORE(snax_is_idma_core(), "ring_push", "iDMA");
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_engine_post_args_t);
+    BINGO_REQUIRE_CORE(snax_is_idma_core(), "engine_post", "iDMA");
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_ring_push_args_t *a =
-        (const __snax_bingo_kernel_ring_push_args_t *)arg;
+    const __snax_bingo_kernel_engine_post_args_t *a =
+        (const __snax_bingo_kernel_engine_post_args_t *)arg;
     const uint64_t queue = chiplet_addr_transform_full(
         (uint8_t)a->memchip, SYS_DMA_QUEUE_ADDR + (uint64_t)a->engine * SYS_IDMA_CFG_STRIDE);
     // this chip's prefix: a DMA address whose high word is 0 names chip 0x00
     const uint64_t data = chiplet_addr_transform((uint64_t)(uint32_t)(uintptr_t)&a->data_src_lo);
     const uint64_t flag = chiplet_addr_transform((uint64_t)(uint32_t)(uintptr_t)&a->flag_src_lo);
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_ring_push_args_t);
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_engine_post_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
     bingo_dma_drain();
