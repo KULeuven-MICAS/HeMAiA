@@ -58,7 +58,8 @@ and V^T tiles, the last five copied from HBM into the root's L3 first); the pref
 ## The prefill stage apps (DSv2-Lite and Llama-3-8B, for debugging)
 
 The layer as a prefill over a fresh 256-token prompt (empty cache, causal), INT4 weights
-(`workloads/fa/common/fa_prefill_mc.py` and `fa_stages_mc.py` generate it): head parallel (chip = head, cluster =
+(`workloads/fa/common/fa_prefill_mc` and `fa_stages_mc` generate the whole block; each stage app is a standalone
+`main_bingo.py` on `workloads/fa/dsv2_l1_prefill/common/stage_common.py`): head parallel (chip = head, cluster =
 half of a chunk's tokens), two chunks of 128, the keys made in the window (stages 1-3) and swept by causal tiles.
 `workloads/fa/dsv2_l1_prefill/` holds one optimal workload per stage (stage0 .. stage3, stage0123, stage4,
 stage5, stage678) and the whole block (`full_n`; `t1024` at 1,024 tokens); `results/optimal_mappings.json` names each one's run and window.

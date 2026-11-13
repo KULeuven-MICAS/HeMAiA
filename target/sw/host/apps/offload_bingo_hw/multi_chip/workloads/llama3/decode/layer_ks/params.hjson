@@ -43,10 +43,9 @@
     wo_push: after_reduce
     checks: y
   }
-  // the all-GEMV FFN decode block (../../../ffn/common/ffn_decode_mc.py, gu_gemv), as llama3/decode/ffn_gv runs it but
-  // for the gathers: X in a_row, gate|up and down on the GEMV, 16 down slices of 128 a cluster, each in its own output
-  // slot, every gather behind every cluster's last down GEMV (chains_after_stream), one ChainGather a cluster (a group
-  // of 16 slices)
+  // the all-GEMV FFN decode block (../../../ffn/common/ffn_decode_mc): X in a_row, gate|up and down on the GEMV, 16
+  // down slices of 128 a cluster, each in its own output slot, every gather behind every cluster's last down GEMV
+  // (chains_after_stream), one ChainGather a cluster (a group of 16 slices)
   ffn:
   {
     blocks: 1
@@ -54,13 +53,10 @@
     w_chunk_bytes: 98304
     w_buffers: 2
     weight_ring: { slots: 8, head: 4, batch_head: 1, queue: 12 }
-    x_row: true
     out_slots: 16
     start_per_chip: true
     gather_relay_only: true
     chain_group: 16
-    dn_gemv: true
-    gu_gemv: true
     chains_after_stream: true
   }
   layer:

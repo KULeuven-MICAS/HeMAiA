@@ -30,61 +30,24 @@
   }
   attn:
   {
-    stage: full
     tokens: 1024
-    model: dsv2-lite-l1
     chunk: 128
-    fresh: true
-    keys: 1024
     bc: 64
     wbits: 4
-    s4_reorder: true
-    s4_tile_absorb: true
-    s4_overlap: true
     skip_masked: true
     row_swap: true
-    ot8_fused: true
-    kv_norm_fused: true
-    kv_split_clusters: true
-    kv_vals_other: true
-    kv_vals_own: true
-    x_hbm: true
-    x_bcast: memchip
     kv_balance_ways: 4
-    kv_wkva_first: true
     kv_balance: true
-    split_loads: true
-    split_frac: 0.3
-    wo_cols: false
     w_chunk_bytes: 65536
     w_buffers: 3
     weight_ring:
     {
       slots: 6
     }
-    bcast: bcast_l1
-    reduce: chain
-    sync: edge
-    l3_overlay: true
-    x_puts_first: true
-    y_store_halves: true
-    y_windows: 4
     kv_slabs: split_kb
     chain_concurrent: false
     checks: y
-    rope_fused: true
-    rope_perm: true
-    dq_fused: true
-    mask_c: true
-    x_put_cluster: 1
-    q_tiles: true
-    o_tiles: true
-    y_block_chains: true
-    kv_cols: true
-    reduce_early: true
-    last_pair_chains: true
     x_pf_split: true
-    sm_geom_xdma: true
     chains_after_sweep: true
     keys_by_chunk: true
     full_kv_all: false
@@ -104,7 +67,6 @@
   }
   moe:
   {
-    stage: full
     tokens: 512
     wbits: 4
     blocks: 3
@@ -122,23 +84,8 @@
     bcast: bcast_l1
     reduce: chain
     sync: edge
-    b_parity: true
-    topk_shared: true
-    warm_root: true
-    dispatch_blocks: true
-    route: dist
-    chain_concurrent: false
-    l3_overlay: true
-    prefetch_after_x: true
     shared_after: [0]
-    x_in_xe: true
-    route_tile_buf: true
-    route_early: true
-    sh_quant_blocks: true
     slot_order: [1, 2, 3, 0]
-    scale_out: true
-    chain_first_alt: true
-    chain_tail: 1
     chain_path: ["40", "41", "42", "43", "33", "32", "31", "30", "10", "11", "12", "13", "03", "02", "01", "00"]
   }
 }

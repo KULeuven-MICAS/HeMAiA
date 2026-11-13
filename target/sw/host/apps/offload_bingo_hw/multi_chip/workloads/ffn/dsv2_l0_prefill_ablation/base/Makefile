@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# The FFN ablation ladder at 64 tokens, rung base: ../../common/ffn_prefill_mc.py (THE ABLATION) and params.hjson.
+# The FFN ablation ladder at 64 tokens, rung base: ../../common/ffn_prefill_mc (README.md) and params.hjson.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = ffn/dsv2_l0_prefill_ablation/base
 include $(MK_DIR)../../common/ffn.mk

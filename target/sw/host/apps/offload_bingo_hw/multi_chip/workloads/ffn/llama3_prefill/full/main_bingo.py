@@ -5,7 +5,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Llama-3-8B's FFN (synthetic weights) as a 256-token prefill on sixteen chiplets, the whole block, every pass, X from HBM (params.hjson); the driver is
-../../common/ffn_prefill_mc.py."""
+../../common/ffn_prefill_mc."""
 
 import os
 import sys

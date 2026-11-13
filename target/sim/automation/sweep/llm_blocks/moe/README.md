@@ -22,12 +22,11 @@ As the FFN's (`sweep/llm_blocks/ffn/README.md`). **Phases** add the route: the l
 
 ## Prefill (`stages.sh`)
 
-DeepSeek-V2-Lite's layer-1 MoE over a 512-token prompt, the whole block at full size (`workloads/moe/common/moe_prefill_mc.py`,
-through `workloads/moe/common/moe_stages_mc.py`, params `stage`), one rung of the ablation a run:
-`./stages.sh abl_<rung>` (`workloads/moe/dsv2_l1_prefill_ablation/<rung>`). X and the router's weights come from the
-HBM of the root's memory chip, multicast by its push engine inside the window (params `x_hbm`). `all` is the tuned
-block: 64-column output slices, an expert slot's gate|up in row blocks of 32, `l1_capacity` 1,000,000, `desc_in_image`,
-`args_phases`, `sh_quant_blocks` with staged mid-beat chunks.
+DeepSeek-V2-Lite's layer-1 MoE over a 512-token prompt, the whole block at full size (`workloads/moe/common/moe_prefill_mc/`),
+one rung of the ablation a run: `./stages.sh abl_<rung>` (`workloads/moe/dsv2_l1_prefill_ablation/<rung>`). X and the
+router's weights come from the HBM of the root's memory chip, multicast by its push engine inside the window. `all` is
+the tuned block: 64-column output slices, an expert slot's gate|up in row blocks of 32, `l1_capacity` 1,000,000,
+`desc_in_image`, `args_phases`, the shared MLP quantised block by block with staged mid-beat chunks.
 
 | stage | rung | what it adds | run | result |
 |---|---|---|---|---|
@@ -47,7 +46,7 @@ D2D links.
 - `parse_moe.py` (with `../ffn/parse_ffn.py`): a run's phases into `results/moe.csv`.
 - `stages.sh`: the prefill. A stage run's task spans: `../../common/timeline.py`; the generator alone:
   `../../common/gen_check.sh moe/<variant> <out dir> <log>`.
-- **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/moe/`: `common/moe_prefill_mc.py` (the
-  prefill driver, on `util/sim/multichip/chiplet_mc.py`), `common/moe_stages_mc.py` (params `stage`), `common/moe_prefill_data.py`
-  (weights, route, golden), `common/moe.mk`, `dsv2_l1_prefill_ablation/<rung>/params.hjson`; `common/moe_decode_mc.py` is the decode
-  block, on the prefill driver.
+- **Workloads:** `target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/moe/`: `common/moe_prefill_mc/` (the
+  prefill driver, on `util/sim/multichip/chiplet_mc.py`), `common/moe_prefill_data.py` (weights, route, golden),
+  `common/moe.mk`, `dsv2_l1_prefill_ablation/<rung>/params.hjson`; `common/moe_decode_mc/` is the decode block (the
+  whole layer-1 decode's MoE), on the prefill's data and helpers.

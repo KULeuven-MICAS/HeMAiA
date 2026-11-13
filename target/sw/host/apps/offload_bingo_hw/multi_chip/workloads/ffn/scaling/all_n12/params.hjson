@@ -32,7 +32,7 @@
   dn_balance: true
   root_cols: [432, 416]
   chain_alt: true
-  // the ablation's switches (../../common/ffn_prefill_mc.py, THE ABLATION)
+  // the ablation's switches (../../common/ffn_prefill_mc/params.py)
   x_cast: multicast
   // one ChainGather a cluster: chain_group = out_slots = every slice
   chain_group: 8

@@ -5,7 +5,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Llama-3-8B's FFN (synthetic weights), one pass of 64 tokens with every mechanism, X from HBM (params.hjson); the
-driver is ../../common/ffn_prefill_mc.py."""
+driver is ../../common/ffn_prefill_mc."""
 
 import os
 import sys

@@ -5,7 +5,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The FFN ablation ladder at 64 tokens, rung all: DeepSeek-V2-Lite's dense FFN (layer 0), one pass on 16 chiplets, X from HBM
-(params.hjson); the driver is ../../common/ffn_prefill_mc.py."""
+(params.hjson); the driver is ../../common/ffn_prefill_mc."""
 
 import os
 import sys

@@ -26,9 +26,8 @@ Each directory holds its `Makefile`, `main_bingo.py` and `params.hjson`; everyth
 |---|---|
 | [`common/llama3_data.py`](common/llama3_data.py) | the model's configuration, the synthetic weights, and the device-exact golden of the attention (`LlamaAttnData`); registers the FFN with the ffn driver's data |
 | [`common/llama3_attn_mc.py`](common/llama3_attn_mc.py) | the prefill attention block: a query head a cluster, a key/value group on a column's chip pair, passes of 64 tokens, the causal flash sweep (`libs/blocks/fa_sweep.py` with its mask), the output projection reduced in transit; also the FA block's Llama variant (`../fa/llama3_prefill`) |
-| [`common/llama3_stages_mc.py`](common/llama3_stages_mc.py) | the stage apps of the FA block's Llama variant |
-| [`full_layer_prefill/common/llama3_layer_mc.py`](full_layer_prefill/common/llama3_layer_mc.py) | the whole-layer prefill: both blocks in one graph (the FFN of [`../ffn/common/ffn_prefill_mc.py`](../ffn/common/ffn_prefill_mc.py), passes of 64 rows that stream the weights again), the steps between them, args phases, one L3 ring region |
-| [`common/llama3_decode_mc.py`](common/llama3_decode_mc.py), [`common/llama3_decode_ks_mc.py`](common/llama3_decode_ks_mc.py), [`common/llama3_decode_layer_mc.py`](common/llama3_decode_layer_mc.py) | the decode attention (head-parallel and split by keys) and the whole decode layer with the FFN of [`../ffn/common/ffn_decode_mc.py`](../ffn/common/ffn_decode_mc.py) |
+| [`full_layer_prefill/common/llama3_layer_mc.py`](full_layer_prefill/common/llama3_layer_mc.py) | the whole-layer prefill: both blocks in one graph (the FFN of [`../ffn/common/ffn_prefill_mc/`](../ffn/common/ffn_prefill_mc/README.md), passes of 64 rows that stream the weights again), the steps between them, args phases, one L3 ring region |
+| [`common/llama3_decode_mc.py`](common/llama3_decode_mc.py), [`common/llama3_decode_ks_mc.py`](common/llama3_decode_ks_mc.py), [`common/llama3_decode_layer_mc.py`](common/llama3_decode_layer_mc.py) | the decode attention (head-parallel and split by keys) and the whole decode layer with the FFN of [`../ffn/common/ffn_decode_mc/`](../ffn/common/ffn_decode_mc/README.md) |
 | [`common/llama3.mk`](common/llama3.mk) | the build |
 
 The attention alone is the FA block's Llama variant, `../fa/llama3_prefill` (run with

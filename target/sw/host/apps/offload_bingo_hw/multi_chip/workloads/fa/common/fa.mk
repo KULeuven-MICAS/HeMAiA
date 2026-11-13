@@ -47,7 +47,8 @@ KV_MANIFEST = $(REPO_ROOT)/target/sim/automation/sweep/llm_blocks/fa/cache/manif
 BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \
                  $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h \
-                 $(wildcard $(WL_ROOT)/ffn/common/*.py) $(wildcard $(WL_ROOT)/fa/common/*.py) \
+                 $(wildcard $(WL_ROOT)/ffn/common/*.py $(WL_ROOT)/ffn/common/*/*.py) $(wildcard $(WL_ROOT)/fa/common/*.py $(WL_ROOT)/fa/common/*/*.py) \
+                 $(wildcard $(WL_ROOT)/fa/*/common/*.py) \
                  $(wildcard $(REPO_ROOT)/util/sim/multichip/*.py $(REPO_ROOT)/util/sim/llm/*.py) \
                  $(addprefix $(REPO_ROOT)/util/sim/common/,driver.py fp.py hwmodel.py layout.py pack.py) \
                  $(REPO_ROOT)/util/sim/simd/simd.py $(REPO_ROOT)/util/sim/llm/config.json $(REPO_ROOT)/util/sim/gemm/gemv_utils.py \

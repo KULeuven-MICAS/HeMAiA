@@ -9,7 +9,7 @@
 // ChainGathers into the root, cluster 1's running the ring the other way (chain_alt), stored a slice late,
 // Y over the X buffers in L3 (l3_overlay). The root's clusters take fewer columns (root_cols); the last
 // gate|up chunk and the first down slice run per post block (split_last, split_first_dn); INT4 in the paired layout, 64
-// bytes a pass. ../../common/ffn_prefill_mc.py explains each parameter where it reads it; the stage apps
+// bytes a pass. ../../common/ffn_prefill_mc/README.md explains each parameter; the stage apps
 // beside this one take these params.
 {
   num_chiplets: 16

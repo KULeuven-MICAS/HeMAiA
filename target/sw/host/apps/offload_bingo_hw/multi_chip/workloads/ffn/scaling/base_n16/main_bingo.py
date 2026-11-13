@@ -5,7 +5,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The FFN strong-scaling sweep, base at 16 chips: DeepSeek-V2-Lite's dense FFN (layer 0), 64 tokens in one pass, X from HBM
-(params.hjson); the driver is ../../common/ffn_prefill_mc.py."""
+(params.hjson); the driver is ../../common/ffn_prefill_mc."""
 
 import os
 import sys

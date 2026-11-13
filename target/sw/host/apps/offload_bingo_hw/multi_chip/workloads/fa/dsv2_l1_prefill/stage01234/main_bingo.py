@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""DeepSeek-V2-Lite's layer-1 MLA attention as a 256-token prefill on sixteen chiplets, built stage by stage:
-stage1. params.hjson says what the stage runs; the builder is ../../common/fa_stages_mc.py."""
+"""DeepSeek-V2-Lite's layer-1 MLA attention as a 256-token prefill on sixteen chiplets: stages 0 to 4 chained, the
+whole block's mapping up to every cluster's query tiles (params stop q8). The builder is ../../common/fa_stages_mc."""
 
 import os
 import sys

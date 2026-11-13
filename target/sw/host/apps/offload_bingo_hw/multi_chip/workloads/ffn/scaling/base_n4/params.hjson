@@ -29,7 +29,7 @@
   first_blocks: 2
   dn_balance: true
   root_cols: [1344, 1328]
-  // the ablation's switches (../../common/ffn_prefill_mc.py, THE ABLATION)
+  // the ablation's switches (../../common/ffn_prefill_mc/params.py)
   x_cast: unicast
   barrier_mode: sw
   chain_alt: false

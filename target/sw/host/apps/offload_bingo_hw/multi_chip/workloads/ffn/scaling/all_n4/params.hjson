@@ -32,7 +32,7 @@
   dn_balance: true
   root_cols: [1344, 1328]
   chain_alt: true
-  // the ablation's switches (../../common/ffn_prefill_mc.py, THE ABLATION)
+  // the ablation's switches (../../common/ffn_prefill_mc/params.py)
   x_cast: multicast
   // the output does not fit L1 whole at 4 chips: 2 slices a ChainGather through 4 output slots, one group writing while
   // the other reduces

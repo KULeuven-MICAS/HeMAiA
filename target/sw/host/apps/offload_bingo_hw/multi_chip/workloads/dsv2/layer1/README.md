@@ -10,7 +10,7 @@ x1 -> RMSNorm -> MLA attention -> + x1 = h -> RMSNorm -> MoE -> + h
 | directory | what it runs |
 |---|---|
 | `prefill/full` | a fresh 1,024-token prompt at the final block mappings ([`../common/dsv2_layer_prefill_mc.py`](../common/dsv2_layer_prefill_mc.py)): every token's x normed into HBM, the attention of `../../fa/dsv2_l1_prefill/t1024` (eight chunks of 128 queries), the glue, the MoE of `../../moe/dsv2_l1_prefill/full_t512` in two passes of 512 rows (`layer.moe_passes`), each with its own route, placement and weight stream, the residual in each pass's reduce, the output into HBM; run with `target/sim/automation/sweep/llm_layer/dsv2_prefill/stages.sh layer1_prefill_full` |
-| `decode/layer` | the decode of one token over a 1,024-token cache ([`../common/dsv2_decode_mc.py`](../common/dsv2_decode_mc.py)): the attention split by keys (`../../fa/common/fa_decode_ks_mc.py`, a cached 64-key tile a chip), every weight multiply a matrix-vector product, the MoE's weights streamed once the attention is done (`../../moe/common/moe_decode_mc.py`) |
+| `decode/layer` | the decode of one token over a 1,024-token cache ([`../common/dsv2_decode_mc.py`](../common/dsv2_decode_mc.py)): the attention split by keys (`../../fa/common/fa_decode_ks_mc/`, a cached 64-key tile a chip), every weight multiply a matrix-vector product, the MoE's weights streamed once the attention is done (`../../moe/common/moe_decode_mc/`) |
 
 Each directory holds its `Makefile`, `main_bingo.py` and `params.hjson`; everything else is generated. `params.hjson`
 holds the platform and graph switches every block shares, then `attn`, `moe` and `layer`; the driver documents every

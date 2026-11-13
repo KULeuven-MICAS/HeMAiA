@@ -1,6 +1,6 @@
 // all: the FA prefill ablation's rung with all three mechanisms: fa/llama3_prefill/t1024's switches (its measured
 // run is stg_llama3_t1024_1). Per-edge sync lets in the levers that overlap kernels. x comes from HBM and y_scatter
-// stores y in its owners' tiles. The driver is ../../../llama3/common/llama3_stages_mc.py (llama3_attn_mc.py, THE
+// stores y in its owners' tiles. The driver is ../../../llama3/common/llama3_attn_mc.py (THE
 // ABLATION).
 {
   num_chiplets: 16
@@ -32,8 +32,7 @@
   mask_c: true,
   // x from HBM with the first chunks of each of the root's rings ahead of its multicasts (x_pf_split), the sweep's o~
   // straight into o8 and its geometry on the xDMA, W_O by columns with the weights loaded ahead and the gather on the
-  // xDMA (no o_overlap: in the block, pass i + 1's o8 waits for that pass's x fetch, which follows pass i's y stores
-  // on the DM core, so o_overlap's order closes a cycle)
+  // xDMA
   x_bcast: "memchip",
   x_pf_split: true,
   ot8_fused: true,

@@ -26,61 +26,24 @@
   }
   attn:
   {
-    stage: full
     tokens: 1024
-    model: dsv2-lite-l1
     chunk: 128
-    fresh: true
-    keys: 1024
     bc: 64
     wbits: 4
-    s4_reorder: true
-    s4_tile_absorb: true
-    s4_overlap: true
     skip_masked: true
     row_swap: true
-    ot8_fused: true
-    kv_norm_fused: true
-    kv_split_clusters: true
-    kv_vals_other: true
-    kv_vals_own: true
-    x_hbm: true
-    x_bcast: memchip
     kv_balance_ways: 4
-    kv_wkva_first: true
     kv_balance: true
-    split_loads: true
-    split_frac: 0.3
-    wo_cols: false
     w_chunk_bytes: 65536
     w_buffers: 3
     weight_ring:
     {
       slots: 6
     }
-    bcast: bcast_l1
-    reduce: chain
-    sync: edge
-    l3_overlay: true
-    y_halves: false
-    y_store_halves: true
-    y_windows: 4
     kv_slabs: split_kb
     chain_concurrent: false
     checks: y
-    rope_fused: true
-    rope_perm: true
-    dq_fused: true
-    mask_c: true
-    x_put_cluster: 1
-    q_tiles: true
-    o_tiles: true
-    y_block_chains: true
-    kv_cols: true
-    reduce_early: true
-    last_pair_chains: true
     x_pf_split: true
-    sm_geom_xdma: true
     chains_after_sweep: true
     keys_by_chunk: true
     full_kv_all: false
@@ -100,7 +63,6 @@
   }
   ffn:
   {
-    stage: full
     model: dsv2-lite-l0
     seed: 1
     tokens: 1024
@@ -122,7 +84,7 @@
     l3_overlay: true
     deq_per_row: true
     x_blocks: 4
-    // GEMMs (ffn_prefill_mc.py gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
+    // GEMMs (ffn_prefill_mc gemm_node): gemm_start / gemm_wait pairs, the shape parameters in L1, each configured
     // ahead of its operands and of the waits before its start, a start that repeats its cluster's previous
     // configuration writing only addresses
     post_blocks: 4

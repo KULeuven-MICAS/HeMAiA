@@ -21,7 +21,7 @@ fresh 64-token prompt in one pass of 64 rows, INT4 weights (the checkpoint's own
 `cache/`), X from the root memory chip's HBM, every GEMM queued and configured ahead. The mapping (each weight chunk
 meets all 64 rows in one GEMM; each chip's down projection split by output columns between its two clusters; the
 outputs reduced into the root) is `workloads/ffn/README.md`'s and the driver's,
-`workloads/ffn/common/ffn_prefill_mc.py` (THE ABLATION). The same block on Llama-3-8B's FFN (`4,096 -> 14,336 -> 4,096`,
+`workloads/ffn/common/ffn_prefill_mc/README.md`. The same block on Llama-3-8B's FFN (`4,096 -> 14,336 -> 4,096`,
 synthetic INT4 weights of the model's shapes), one pass of 64 tokens with every mechanism: `workloads/ffn/llama3_prefill/t64`.
 
 ## The ladder (16 chips)

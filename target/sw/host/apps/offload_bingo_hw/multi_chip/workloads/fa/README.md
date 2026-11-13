@@ -10,19 +10,17 @@ or per-chip pushes), **reduce** (xDMA ChainGather folding in transit against the
 ```
 fa/
   common/                shared code
-    fa_mc.py               the key-split decode (one token, the cache split by key over the clusters): the base
-                           of fa_decode_ks_mc.py
     fa_llama_data.py       the Llama decode's cache, query, scales and golden (synthetic INT4 weights, llama3_data's
                            draw), and the softmax-statistics junction's arithmetic the decode ladder's golden uses
                            (../llama3/common/llama3_decode_ks_mc.py)
-    fa_decode_ks_mc.py     DSv2-Lite's MLA decode split by key, used by ../dsv2/layer<N>/decode/layer
+    fa_decode_ks_mc/       DSv2-Lite's MLA decode split by key, the attention block of ../dsv2/layer<N>/decode/layer
+                           (its README.md: the mapping, the steps, the parameters)
     fa_decode_data.py      the MLA decode's data (a fresh causal prompt, the token its last) and the D2D route
-                           helpers fa_decode_ks_mc.py and the layer's stream report use
-    fa_prefill_mc.py       driver and generator of the prefill workloads (the mapping below); its docstring
-                           lists the parameters
-    fa_stages_mc.py        the prefill split into stages (stage0 .. stage678) and chained again (full)
+                           helpers fa_decode_ks_mc and the layer's stream report use
+    fa_prefill_mc/         the DSv2-Lite MLA prefill block, FaBuild (its README.md: the mapping, the parameters)
+    fa_stages_mc/          the whole prefill block's builder, FaStages (full_n, t1024, stage01234 and the DSv2 layer
+                           prefill's attention); its README.md: the stages, their parameters
     fa_prefill_data.py     the prefill's data, layouts and golden (the device arithmetic)
-    fa_data.py             fa_mc.py's cache, query, scales and golden (DSv2-Lite)
     fa.mk                  the build every variant's Makefile includes
     (chiplet_mc.py: platform, weight rings, stamps, barriers, fences; fabric.py: both util/sim/multichip's;
      driver.py: util/sim/common's; model_data.py, the golden's modules and the BF16 reader: util/sim/llm's)
@@ -31,14 +29,19 @@ fa/
                          driver is ../llama3/common/llama3_decode_ks_mc.py
   llama3_prefill/        Llama-3-8B's grouped-query attention over a fresh prompt: at 1,024 tokens the whole block
                          (t1024, the paper's all-mechanism rung); at 256 tokens one optimal workload per stage
-                         (stage1234, stage5, stage678) and the stages chained (full), kept for debugging; its driver
-                         is ../llama3/common/llama3_stages_mc.py
+                         (stage1234, stage5, stage678, each a standalone main_bingo.py on chiplet_mc and the data)
+                         and the stages chained (full), kept for debugging; t1024 and full run
+                         ../llama3/common/llama3_attn_mc.py
   llama3_prefill_ablation/ the Llama prefill's ladder at 1,024 tokens: base and bcast (t1024's mapping without its
                          overlap levers, a chip barrier after every kernel) and all (t1024's switches); driver
                          ../llama3/common/llama3_attn_mc.py
   dsv2_l1_prefill/       DeepSeek-V2-Lite's prefill over a fresh prompt: at 1,024 tokens the whole block (t1024); at
-                         256 tokens one optimal workload per stage (stage0, stage1, stage2, stage3, stage0123,
-                         stage01234, stage4, stage5, stage678) and the stages chained (full_n), kept for debugging
+                         256 tokens one optimal workload per stage (stage0, stage1, stage2, stage3, stage0123, stage4,
+                         stage5, stage678, each a standalone main_bingo.py on common/stage_common.py), stages 0 to 4
+                         chained (stage01234) and the whole block (full_n), kept for debugging; t1024, full_n and
+                         stage01234 run common/fa_stages_mc
+    common/stage_common.py the stage apps' base, StageBase: the block's data, memory, weight ring, task helpers and
+                         x's multicast from HBM
 ```
 
 Numbered variants (`v<N>`) are local iterations and are not tracked; the named variants are. Every variant
@@ -82,8 +85,10 @@ cluster c = half of each 128-token chunk's tokens (four 16-row query tiles). The
 | 5 | the causal sweep: QK, online softmax, PV over the chunk's key tiles |
 | 6-8 | W_UV, W_O, and the 16 heads' partials of y folded into C00 by reduce chains, a W_O block at a time |
 
-`stageN` runs one stage alone (its inputs preloaded before the window), `stage0123` and `stage01234` chain stages
-0-3 and 0-4, `full_n` the whole block at 256 tokens. `t1024` is the whole block at 1,024 tokens (eight chunks): each
+`stageN` runs one stage alone (its inputs preloaded before the window) and `stage0123` stages 0-3 chained, each a
+standalone `main_bingo.py` of that stage's tasks on `dsv2_l1_prefill/common/stage_common.py` (the block's data,
+memory and ring; a stage app stages the whole block's image, so its window runs on the memory the block would leave
+it); `stage01234` chains stages 0-4 and `full_n` is the whole block at 256 tokens, both on `common/fa_stages_mc`. `t1024` is the whole block at 1,024 tokens (eight chunks): each
 chunk's keys made just ahead of its queries, each W_O block's reduce chain ending on a collector chip in turn instead
 of C00 (`y_roots`), and the order changes its `params.hjson` lists, each proven first on the block cut to two chunks. Each workload is the best measured mapping of its stage (`params.hjson` says how it got there);
 `target/sim/automation/sweep/llm_blocks/fa/results/optimal_mappings.json` names each one's run and window.
@@ -99,8 +104,10 @@ of the graph.
 
 Llama-3-8B's grouped-query attention (32 query and 8 key/value heads of 128, hidden 4096, synthetic INT4 weights
 of the model's shapes) over the same fresh prompt: a query head a cluster, a key/value group on a chip pair,
-passes of 64 tokens (4 at 256 tokens, 16 in `t1024`), the same causal `fa_sweep`. Its driver is
-`../llama3/common/llama3_stages_mc.py` (on `llama3_attn_mc.py`, shared with the whole Llama layer).
+passes of 64 tokens (4 at 256 tokens, 16 in `t1024`), the same causal `fa_sweep`. The whole block (`full`, `t1024`
+and `../llama3_prefill_ablation/`) runs `../llama3/common/llama3_attn_mc.py`, shared with the whole Llama layer; each
+stage app (`stage1234`, `stage5`, `stage678`) is a standalone program of its stage in its own `main_bingo.py` (the
+block's tasks of that stage, on `chiplet_mc.py` and `llama3_data.py`).
 
 The runs and their findings are in `target/sim/automation/sweep/llm_blocks/fa/results/prefill_stages.md`.
 

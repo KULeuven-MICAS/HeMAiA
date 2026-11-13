@@ -94,9 +94,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     names, ev, args = load(run_dir, wl_dir)
     p = hjson.load(open(wl_dir / "params.hjson"))
-    keys, T = int(p["keys"]), int(p["tokens"])
+    T = int(p["tokens"])
+    keys = int(p.get("keys", T))
     mac = (2048 * 192 + 128 * 512 + 512 * 128 + 128 * 2048) * T * 16
-    if p.get("fresh"):
+    # the DSv2-Lite prefill workloads are a fresh prompt (no keys, no fresh in their params)
+    if p.get("fresh", True):
         # an empty cache: causal scores (query t sees keys 0..t) and the keys' W_KVA made on the device
         mac += T * (T + 1) // 2 * (576 + 512) * 16 + T * 2048 * 576
     else:

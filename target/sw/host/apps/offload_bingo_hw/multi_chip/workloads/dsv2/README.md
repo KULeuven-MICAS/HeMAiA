@@ -16,7 +16,7 @@ layer 1:  x1 -> RMSNorm -> MLA attention -> + x1 = h -> RMSNorm -> MoE          
 dsv2/
   common/
     dsv2_layer_prefill_mc.py  the whole-layer prefill driver (layer{0,1}/prefill/full): the attention of
-                         ../fa/common/fa_stages_mc.py and the MoE (layer 1) or the dense FFN (layer 0) in one graph,
+                         ../fa/common/fa_stages_mc/ and the MoE (layer 1) or the dense FFN (layer 0) in one graph,
                          the input RMSNorm, the glue and the residual, the blocks meeting through HBM
     dsv2_decode_mc.py    the one-token decode driver (layer{0,1}/decode/layer)
     dsv2_prefill.mk      the build

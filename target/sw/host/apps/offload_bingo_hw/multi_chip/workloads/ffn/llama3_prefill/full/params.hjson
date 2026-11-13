@@ -7,7 +7,7 @@
 // chip's down projection is split by output columns between its clusters, 16 slices of 128 a cluster through 8 output
 // slots (out_slots), one ChainGather a group of 4 slices (chain_group), so a pass runs 8 gathers; dependency relays
 // instead of order edges for the gathers (gather_relay_only); every chip's first weight chunks pushed at the start
-// (start_per_chip). ../../common/ffn_prefill_mc.py explains each parameter where it reads it; the stage apps beside this
+// (start_per_chip). ../../common/ffn_prefill_mc/README.md explains each parameter; the stage apps beside this
 // one take these params.
 {
   num_chiplets: 16

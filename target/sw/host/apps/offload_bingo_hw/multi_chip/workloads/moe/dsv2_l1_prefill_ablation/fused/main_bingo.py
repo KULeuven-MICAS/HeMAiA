@@ -5,13 +5,13 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """DeepSeek-V2-Lite's layer-1 MoE prefill on sixteen chiplets, the ablation's rung fused (params.hjson); the driver is
-../../common/moe_stages_mc.py."""
+../../common/moe_prefill_mc."""
 
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "common"))
-from moe_stages_mc import run  # noqa: E402
+from moe_prefill_mc import run  # noqa: E402
 
 if __name__ == "__main__":
     run()

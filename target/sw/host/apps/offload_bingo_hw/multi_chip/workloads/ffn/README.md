@@ -12,10 +12,10 @@ software chip barriers after every kernel); and it scales the same FFN from 4 to
 ```
 ffn/
   common/                the block's code (common/README.md maps it)
-    ffn_prefill_mc.py      the prefill block (its docstring explains the mapping; every parameter is explained
-                           where it is read); run() is the entry point of the whole-block workloads, and the
-                           layers run it inside theirs
-    ffn_decode_mc.py       one decode token on the prefill's mapping (the dsv2 and llama3 decode FFNs)
+    ffn_prefill_mc/        the prefill block (its README.md explains the mapping and every parameter); run() is the
+                           entry point of the whole-block workloads, and the layers run it inside theirs
+    ffn_decode_mc/         one decode token on the prefill's mapping, every weight multiply on the GEMV (the dsv2
+                           and llama3 decode FFNs)
     ffn_data.py            the golden and the data staging (checkpoint weights from the sweep cache, or a
                            registered synthetic model such as ../llama3/common/llama3_data.py's)
     ffn.mk                 the build every DeepSeek variant's Makefile includes
@@ -33,7 +33,7 @@ Every variant directory holds exactly three files: `Makefile` (names its path an
 
 ## The prefill workloads
 
-Both models use the one mapping of `common/ffn_prefill_mc.py`: the tokens in passes of `rows`; X of a pass in every
+Both models use the one mapping of `common/ffn_prefill_mc/`: the tokens in passes of `rows`; X of a pass in every
 cluster's L1; each weight chunk, as it streams in, used for all the pass's rows in one GEMM; the down projection split
 by output columns over a chip's two clusters and reduced slice by slice by ChainGathers into the root, under the next
 slices' GEMMs. **X comes from HBM**: every pass's X sits in the HBM of the root's memory chip (0x20), and the root's
@@ -57,14 +57,14 @@ copied from an HBM image), so a window is the stage alone:
 holds all of a cluster's chunks), so the weights stream from HBM once. `llama3_prefill`: four passes of 64 rows; every
 pass streams the weights from the memory chips again (`restream`: the model's 84 MiB of INT4 weights do not stay in the
 rings); 8 output slots, 4 slices a ChainGather (`chain_group`). The stage apps take their full app's params (stage123
-and stage45 with tokens = rows). Each `params.hjson` lists every option it uses, and `common/ffn_prefill_mc.py` explains
-each one where it reads it. The runs and the stage-by-stage traces are on the FFN Prefill Tracker artifact.
+and stage45 with tokens = rows). Each `params.hjson` lists every option it uses, and `common/ffn_prefill_mc/README.md`
+explains each one (`params.py` where it reads it). The runs and the stage-by-stage traces are on the FFN Prefill Tracker artifact.
 
 ## The ablation (`dsv2_l0_prefill_ablation`)
 
 Four rungs of DeepSeek-V2-Lite's FFN at 64 tokens (one pass of 64 rows, X from HBM, the GEMMs queued: below) on 16
-chips, each adding one mechanism, all on the same chunks, slices and buffers (`common/ffn_prefill_mc.py`, THE ABLATION,
-explains the switches). `base` and `all` carry the params of the scaling sweep's 16-chip points (`scaling/base_n16`,
+chips, each adding one mechanism, all on the same chunks, slices and buffers (`common/ffn_prefill_mc/params.py`, the
+ablation's arms, explains the switches). `base` and `all` carry the params of the scaling sweep's 16-chip points (`scaling/base_n16`,
 `scaling/all_n16`), whose runs (`stg_sweep64_base_n16`, `stg_poc64_g8`) are the paper's R0 and R3:
 
 | rung | workload | `x_cast` | `reduce` | `sync` | |

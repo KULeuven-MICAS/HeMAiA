@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# Llama-3-8B's FFN (synthetic weights), fresh 256-token prompt, the whole block, every pass, X from HBM; the code is ../../common/ffn_prefill_mc.py.
+# Llama-3-8B's FFN (synthetic weights), fresh 256-token prompt, the whole block, every pass, X from HBM; the code is ../../common/ffn_prefill_mc.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = ffn/llama3_prefill/full
 include $(MK_DIR)../../../llama3/common/llama3.mk

@@ -1,6 +1,6 @@
 // bcast: the FA prefill ablation's + broadcast rung. base with each pass's x and every head's o8 multicast (x_cast
 // multicast); still a chip barrier after every kernel. A head-parallel prefill has no partials, so this is also
-// its + reduction rung. The driver is ../../../llama3/common/llama3_stages_mc.py (llama3_attn_mc.py, THE ABLATION).
+// its + reduction rung. The driver is ../../../llama3/common/llama3_attn_mc.py (THE ABLATION).
 {
   num_chiplets: 16
   num_clusters: 2
@@ -33,8 +33,7 @@
   mask_c: true,
   // x from HBM with the first chunks of each of the root's rings ahead of its multicasts (x_pf_split), the sweep's o~
   // straight into o8 and its geometry on the xDMA, W_O by columns with the weights loaded ahead and the gather on the
-  // xDMA (no o_overlap: in the block, pass i + 1's o8 waits for that pass's x fetch, which follows pass i's y stores
-  // on the DM core, so o_overlap's order closes a cycle)
+  // xDMA
   x_bcast: "memchip",
   x_pf_split: true,
   ot8_fused: true,
