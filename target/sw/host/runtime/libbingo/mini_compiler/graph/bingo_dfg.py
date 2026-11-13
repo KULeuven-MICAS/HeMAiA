@@ -311,6 +311,9 @@ class BingoDFG(
         # hardware cannot start them once their frames cross); order them before any pass
         # derives core order or dependency tags from the edges.
         self.bingo_transform_order_crossed_chain_gathers()
+        # A ChainGather drives the xDMA engine of every hop of its chain with no task there: every task of a hop's xDMA
+        # core goes before or after it.
+        self.bingo_transform_order_chain_hop_tasks()
         # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
         # assignment). The allocator's min-chain-cover reuses a tag across edges
         # that can never be live together (happens-before / same-core order), which

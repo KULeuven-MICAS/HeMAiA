@@ -483,6 +483,58 @@ class BingoDFGTransformsMixin:
                   f"added{': ' + str(added[:4]) if added else ''}")
         return added
 
+    def bingo_transform_order_chain_hop_tasks(self) -> list[tuple[str, str]]:
+        """Order every task of a ChainGather hop's xDMA core against the gather.
+
+        A ChainGather runs through the xDMA engine and writer junction of every (chiplet,
+        cluster) of its chain, but only its collector has a task for it: the hops' schedulers
+        know nothing of it. A task of a hop's xDMA core that the graph leaves unordered against
+        the gather could drive that engine while the chain passes through it. So every such pair
+        gets a dependency edge: the task before the gather's start when the dispatch order (the
+        order edges included) puts it first, or else it was built first; the gather's end (its
+        wait, when split) before the task otherwise. The collector's own core needs none: it runs
+        the gather. Returns the edges added."""
+        from bingo_platform import core_roles
+        roles = getattr(self, "core_roles", None) or core_roles()
+        xdma = roles["xdma"]
+        gathers = [n for n in sorted(self.nodes(), key=lambda n: n.node_id)
+                   if (n.kernel_name or "").endswith(("xdma_chain_gather", "xdma_chain_start"))
+                   and n.kernel_args is not None and self._chain_gather_hops(n.kernel_args) is not None]
+        if not gathers:
+            return []
+        on_core = {}
+        for n in self.nodes():
+            if n.assigned_core_id == xdma:
+                on_core.setdefault((n.assigned_chiplet_id, n.assigned_cluster_id), []).append(n)
+        view = self.bingo_order_view()
+        added = []
+        for g in gathers:
+            end = getattr(g, "operands_held_by", g)
+            own = (g.assigned_chiplet_id, g.assigned_cluster_id)
+            hops = set(self._chain_gather_hops(g.kernel_args)) - {own}
+            before, after = nx.ancestors(self, g), nx.descendants(self, end)
+            v_before = nx.ancestors(view, g) if view is not self else before
+            v_after = nx.descendants(view, end) if view is not self else after
+            for hop in sorted(hops):
+                # the latest first: an edge from a task orders its ancestors too
+                for t in sorted(on_core.get(hop, []), key=lambda n: -n.node_id):
+                    if t is g or t is end or t in before or t in after:
+                        continue
+                    first = t in v_before or (t not in v_after and t.node_id < g.node_id)
+                    a, b = (t, g) if first else (end, t)
+                    self.bingo_add_edge(a, b)
+                    if view is not self:
+                        view.add_edge(a, b)
+                    if first:
+                        before |= nx.ancestors(self, t) | {t}
+                    else:
+                        after |= nx.descendants(self, t) | {t}
+                    added.append((a.node_name, b.node_name))
+        if added:
+            print(f"[bingo] ChainGather hop check: {len(gathers)} gathers, {len(added)} task(s) on their hops' xDMA "
+                  f"cores ordered against them: {added[:4]}")
+        return added
+
     def bingo_transform_add_core_sequencing_edges(self) -> int:
         """Add edges between consecutive tasks on the same core.
 

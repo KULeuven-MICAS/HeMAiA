@@ -99,6 +99,29 @@ def test_teardown_only_ahead_of_a_configure():
     assert w2.kernel_args.teardown, "the last one leaves them clean"
 
 
+
+def test_hop_xdma_tasks_ordered_against_the_gather():
+    # a gather from chip 0 cluster 0 through chip 1 cluster 0: chip 1 cluster 0's xDMA tasks the graph leaves unordered
+    # against it get an edge (built before it: into it; after: out of its wait); other cores and clusters none
+    import networkx as nx
+    ctx = graph()
+    dfg = ctx.dfg
+    dfg.core_roles = {"gemm": 0, "simd": 1, "xdma": XDMA, "dm": 3, "host": 4}
+    hop = Ctx(dfg=dfg, mesh=(16, 4, 16), roles=dfg.core_roles, chiplet=1)
+    early = hop.at(0).node("early", XDMA, COPY, copy_args(), [])
+    ordered = hop.at(0).node("ordered", XDMA, COPY, copy_args(), [])
+    dm_task = hop.at(0).node("dm_task", 3, COPY, copy_args(), [])
+    other_cl = hop.at(1).node("other_cl", XDMA, COPY, copy_args(), [])
+    _, st, wt = split(adder(ctx, 0), "g", gather(hops=((1, 0), (0, 0))), [ordered])
+    late = hop.at(0).node("late", XDMA, COPY, copy_args(), [])
+    added = dfg.bingo_transform_order_chain_hop_tasks()
+    names = sorted((x.rsplit("_cl", 1)[0], y.rsplit("_cl", 1)[0]) for x, y in added)
+    assert names == [("early_k01", "g_st"), ("g", "late_k01")] or names == [("early", "g_st"), ("g", "late")], names
+    assert nx.has_path(dfg, early, st) and nx.has_path(dfg, wt, late)
+    assert not any(dm_task in e or other_cl in e for e in dfg.edges()), "not a hop's xDMA core"
+    assert dfg.bingo_transform_order_chain_hop_tasks() == [], "a second pass adds nothing"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
