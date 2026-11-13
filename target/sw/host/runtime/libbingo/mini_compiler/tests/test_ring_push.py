@@ -103,7 +103,7 @@ print("\nthe runs: one push a run, on the ring's cluster's DM core")
 d, rings, loads, start = build()
 for c in range(2):
     ps = pushes_of(d, c)
-    sizes = [nb for _, _, _, nb in rings.entries[c]]
+    sizes = [nb for _, _, nb in rings.entries[c]]
     check(f"ring {c}: the pushes carry every chunk and byte",
           sum(p.kernel_args.chunks for p in ps) == len(sizes) and sum(p.kernel_args.size for p in ps) == sum(sizes),
           [(p.kernel_args.chunks, p.kernel_args.size) for p in ps])
@@ -114,9 +114,8 @@ for c in range(2):
     check(f"ring {c}: the first push follows the start", d.has_edge(start, ps[0]))
     check(f"ring {c}: each push follows the one before", all(d.has_edge(a, b) for a, b in zip(ps, ps[1:])))
     lds = [ld for ld, _, _ in loads[c]]
-    check(f"ring {c}: each load follows a push, and writes no release word",
-          all(any(p.kernel_name == PUSH for p in d.predecessors(ld)) and ld.kernel_args.release_addr == 0
-              for ld in lds))
+    check(f"ring {c}: each load follows a push",
+          all(any(p.kernel_name == PUSH for p in d.predecessors(ld)) for ld in lds))
 
 print("\nthe overwrites: a run's push follows every load of the bytes it writes")
 for c in range(2):

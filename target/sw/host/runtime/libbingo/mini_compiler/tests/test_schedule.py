@@ -152,7 +152,7 @@ check("the four dispatches numbered 1..4", sorted(t.kernel_args.seq for t in gs 
 print("\nring loads wait for their ring's post")
 d = new_dfg()
 ld = task(d, DM, "ld", "__snax_bingo_kernel_idma_ring_load",
-          SnaxBingoKernelIdmaRingLoadArgs(0x40, 1, 0x50, 0x60, 8192, 0x70))
+          SnaxBingoKernelIdmaRingLoadArgs(0x40, 1, 0x50, 0x60, 8192))
 x = copy(d, "x", 4096)
 start = task(d, DM, "start", "__snax_bingo_kernel_stamp", None, [x])
 post = task(d, DM, "post", "__snax_bingo_kernel_engine_post", None, [start])

@@ -865,7 +865,7 @@ class FaBuild(cm.ChipletBuild):
         readers = [self.ld_node[(k, c2, n)] for c2 in range(self.NC) if c2 != rel and (k, c2, n) in self.ld_node] \
             if c == rel else []
         ld = self.node(k, c, dm, f"{name}", "__snax_bingo_kernel_idma_ring_load",
-                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, 0),
+                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb),
                        list(dict.fromkeys(war + prev + list(deps) + readers + [post])))
         self.rings[k].read_chunk(0, seq - 1, ld, last=c == rel)
         if c != rel and (k, rel, n) in self.ld_node:

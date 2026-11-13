@@ -961,8 +961,8 @@ class ChipletBuild(FabricBase):
                 dfg, out,
                 ring_tables=[ring_table(self.rings[k], k, self.mem[k], self.engine[k])
                              for k in self.chips],
-                prefetch=dict(ring_slots=self.n_slots, batch=self.ring_batch, head=self.ring_head,
-                              batch_head=self.ring_batch_head),
+                ring_params=dict(slots=self.n_slots, batch=self.ring_batch, head=self.ring_head,
+                                 batch_head=self.ring_batch_head),
                 meta=dict(workload=T, app=app_name, chips=list(self.chips), nc=self.NC,
                           tokens=self.T,
                           params={k: v for k, v in p.items()

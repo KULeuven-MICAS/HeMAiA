@@ -329,24 +329,18 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     until the slot's flag holds `seq`, then copy `size` bytes from the slot. The memory
     chiplet's iDMA pushes the chunk and then its flag, posted by the ring's cluster
     (libs/blocks/load_stream.py WeightRings); the flag is a local L3 word. The next post of the
-    slot follows the slot's last load in the graph. WeightRings passes release_addr 0 (no release
-    word written) and trailer False (the flag word, not a magic last beat); the kernel keeps
-    both fields."""
+    slot follows the slot's last load in the graph."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
 
-    def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr,
-                 trailer: bool = False):
+    def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int):
         if seq < 1 or size <= 0:
             raise ValueError(f"seq={seq} (from 1), size={size}.")
         self.flag_addr, self.seq, self.src_addr = flag_addr, int(seq), src_addr
-        self.dst_addr, self.size, self.release_addr = dst_addr, int(size), release_addr
-        # trailer: flag_addr is the record's last beat (a 64-bit magic, cleared after the copy)
-        # instead of the ring's flag word
-        self.trailer = int(bool(trailer))
+        self.dst_addr, self.size = dst_addr, int(size)
 
     def accesses(self):
         # the ring slot and its flags: the ring's protocol orders them (the posts' edges)
-        return [Sync("flag_addr"), Sync("src_addr"), Write("dst_addr", self.size), Sync("release_addr")]
+        return [Sync("flag_addr"), Sync("src_addr"), Write("dst_addr", self.size)]
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_ring_load_args_t"
@@ -358,9 +352,6 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["size"] = str(self.size)
-        self._process_addr(self.release_addr, "release_addr", a, handle_name_map,
-                           split_64bit=False)
-        a["trailer"] = str(self.trailer)
         return a
 
 

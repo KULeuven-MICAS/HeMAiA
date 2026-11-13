@@ -158,10 +158,9 @@ class WeightRings:
         if self.batch_head and not (self.head > 1 and 1 <= self.batch_head <= n_slots):
             raise ValueError(f"WeightRings: head {head} batch_head {batch_head}; head > 1 and "
                              f"1..n_slots ({n_slots}).")
-        self.entries = [[] for _ in range(n_rings)]      # (src, 0, offset, size): the Execution IR's entry
-        # per entry, for an Execution-IR export (bingo_exec_export): the bytes the GEMV reads after
-        # expansion, and whether the pushed record is compressed; `last_take` is the (ring, index)
-        # of the newest chunk, which the streamed Linear tags its ring load with
+        self.entries = [[] for _ in range(n_rings)]      # (src, offset, size) a chunk, in ring order
+        # (the run rule's input and the Execution-IR export's ring tables); `last_take` is the (ring,
+        # index) of the newest chunk, which the streamed Linear tags its ring load with
         self.last_take = None
         # The newest ring load per cluster: every load of a ring waits for the one before
         # (same DM core, no tag), so the loads run in the ring's order whatever block
@@ -301,7 +300,7 @@ class WeightRings:
             lim = self.batch_head       # the run's first chunk is k - run[1]
         if run is None or run[1] >= lim or k % self.n_slots == 0 or k == 1:
             return False
-        p_src, _kind, p_off, p_n = self.entries[ring][k - 1]
+        p_src, p_off, p_n = self.entries[ring][k - 1]
         return src + offset == p_src + p_off + p_n
 
     def _take(self, ring: int, src: int, nbytes: int, offset: int = 0):
@@ -322,7 +321,7 @@ class WeightRings:
         run[1] += 1
         run[2] += nbytes
         idx = ring * self.n_slots + k % self.n_slots
-        self.entries[ring].append((src, 0, offset, nbytes))
+        self.entries[ring].append((src, offset, nbytes))
         self.last_take = (ring, k)
         return at_offset(self.slots, place), at_offset(self.flags, idx * 64), k + 1, new, rel
 
@@ -343,7 +342,7 @@ class WeightRings:
         after = list(dict.fromkeys(list(war) + prev + list(deps)))
         after.append(self._push(node, dm, name, ring, new, rel, int(src) + int(offset), nbytes, sl, fl, seq - 1))
         ld = node(name, dm, "__snax_bingo_kernel_idma_ring_load",
-                  SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, 0, trailer=False), after)
+                  SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes), after)
         self.last[cluster] = ld
         ld.exec_chunk = self.last_take
         self._held[ring].append((rel, rel + nbytes, seq - 1, ld))

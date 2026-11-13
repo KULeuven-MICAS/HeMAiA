@@ -359,19 +359,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
-// the trailer's 64-bit magic: a record whose last beat holds it has landed
-#ifndef BINGO_RING_TRAILER_MAGIC
-#define BINGO_RING_TRAILER_MAGIC 0x5EED7A11C0DEF1A6ULL
-#endif
-
 // One chunk of a weight RING in this chiplet's L3 into an L1 slab. The memory chiplet's
 // iDMA PUSHES the weights into the ring (over the half-duplex D2D link a push flows one way,
 // a pull turns the link around per request), a run of chunks at a time, then the run's 64-B
 // flags, each holding its chunk's sequence number. Same iDMA queue, one AXI ID, one link:
 // the flags land after the chunks. The runs are posted by a cluster's DM core (engine_post
 // below; WeightRings). So: wait for the flag, then copy the slot (a local L3 read); the post
-// that reuses the slot follows the slot's last load in the graph. The generator passes
-// release_addr 0 and trailer 0: no release word, and the flag word rather than a trailer.
+// that reuses the slot follows the slot's last load in the graph.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_ring_load_args_t);
@@ -380,36 +374,19 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     const __snax_bingo_kernel_idma_ring_load_args_t *a =
         (const __snax_bingo_kernel_idma_ring_load_args_t *)arg;
     volatile uint32_t *flag = (volatile uint32_t *)a->flag_addr;
-    volatile uint32_t *release = (volatile uint32_t *)a->release_addr;
     const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
     const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_ring_load_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
     bingo_dma_drain();
-    if (a->trailer) {
-        // trailer: the record's own last beat says it has landed (the push writes it last,
-        // one transfer, writes in order); the slots are zero at boot (.bss)
-        while (flag[0] != (uint32_t)BINGO_RING_TRAILER_MAGIC ||
-               flag[1] != (uint32_t)(BINGO_RING_TRAILER_MAGIC >> 32)) {
-        }
-    } else {
-        while (*flag != a->seq) {
-        }
+    while (*flag != a->seq) {
     }
     snrt_dma_start_1d_wideptr(dst, src, a->size);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
-    if (a->trailer) {
-        // cleared before the slot is freed: a later record ending here must not look landed
-        flag[0] = 0u;
-        flag[1] = 0u;
-    }
-    // release_addr 0: no release word (the post that reuses the slot follows this load in the
-    // graph).
-    if (release) *release = a->seq;
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 

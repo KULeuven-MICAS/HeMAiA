@@ -349,11 +349,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_copy_slot_args {
 } __snax_bingo_kernel_idma_copy_slot_args_t;
 
 // One chunk of an L3 weight ring into L1 (offload_hw_kernels/idma.h): wait until the
-// slot's flag holds `seq`, copy the slot, write `seq` into its release word. flag_addr
-// and release_addr are this chiplet's local 32-bit L3 addresses. release_addr 0: no release
-// word is written (one of several readers of the slot, where the last reader's load writes
-// it; or a ring whose cluster posts its runs, engine_post, where the graph orders the next
-// post of the slot after the load).
+// slot's flag holds `seq`, then copy the slot. flag_addr is this chiplet's local 32-bit L3
+// address. The graph orders the next post of the slot after the slot's last load.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t flag_addr;
   uint32_t seq;           // the chunk's sequence number in its ring, from 1
@@ -362,11 +359,6 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t dst_addr_hi;   // the L1 slab
   uint32_t dst_addr_lo;
   uint32_t size;
-  uint32_t release_addr;
-  // trailer: flag_addr is the record's last beat, holding a 64-bit magic (idma.h
-  // BINGO_RING_TRAILER_MAGIC) the push itself writes last; polled, then cleared. 0 (what the
-  // generator passes): flag_addr is the ring's flag word, polled for `seq`.
-  uint32_t trailer;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_ring_load_args_t;
 

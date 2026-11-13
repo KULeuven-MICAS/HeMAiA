@@ -555,7 +555,7 @@ class FaDecodeKs(FaBuild):
             self.ring_posted[k] += 1
         sl, fl, seq, nb, c, ex, post = self.tk[k][name]
         ld = self.nd(k, c, "dm", f"Ld_{name}", "__snax_bingo_kernel_idma_ring_load",
-                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb, 0), list(deps) + [post])
+                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb), list(deps) + [post])
         self.rings[k].read_chunk(0, seq - 1, ld, last=True)
         ld.exec_chunk = ex
         if name == self.last_name[k]:

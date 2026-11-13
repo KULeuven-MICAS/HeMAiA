@@ -2,14 +2,14 @@
 
 The bingo framework's chiplet DSE simulates the layer from this file instead of re-deriving its
 structure: every node the RTL runs (dummy dep-tag nodes included), its core, kernel and arguments,
-the dependency edges, each chip's descriptor stream in dispatch order, and the weight rings with
-their chunks (pushed and expanded bytes) and their run parameters (the `prefetch` entry: slots,
-batch, head, batch_head). The framework's `frontend/parser_hemaia` maps it onto its cost model; the
-schema keeps the fields its parser reads (a chunk's routed and trailer flags are always false).
+the dependency edges, each chip's descriptor stream in dispatch order, the weight rings with their
+chunks (bytes, and the run stream each belongs to) and the rings' run parameters (`ring_params`:
+slots, batch, head, batch_head). The framework's `frontend/parser_hemaia` maps it onto its cost
+model.
 
     dfg.skip_viz = True                      # optional: the pictures are slow on large graphs
     dfg.bingo_compile_dfg(...)
-    bingo_export_exec_ir(dfg, "exec_ir.json", ring_tables=[...], prefetch={...}, meta={...})
+    bingo_export_exec_ir(dfg, "exec_ir.json", ring_tables=[...], ring_params={...}, meta={...})
 
 Arguments are exported generically: a numeric field as a number, a memory handle as its level, chip
 and cluster (where it is), so the framework can tell an L1, L3, HBM or cross-chip copy apart.
@@ -57,7 +57,7 @@ def _args(args) -> Dict[str, object]:
     return out
 
 
-def bingo_export_exec_ir(dfg, path: str, ring_tables: List[dict] = None, prefetch: dict = None,
+def bingo_export_exec_ir(dfg, path: str, ring_tables: List[dict] = None, ring_params: dict = None,
                          meta: dict = None) -> dict:
     """Write `path` (JSON) and return the dict. Call after `bingo_compile_dfg` (the stream order and
     the dummy nodes are the compiled graph's)."""
@@ -82,7 +82,7 @@ def bingo_export_exec_ir(dfg, path: str, ring_tables: List[dict] = None, prefetc
                      "handles": {k: v for k, v in args.items() if isinstance(v, dict)}}})
         per_chip.setdefault(chip, []).append(n.node_id)
     doc = {"tasks": tasks, "rings": [], "route_tasks": [], "notes": [], "desc_in_l3": False,
-           "prefetch": prefetch, "order": {str(k): v for k, v in per_chip.items()},
+           "ring_params": ring_params, "order": {str(k): v for k, v in per_chip.items()},
            "meta": dict(meta or {}, source="hemaia", nodes=len(tasks)),
            "ring_tables": ring_tables or []}
     with open(path, "w") as f:
@@ -91,31 +91,20 @@ def bingo_export_exec_ir(dfg, path: str, ring_tables: List[dict] = None, prefetc
 
 
 def ring_table(rings, chip: int, mem: int, engine: int) -> dict:
-    """A chip's WeightRings as plain data: per ring its chunks (pushed bytes, expanded bytes, routed,
-    trailer, compressed, source stream)."""
+    """A chip's WeightRings as plain data: per ring its chunks in ring order, each its bytes and its
+    source stream."""
     out = {"chip": chip, "mem": mem, "engine": engine, "n_slots": rings.n_slots,
-           "slot_bytes": rings.slot_bytes, "split": bool(getattr(rings, "split", False)),
-           "n_clusters": getattr(rings, "n_clusters", rings.n_rings), "rings": []}
+           "slot_bytes": rings.slot_bytes, "rings": []}
     for r, entries in enumerate(rings.entries):
         chunks, sid, prev = [], 0, None
-        for src, kind, off, nbytes in entries:
-            routed = bool(kind & 1)
+        for src, off, nbytes in entries:
             # the rings' run rule (WeightRings._continues): a run goes on only within one source
             # stream -- the next byte of the same range. A new stream id where it breaks; the
             # simulator's runs never cross one.
             if prev is not None:
-                ps, pk, po, pn = prev
-                cont = kind == pk and ((src == ps and off == po + pn) if routed
-                                       else src + off == ps + po + pn)
-                sid += 0 if cont else 1
-            prev = (src, kind, off, nbytes)
-            # raw_bytes and compressed stay in the schema the framework's parser reads: a chunk is pushed
-            # as it is stored
-            chunks.append({"nbytes": int(nbytes), "raw_bytes": int(nbytes),
-                           "routed": routed, "trailer": bool(kind & 2), "compressed": False,
-                           "stream": [sid, int(kind)]})
-        n_cl = out["n_clusters"]
-        out["rings"].append({"rid": r, "cluster": r % n_cl,
-                             "kind": ("routed" if r >= n_cl else "dense") if out["split"] else "all",
-                             "chunks": chunks})
+                ps, po, pn = prev
+                sid += 0 if src + off == ps + po + pn else 1
+            prev = (src, off, nbytes)
+            chunks.append({"nbytes": int(nbytes), "stream": sid})
+        out["rings"].append({"rid": r, "cluster": r, "chunks": chunks})
     return out
