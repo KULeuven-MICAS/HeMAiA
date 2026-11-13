@@ -77,7 +77,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
 //          every chip's setup (factor loads, zeroing, preloads)
 //                     |
 //                     v
-//          S0_start  [root, 0, DM]  stamp[0] = mcycle, mark 0 --+--> each chip's weight prefetcher [host]
+//          S0_start  [root, 0, DM]  stamp[0] = mcycle, mark 0 --+--> each ring's first post [DM]
 //                     |
 //                     v
 //          the measured tasks, on every chip

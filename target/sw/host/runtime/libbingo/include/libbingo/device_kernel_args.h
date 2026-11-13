@@ -363,9 +363,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t dst_addr_lo;
   uint32_t size;
   uint32_t release_addr;
-  // weight_ring.trailer: flag_addr is the record's last beat, holding a 64-bit magic
-  // (chiplet_mc.py TRAILER_MAGIC) the push itself writes last; polled, then cleared before the
-  // release. 0: flag_addr is the ring's flag word, polled for `seq`.
+  // trailer: flag_addr is the record's last beat, holding a 64-bit magic (idma.h
+  // BINGO_RING_TRAILER_MAGIC) the push itself writes last; polled, then cleared. 0 (what the
+  // generator passes): flag_addr is the ring's flag word, polled for `seq`.
   uint32_t trailer;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_ring_load_args_t;

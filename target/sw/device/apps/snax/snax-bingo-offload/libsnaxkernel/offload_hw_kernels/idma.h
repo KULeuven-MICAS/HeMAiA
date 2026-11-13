@@ -359,7 +359,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
 
-// weight_ring.trailer's 64-bit magic (util/sim/multichip/chiplet_mc.py TRAILER_MAGIC)
+// the trailer's 64-bit magic: a record whose last beat holds it has landed
 #ifndef BINGO_RING_TRAILER_MAGIC
 #define BINGO_RING_TRAILER_MAGIC 0x5EED7A11C0DEF1A6ULL
 #endif
@@ -368,11 +368,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
 // iDMA PUSHES the weights into the ring (over the half-duplex D2D link a push flows one way,
 // a pull turns the link around per request), a run of chunks at a time, then the run's 64-B
 // flags, each holding its chunk's sequence number. Same iDMA queue, one AXI ID, one link:
-// the flags land after the chunks. The runs are posted by the host's prefetcher
-// (host_kernel_lib.h weight_prefetch) or by this cluster's DM core (engine_post below,
-// weight_ring.mode cluster). So: wait for the flag, copy the slot (a local L3 read), then
-// hand the slot back by writing the same number into its release word, which the
-// prefetcher polls before it reuses the slot.
+// the flags land after the chunks. The runs are posted by a cluster's DM core (engine_post
+// below; WeightRings). So: wait for the flag, then copy the slot (a local L3 read); the post
+// that reuses the slot follows the slot's last load in the graph. The generator passes
+// release_addr 0 and trailer 0: no release word, and the flag word rather than a trailer.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_ring_load_args_t);
@@ -389,8 +388,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
     bingo_dma_drain();
     if (a->trailer) {
-        // weight_ring.trailer: the record's own last beat says it has landed (the push writes
-        // it last, one transfer, writes in order); the slots are zero at boot (.bss)
+        // trailer: the record's own last beat says it has landed (the push writes it last,
+        // one transfer, writes in order); the slots are zero at boot (.bss)
         while (flag[0] != (uint32_t)BINGO_RING_TRAILER_MAGIC ||
                flag[1] != (uint32_t)(BINGO_RING_TRAILER_MAGIC >> 32)) {
         }
@@ -408,10 +407,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
         flag[0] = 0u;
         flag[1] = 0u;
     }
-    // release_addr 0: no release word. Either this load is one of several readers of the slot (a
-    // chunk both clusters of a chip read; the reader that comes last, whose task follows the
-    // others, writes the release), or the cluster posts the ring's runs, and the post that
-    // reuses the slot follows this load in the graph.
+    // release_addr 0: no release word (the post that reuses the slot follows this load in the
+    // graph).
     if (release) *release = a->seq;
     BINGO_RETURN_SUCC(sp, (uint32_t)dst);
 }
@@ -420,8 +417,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 // sys_dma_engine_queue), made by a DM core: two transfers, the data from HBM, then its flags.
 // The engine runs its queue in order and pushes over one link with one AXI ID, so the flags land
 // after the data, and whoever reads the data polls them. Its user: a weight ring's run (the
-// run's chunks into its slots, then their flags from the sequence table; WeightRings cluster
-// mode, read by idma_ring_load). A host posts the same way: host_kernel_lib.h engine_post.
+// run's chunks into its slots, then their flags from the sequence table; WeightRings, read by
+// idma_ring_load). A host posts the same way: host_kernel_lib.h engine_post.
 //
 // Each transfer is written as ONE 32-B iDMA burst, [src, dst, length, doorbell], to the queue
 // window: its staged entry is shared by every writer (other DM cores, a host), and AXI does not
@@ -435,7 +432,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
 // just-issued transfer still waits in the frontend; the task, and with it the next post into
 // the same queue, would then go on before the entries were read.
 //
-// The graph orders the rest (WeightRings, cluster mode): the post follows the loads that last
+// The graph orders the rest (WeightRings): the post follows the loads that last
 // read the bytes it overwrites, and the load of the run a queue share earlier, so the queue
 // never holds more than its depth and the doorbell is never held back.
 _Static_assert(__builtin_offsetof(__snax_bingo_kernel_engine_post_args_t, data_src_lo) == 0 &&

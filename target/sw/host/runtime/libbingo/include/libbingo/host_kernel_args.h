@@ -138,80 +138,6 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_multi_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_idma_multi_args_t;
 
-// The weight prefetcher (host_kernel_lib.h): drives the MEMORY chiplet's system iDMA to
-// PUSH every streamed weight chunk into per-cluster rings in this chiplet's L3, each chunk
-// followed by a 64-B flag holding its sequence number, as fast as the clusters release
-// ring slots. Over the half-duplex D2D link a push flows one way; the clusters' own
-// pulls turned the link around for every read request.
-//
-// sched (uint64 words, in L3):
-//   [0..3]   chunks per ring                [4..7]  first entry of each ring
-//   [8 + 4e .. 8 + 4e + 3]  entry e: {src, kind, offset, size}
-//     kind 0: src is the chunk's global address (HBM or the memchip SRAM)
-//     kind 1: a routed expert: src = slot << 8 | field, the address read at run time
-//             from the router's record (rec, in L3) once its last slot has landed
-//
-// BATCHING. The memchip iDMA queues ONE transfer behind the running one, and queuing it
-// takes a register read over the link, which cannot cross while a push streams the other
-// way: every transfer leaves a bubble of a link turnaround plus a round trip. With
-// `batch` > 1 the prefetcher waits until up to `batch` consecutive chunks of a ring are
-// free and contiguous (in the source and in the ring: every one but the last fills its
-// slot, no wrap) and pushes them as ONE transfer, then their flags as one more.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_args {
-    uint64_t sched_addr;
-    uint64_t ring_addr;     // ring r slot s at ring_addr + (r * n_slots + s) * slot_bytes
-    uint64_t flag_addr;     // 64 B per (ring, slot)
-    uint64_t release_addr;  // 64 B per (ring, slot), written by the cluster that read it
-    uint64_t seq_addr;      // memchip SRAM: entry k (64 B) holds k
-    uint64_t rec_addr;      // the router's record in L3, 0 when no chunk is routed
-    uint64_t rec_slots;     // slots in the record (the last one's down address is the "ready")
-    uint64_t n_rings;       // <= 4
-    uint64_t n_slots;
-    uint64_t slot_bytes;
-    uint64_t memchip_id;
-    uint64_t batch;         // chunks per push transfer, >= 1 (see BATCHING)
-    uint64_t policy;        // which ring goes next: 0 in turn, 1 the one holding fewest chunks
-    uint64_t engine;        // the memchip's push engine (sys_dma.h): one per chip it feeds,
-                            // so two chips on one memchip push at once
-    uint64_t batch_routed;  // chunks per push transfer of a ROUTED run (record-sourced);
-                            // 0: the same as `batch`
-    uint64_t queued;        // 1: post each transfer to the engine's descriptor queue (writes
-                            // only, sys_dma_engine_queue) instead of launching it with reads
-    uint64_t queued_inflight_routed;  // queued: a ROUTED run waits while this many queued runs
-                                      // have not landed (their flags, read locally); 0: no cap
-    uint64_t head;          // a ring's run that STARTS within its first `head` chunks ...
-    uint64_t batch_head;    // ... batches by `batch_head` (0: off; WeightRings, the same rule)
-    uint64_t scratchpad_ptr;
-} __host_bingo_kernel_weight_prefetch_args_t;
-
-// The weight prefetcher over a part of each ring's schedule: chunks [chunk_lo, chunk_hi)
-// (chunk_hi 0: to the ring's end). Two of them on one host, one after the other, push what one
-// prefetcher pushes (a chunk's slot is fixed by its index, and the later one finds the slots the
-// earlier one filled from their release words), so another host task can run between a chip's
-// first chunks and the rest: an HBM multicast on the same push engine, say.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_range_args {
-    __host_bingo_kernel_weight_prefetch_args_t w;   // w.scratchpad_ptr unused
-    uint64_t chunk_lo;
-    uint64_t chunk_hi;
-    uint64_t scratchpad_ptr;
-} __host_bingo_kernel_weight_prefetch_range_args_t;
-
-// The HBM multicast (host_kernel_lib.h): a memory chiplet's push engine multicasts n_tiles
-// tiles from its HBM into every compute chiplet's L3 (chip id 0xFF), each tile followed by
-// its flag, driven by this chiplet's host through the engine's descriptor queue.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_bcast_args {
-    uint64_t src_addr;      // tile 0 in the memory chiplet's HBM; tile t at + t * tile_bytes
-    uint64_t dst_addr;      // tile 0's L3 address, the same on every chiplet
-    uint64_t flag_addr;     // tile 0's flag in L3, the same on every chiplet; 64 B apart
-    uint64_t value_addr;    // a 4-byte word holding `value` in the memory chiplet (HBM or SRAM)
-    uint64_t value;         // what a landed flag holds
-    uint64_t tile_bytes;
-    uint64_t n_tiles;
-    uint64_t memchip_id;
-    uint64_t engine;        // the memory chiplet's push engine (sys_dma.h)
-    uint64_t scratchpad_ptr;
-} __host_bingo_kernel_hbm_bcast_args_t;
-
 // One queue entry of a memory chiplet push engine, word for word as the queue window takes it
 // (sys_dma.h sys_dma_engine_queue): src, dst, length, then the doorbell in the low and the
 // control word in the high half (0: any write of the last word queues the entry).
@@ -228,13 +154,20 @@ _Static_assert(sizeof(host_engine_entry_t) == 32, "a queue entry is the 32-B que
 // (host_kernel_lib.h engine_post): entries e[0 .. n_entries - 1], queued in that order, each
 // copied by this chiplet's system iDMA as one 32-B write (an HBM multicast's tiles, each
 // followed by its flag; an unicast's tiles into one chiplet, then a progress flag here).
+// THE ENTRIES START ON A 32-B BOUNDARY (offset 32; the struct is 32-B aligned, the L3 heap's
+// blocks 128-B), so no entry straddles a 64-B line and the iDMA reads each in one aligned
+// access. The window's src, dst and length are registers the doorbell queues as they stand: an
+// entry whose source word reaches the window after its doorbell is queued with the source the
+// entry before it left (a tile pushed from its flag's source, the memory chip's sequence table).
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_engine_post_args {
     uint64_t memchip;       // the push engine: its memory chiplet ...
     uint64_t engine;        // ... and its index there
     uint64_t n_entries;
-    host_engine_entry_t e[HOST_ENGINE_POST_MAX];
+    host_engine_entry_t e[HOST_ENGINE_POST_MAX] __attribute__((aligned(32)));
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_engine_post_args_t;
+_Static_assert(__builtin_offsetof(__host_bingo_kernel_engine_post_args_t, e) == 32,
+               "engine_post: the queue entries start on a 32-B boundary");
 
 // Wait on this chiplet's host until the 4-byte flag at flag_addr, in its L3, holds value
 // (host_kernel_lib.h wait_flag).
@@ -243,25 +176,6 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_wait_flag_args {
     uint64_t value;
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_wait_flag_args_t;
-
-// The HBM unicast (host_kernel_lib.h): the same tiles and flags as the multicast, written into one
-// listed compute chiplet's L3 at a time, plus a progress flag a tile in this chiplet's L3.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_ucast_args {
-    uint64_t src_addr;      // tile 0 in the memory chiplet's HBM; tile t at + t * tile_bytes
-    uint64_t dst_addr;      // tile 0's L3 address, the same on every chiplet
-    uint64_t flag_addr;     // tile 0's flag in L3, the same on every chiplet; 64 B apart
-    uint64_t prog_addr;     // the progress flags in this chiplet's L3, one per (chiplet, tile); 64 B apart
-    uint64_t value_addr;    // a 4-byte word holding `value` in the memory chiplet (HBM or SRAM)
-    uint64_t value;         // what a landed flag holds
-    uint64_t tile_bytes;
-    uint64_t n_tiles;
-    uint64_t memchip_id;
-    uint64_t engine;        // the memory chiplet's push engine (sys_dma.h)
-    uint64_t n_chips;       // 1..16
-    uint64_t chips_lo;      // chiplet ids 0..7, 8 bits each, chips[0] in the low byte
-    uint64_t chips_hi;      // chiplet ids 8..15
-    uint64_t scratchpad_ptr;
-} __host_bingo_kernel_hbm_ucast_args_t;
 
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
     uint64_t src_addr;
