@@ -126,9 +126,9 @@ class Stage0(cm.ChipletBuild):
                                   S1_end  ->  pf_report, chk_x_<n>  ->  Check_pf_x  ->  Check_pf_x_land_last
 
         x_hbm_bcast_i<i>: the root's host queues its memory chip's push engine to multicast pass i's X, a tile (a row
-        block) at a time, into every chip's L3, each tile followed by its flag (with params hbm_cast.mode posts, one
-        host task a tile, x_hbm_bcast_i<i>_t<b>, and a wait for the last one to land on the root,
-        x_hbm_bcast_i<i>_land<b>: ChipletBuild.hbm_cast). x_wait_i0b<b>: each cluster's DM core spins on tile b's flag,
+        block) at a time, into every chip's L3, each tile followed by its flag (ChipletBuild.hbm_cast: the host's
+        engine posts, x_hbm_bcast_i<i>_post<j>, and a wait for the last tile to land on the root,
+        x_hbm_bcast_i<i>_land<j>). x_wait_i0b<b>: each cluster's DM core spins on tile b's flag,
         then copies the tile into its L1. The order edges (from the task that posts tile b to its waits) only dispatch
         the post ahead of the waits; the flag is the real dependency. P_x_bcast_done: a join point after the last
         multicast. After S1_end the root's host prints the window (pf_report), the checked

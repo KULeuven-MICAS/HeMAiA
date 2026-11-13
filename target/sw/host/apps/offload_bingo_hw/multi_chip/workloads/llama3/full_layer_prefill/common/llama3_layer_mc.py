@@ -50,18 +50,15 @@ the point of one of its parts takes that point's place in the cores' programs.
                      store lag makes during the next pass's first down slices); the write from the top of pass
                      p + final_lag + 1 (or the FFN's end)
 
-THE ROOT'S HOST runs every HBM multicast of both blocks and the root's weight prefetchers, one task after the other.
-The attention's prefetcher on the root runs in parts (weight_prefetch_range) around each pass's x multicast: part 0
-pushes pass 0's projection chunks, then x_0 is multicast (behind its four norms); part i pushes up to pass i - 1's first
-W_O chunk, then x_i is multicast. A part ends once its last chunk is pushed, which needs the chunk n_slots before it read
-from the ring: that read never depends on x_i (proved in finish, _check_prefetch_parts), so a late norm only holds the
-part after it. The FFN's X multicasts follow the attention's last part, each behind its pass's glue; with more than one
-FFN pass the FFN's prefetcher on the root pushes its first layer.ffn_pf_head chunks of each ring before the last pass's
-multicast, the rest after it. With an X ring (layer.x_slots below the FFN's passes) the root's FFN prefetcher runs in parts
-as well: part i - x_slots before X_i, ending right after the last ring load X_i waits for, so the part behind X_i feeds
-no load that X_i waits for (_ffn_ring). After the compile, _check_ring_waits proves that no core's program, prefetcher
-and ring load wait for each other in a cycle. On every other chip the FFN's prefetcher follows the attention's (their rings are separate
-L3 regions), so the FFN's first chunks land under the attention's last pass.
+THE WEIGHT RINGS AND THE MULTICASTS share each memory chip's push engine queue: each cluster posts its rings' runs
+(WeightRings), and the root's host posts every HBM multicast of both blocks (ChipletBuild.hbm_cast), each pass's x
+multicast after the one before has landed, among the root rings' runs. The FFN's X multicasts follow the attention's
+last o8 multicast, each behind its pass's glue; the root's FFN rings start once the first min(layer.x_slots, passes) of
+them have landed (every one with no X ring). With an X ring (layer.x_slots below the FFN's passes) X_i (i >= x_slots) is
+multicast after pass i - 2's last gather and before pass i - 1's first (_ffn_ring). After the compile,
+_check_ring_waits proves that no core's program and the dependencies wait for each other in a cycle. On every other chip
+the FFN's first posts follow the attention rings' last posts (their rings are separate L3 regions), so the FFN's first
+chunks land under the attention's last pass.
 
 THE COLLECTIVES. The multicasts in time: x_0, x_1, o8 of pass 0, x_2, o8 of pass 1, ..., o8 of the last pass, then the FFN's
 X multicasts, then the FFN's ChainGathers. Each o8 multicast waits for the next pass's x multicast, each x multicast for the
@@ -74,8 +71,8 @@ stamp each sample is copied into one L3 buffer on the root (from HBM behind its 
 PARAMETERS (params.hjson): the platform and graph switches both blocks share (and args_phase_bytes: each cluster's task
 args in phases of at most this many bytes), then `attn` (llama3_attn_mc.py's params), `ffn` (ffn_prefill_mc.py's) and
 `layer`: cluster (0 | 1, the steps' cluster), ffn_passes (the FFN's built passes, at most attn.passes), norm_lead,
-glue_lag, final_lag, final_slice, ffn_pf_head, inplace_norm (the input norm's RMSNorm in place: half its L1), piece_rows,
-norm_cluster, glue_cluster, final_cluster, final_step, final_root_rows, x_slots, alias_l3, rope_hbm, ffn_part_chunk.
+glue_lag, final_lag, final_slice, inplace_norm (the input norm's RMSNorm in place: half its L1), piece_rows,
+norm_cluster, glue_cluster, final_cluster, final_step, final_root_rows, x_slots, alias_l3, rope_hbm.
 """
 
 import os
@@ -96,7 +93,7 @@ sys.path.insert(0, os.path.join(WL, "llama3", "common"))
 
 import _bingo_paths  # noqa: F401,E402
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmBcastArgs, HostBingoKernelWeightPrefetchRangeArgs, SnaxBingoKernelIdma1dCopyArgs,
+    HostBingoKernelHbmBcastArgs, SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs, SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMulTilesArgs, SnaxBingoKernelSimdRmsnormArgs,
@@ -120,16 +117,13 @@ class LayerStaging:
     `drop` stages nothing (a buffer of a block the layer never reads or writes); put_zeros of a name in `sizes` stages that
     many bytes instead (a ring of a block's per-pass buffer); put_zeros of a name in `alias` stages nothing and the name
     becomes its region (finish stages each region once, at `sizes[region]` or the largest extent asked; lines are the
-    defines); put of the name `rope[0]` stages the array in the HBM of each memory chip in `rope[1]` instead (rope_h);
-    with `chip_arrays` (per_chip_image) a weight ring's schedule goes into its own chip's image only (lines()): only that
-    chip's prefetcher reads it, and in the shared data every image would hold every chip's."""
+    defines); put of the name `rope[0]` stages the array in the HBM of each memory chip in `rope[1]` instead (rope_h)."""
 
-    def __init__(self, st, zero_hbm=(), drop=(), alias=None, sizes=None, rope=None, chip_arrays=False):
+    def __init__(self, st, zero_hbm=(), drop=(), alias=None, sizes=None, rope=None):
         self._st, self.zero_hbm, self.drop = st, set(zero_hbm), set(drop)
         self.zeroed, self.dropped = [], []
         self.alias, self.sizes, self.asked = dict(alias or {}), dict(sizes or {}), {}
         self.rope, self.rope_h = rope, {}
-        self.chip_arrays = [] if chip_arrays else None
 
     def __getattr__(self, name):
         return getattr(self._st, name)
@@ -145,10 +139,6 @@ class LayerStaging:
             raw = np.ascontiguousarray(arr).view(np.uint8).reshape(-1)
             for m in self.rope[1]:
                 self.rope_h[m] = self._st.put_hbm(f"{name}_m{m:02x}", raw, mem_chip=(m >> 4, m & 15))
-            return BingoMemSymbol(name)
-        m = re.fullmatch(r"\w+_ring_sched_k([0-9a-f]{2})", name)
-        if self.chip_arrays is not None and m is not None:
-            self.chip_arrays.append((int(m.group(1), 16), name, ctype, np.asarray(arr).reshape(-1)))
             return BingoMemSymbol(name)
         return self._st.put(name, ctype, arr, mem_chip=mem_chip)
 
@@ -172,35 +162,18 @@ class LayerStaging:
 
     def lines(self):
         names = [(n, r) for n, r in sorted(self.alias.items()) if n in self.asked]
-        out = (["// one L3 region, several names (llama3_layer_mc.py LayerStaging)"] + [f"#define {n} {r}" for n, r in names]
-               if names else [])
-        for chip, name, ctype, arr in self.chip_arrays or ():
-            vals = [f"{int(v)}ULL" for v in arr]
-            out += [f"#if !defined(BINGO_ONLY_CHIP) || BINGO_ONLY_CHIP == 0x{chip:02x}",
-                    f'{ctype} {name}[{arr.size}] __attribute__ ((aligned (64), section (".bingo_chip.data"))) = {{']
-            out += ["    " + ", ".join(vals[i:i + 8]) + "," for i in range(0, len(vals), 8)]
-            out += ["};", "#endif"]
-        return out
+        return (["// one L3 region, several names (llama3_layer_mc.py LayerStaging)"] + [f"#define {n} {r}" for n, r in names]
+                if names else [])
 
 
 def _hbm(h, off=0):
     return BingoMemFixedAddr(h.address + off, mem_level="HBM")
 
 
-def _range_args(b, lo, hi):
-    """The weight prefetcher `b` (its args) over chunks [lo, hi) of each ring (hi 0: to the ring's end)."""
-    return HostBingoKernelWeightPrefetchRangeArgs(
-        b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-        b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-        batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed, head=b.head,
-        batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-
-
 # ---- the blocks, over the layer's graph ------------------------------------------------------------------------------
 class AttnPart(lam.ABuild):
     """The attention block in the layer: its window opened by the layer, its x multicasts the layer's (behind the
-    norms, between parts of the root's prefetcher), its pass boundaries the layer's step points, its checks the
-    layer's."""
+    norms), its pass boundaries the layer's step points, its checks the layer's."""
     stream_name = "zs_la_stream"
 
     def __init__(self, layer, args, p, plat, hw):
@@ -321,8 +294,8 @@ class LayerBuild(cm.ChipletBuild):
         if self.SC not in range(self.NC):
             raise ValueError(f"params layer.cluster={self.SC}: a cluster index")
         # params layer.x_slots: both blocks' x landing areas a ring of this many passes (0: one area a pass); alias_l3:
-        # one L3 region for the two blocks' x rings, one for their y tiles, one for their weight rings (the FFN's
-        # prefetchers then follow the attention's last ring loads); rope_hbm: the attention's RoPE tables in HBM
+        # one L3 region for the two blocks' x rings, one for their y tiles, one for their weight rings (each chip's FFN
+        # ring posts then follow its attention's last ring loads); rope_hbm: the attention's RoPE tables in HBM
         self.x_slots = int(lp.get("x_slots", 0))
         self.alias_l3 = bool(lp.get("alias_l3", False))
         self.rope_hbm = bool(lp.get("rope_hbm", False))
@@ -344,7 +317,7 @@ class LayerBuild(cm.ChipletBuild):
         rope = ("la_rope", sorted(set(self.mem.values()))) if self.rope_hbm else None
         # the blocks' input regions in HBM are written in the window; the FFN's root Y buffer is never used (y_scatter)
         self.st = LayerStaging(self.st, zero_hbm=("la_xhbm", "pf_xhbm"), drop=("pf_y",), alias=alias, sizes=sizes,
-                               rope=rope, chip_arrays=bool(p.get("per_chip_image", False)))
+                               rope=rope)
         self.xch_zero = False
         # params layer.piece_rows (16 | 8 | 4): rows a step processes at a time inside the window (its L1 buffers that
         # many rows); norm_cluster, glue_cluster, final_cluster: each step's cluster (default layer.cluster);
@@ -362,28 +335,15 @@ class LayerBuild(cm.ChipletBuild):
         self.PR_root = int(lp.get("final_root_rows", self.PR))
         if TR % self.PR_root or self.PR_root > self.PR:
             raise ValueError(f"params layer.final_root_rows={self.PR_root}: divides {TR}, at most piece_rows")
-        # params layer.ffn_part_chunk: the root's FFN prefetcher part before X_i reaches at least pass i - 1's chunk of
-        # this index (more where X_i waits for a later load, _ffn_parts), so pass i - 1's first gate|up chunks land
-        # before X_i, which waits for pass i - 2's last gathers
-        self.ffn_part_chunk = int(lp.get("ffn_part_chunk", 8))
         self.norm_lead = int(lp.get("norm_lead", 2))
         self.glue_lag = int(lp.get("glue_lag", 1))
         self.final_lag = int(lp.get("final_lag", 1))
         self.final_slice = int(lp.get("final_slice", 8))
-        self.ffn_pf_head = int(lp.get("ffn_pf_head", 16))
         self.inplace_norm = bool(lp.get("inplace_norm", False))
-        # weight_ring.mode: both blocks' rings filled by prefetchers (the root's in parts around the multicasts), or
-        # both posted run by run by their clusters (cluster: no parts; the casts and the rings post into the engine's
-        # queue, which orders them)
-        modes = {str(dict(common, **p[b]).get("weight_ring", {}).get("mode", "prefetcher")) for b in ("attn", "ffn")}
-        if len(modes) != 1:
-            raise ValueError(f"params attn / ffn weight_ring.mode: one mode for both blocks, not {sorted(modes)}")
-        self.cluster_rings = modes == {"cluster"}
         if self.norm_lead < 1 or self.glue_lag < 1 or self.final_lag < 1:
             raise ValueError("params layer.norm_lead, glue_lag, final_lag: at least 1 (a pass's step beside another pass)")
         if self.NPC > 1 and self.norm_lead < self.NPC + 1:
-            # a piece a pass: the last piece's write follows that iteration's W_O loads, which the root's prefetcher pushes
-            # before pass p's x multicast only up to iteration p - 2
+            # a piece a pass: the last piece's write follows that iteration's W_O loads
             raise ValueError(f"params layer.norm_lead={self.norm_lead} with {self.NPC} pieces a tile: at least {self.NPC + 1}")
         self.ps = {}
         self.marks, self.pending, self.made = {}, [], set()
@@ -392,6 +352,8 @@ class LayerBuild(cm.ChipletBuild):
 
         # ---- the attention ---------------------------------------------------------------------------------------
         pa = dict(common, **p["attn"])
+        if "x_pf_split" in pa or "x_pf_chunks" in pa:
+            raise ValueError("params attn.x_pf_split, x_pf_chunks: the layer posts the x multicasts itself (attn_x_puts)")
         if pa.get("x_device"):
             raise ValueError("params attn.x_device: the layer's attention takes x8 from HBM (the input norm writes it)")
         A = self.attn = AttnPart(self, args, pa, plat, hw)
@@ -408,7 +370,7 @@ class LayerBuild(cm.ChipletBuild):
                              "in the root's L3)")
 
     def mem_handles(self):
-        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        """The data, the golden and the memory; no task is made here. The attention's
         (AttnPart's mem_handles), then the golden on its data: x and h. The FFN part (FfnPart), on params
         layer.ffn_passes of the attention's built passes (default all of them), then its data, golden and memory (its
         mem_handles, on h), its gain checked against the layer's, the output's golden. The layer's own data: per memory
@@ -873,8 +835,8 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the windows -------------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the head: the norms
-        of the first norm_lead passes, before the attention's tasks."""
+        """The start stamp (after every chip's setup), the attention's first ring posts behind it, and the head: the
+        norms of the first norm_lead passes, before the attention's tasks."""
         A = self.attn
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
         start = self.stamp("start", ends)
@@ -892,67 +854,15 @@ class LayerBuild(cm.ChipletBuild):
         return dict(self.go)
 
     def attn_x_puts(self, go):
-        """The root's host: the attention's prefetcher in parts, each pass's x multicast after its part. The parts'
-        chunk ranges are set once the rings are known (_set_attn_parts)."""
+        """The root's host: each pass's x multicast after the one before has landed, its posts queued in the root
+        memory chip's engine among the root rings' runs (not ahead of them)."""
         A, R = self.attn, self.ROOT
-        if self.cluster_rings:
-            # no prefetcher: each pass's x multicast after the one before has landed, its posts queued in the root
-            # memory chip's engine among the root rings' runs (not ahead of them)
-            self.a_parts, self.x_bc, prev = [], [], [go[R]]
-            for i in range(A.NP):
-                self.x_bc.append(A.stage_x_put(i, prev, ahead_of_rings=False))
-                prev = [self.done_of(self.x_bc[-1])]
-            A._x_put_last = self.x_bc[-1]
-            return list(self.x_bc)
-        pf = A.prefetch[R]
-        self.a_pf_args = pf.kernel_args
-        self.a_parts, self.x_bc, prev = [], [], [go[R]]
+        self.x_bc, prev = [], [go[R]]
         for i in range(A.NP):
-            part = self.cx_chip(R).host_node(f"la_prefetch_part{i}_k{R:02x}", HostBingoKernelWeightPrefetchRangeArgs.KERNEL_NAME,
-                                             _range_args(self.a_pf_args, 0, 1), after=prev)
-            self.a_parts.append(part)
-            self.x_bc.append(A.stage_x_put(i, [part]))
+            self.x_bc.append(A.stage_x_put(i, prev, ahead_of_rings=False))
             prev = [self.done_of(self.x_bc[-1])]
-        pf.kernel_args = _range_args(self.a_pf_args, 0, 0)
-        pf.kernel_name = pf.kernel_args.KERNEL_NAME
-        self.edge(self.x_bc[-1], pf)
         A._x_put_last = self.x_bc[-1]
         return list(self.x_bc)
-
-    def _set_attn_parts(self):
-        """Each part's chunk range on the root's rings: part 0 pass 0's projection chunks [0, WO0), part i from the end of
-        part i - 1 to pass i - 1's first W_O chunk, the last part (the prefetcher) from there to the ring's end; and the
-        edges that order each x multicast after the o8 multicast two passes back."""
-        A, R = self.attn, self.ROOT
-        if self.cluster_rings:
-            self.a_bounds = []
-            self._x_after_o8()
-            return
-        first_wo = {}
-        for t in self.dfg.node_list:
-            m = re.match(r"Ld_w(\d+)_i(\d+)_k", t.node_name)
-            if m and t.assigned_chiplet_id == R and getattr(t, "exec_chunk", None) is not None:
-                ring, idx = t.exec_chunk
-                j, i = int(m.group(1)), int(m.group(2))
-                if j >= A.WO0:
-                    first_wo[(ring, i)] = min(first_wo.get((ring, i), idx), idx)
-        bounds = [A.WO0]
-        for i in range(1, A.NP):
-            b = {first_wo[(r, i - 1)] for r in range(self.NC)}
-            if len(b) != 1:
-                raise ValueError(f"pass {i - 1}'s first W_O chunk sits at ring indices {sorted(b)} on the root's rings")
-            bounds.append(b.pop())
-        if bounds != sorted(bounds) or len(set(bounds)) != len(bounds):
-            raise ValueError(f"the root prefetcher's part bounds {bounds} are not increasing")
-        lo = 0
-        for i, part in enumerate(self.a_parts):
-            part.kernel_args = _range_args(self.a_pf_args, lo, bounds[i])
-            lo = bounds[i]
-        A.prefetch[R].kernel_args = _range_args(self.a_pf_args, lo, 0)
-        self.a_bounds = bounds
-        self._x_after_o8()
-        print(f"[{self.TAG}] the root's attention prefetcher in {len(self.a_parts) + 1} parts, x multicast i after the part "
-              f"ending at ring index {bounds} (n_slots {A.n_slots})")
 
     def _x_after_o8(self):
         """Each x multicast after the o8 multicast two passes back."""
@@ -966,7 +876,7 @@ class LayerBuild(cm.ChipletBuild):
     def ffn_window(self, extra):
         """The FFN on each chip: its setup loads (the dequantisation factors into L1, `extra`) after the chip's attention
         end (its wait on its tiles of y), one after the other, and the FFN's tasks after the last of them (the go
-        returned); each chip's FFN prefetcher after its attention prefetcher (the root's after its X multicasts,
+        returned); each chip's FFN ring posts after its attention ring posts (the root's after its X multicasts,
         ffn_x_puts)."""
         A, F = self.attn, self.ffn
         go = {}
@@ -981,75 +891,29 @@ class LayerBuild(cm.ChipletBuild):
                     self.edge(go[k], t)
                 go[k] = t
             if k != self.ROOT:
-                # the FFN's pushes after the attention's (cluster: its rings' first posts after the attention rings'
-                # last posts)
+                # the FFN's pushes after the attention's: its rings' first posts after the attention rings' last posts
                 self.pushes_after(F, k, self.push_heads(A, k))
         return go
 
     def ffn_x_puts(self, go):
-        """The root's host after the attention's last prefetcher part: the FFN's X multicasts, each behind its pass's glue
-        and the attention's last o8 multicast; the FFN's prefetcher split around the last one (ffn_pf_head). With an X
-        ring of fewer slots than passes (layer.x_slots) the first x_slots multicasts come here and each later one after
-        a part of the prefetcher (_ffn_ring places it between the gathers)."""
+        """The root's host after the attention's last x multicast: the FFN's X multicasts one after the other, each
+        behind its pass's glue and the attention's last o8 multicast, queued among the root's FFN ring runs; the root's
+        FFN rings start once the first min(x_slots, passes) of them have landed (every X with no X ring; with one,
+        _ffn_ring places each later multicast between the gathers)."""
         A, F, R, T = self.attn, self.ffn, self.ROOT, self.ffn.TAG
         m = F.mem[R]
         one = F.h_seq[m].address + 64
         prev = self.push_heads(A, R) + [self.o_bput_last]
         out = []
-        self.f_head, self.f_parts = None, []
-
-        def bcast(i, after):
+        for i in range(F.NI):
             args = HostBingoKernelHbmBcastArgs(F.h_xhbm.address + i * F.XB, F._xland(i * F.XB),
                                                BingoMemSymbol(f"{T}_xtflag", offset=64 * i * F.TPP), one, 1, F.XT, F.TPP,
                                                m, F.engine[R])
-            # ChipletBuild.hbm_cast: one host task, or with hbm_cast.mode posts its posts and waits (an HbmCast); in
-            # cluster mode queued among the root's FFN ring runs, not ahead of them
-            return self.hbm_cast(R, f"pf_x_hbm_bcast_i{i}_k{R:02x}", args,
-                                 after=after + self.g_conf[i] + self._slot_free(i),
-                                 ahead_of_rings=not self.cluster_rings)
-
-        if self.cluster_rings:
-            # no prefetcher: the X multicasts one after the other; the root's FFN rings start once the first
-            # min(x_slots, passes) of them have landed (every X with no ring: once all have)
-            for i in range(F.NI):
-                out.append(bcast(i, prev))
-                prev = [self.done_of(out[-1])]
-            S = min(self.x_slots, F.NI) if self.x_slots else F.NI
-            self.pushes_after(F, R, [out[S - 1]])
-            self.f_bc = out
-            return out
-
-        if self.x_slots and F.NI > self.x_slots:
-            S = self.x_slots
-            for i in range(S):
-                out.append(bcast(i, prev))
-                prev = [self.done_of(out[-1])]
-            b = self.f_pf_args = F.prefetch[R].kernel_args
-            for i in range(S, F.NI):
-                part = self.cx_chip(R).host_node(f"pf_prefetch_part{i - S}_k{R:02x}",
-                                                 HostBingoKernelWeightPrefetchRangeArgs.KERNEL_NAME, _range_args(b, 0, 1),
-                                                 after=prev)
-                self.f_parts.append(part)
-                out.append(bcast(i, [part]))
-                prev = [self.done_of(out[-1])]
-            F.prefetch[R].kernel_args = _range_args(b, 0, 0)
-            F.prefetch[R].kernel_name = F.prefetch[R].kernel_args.KERNEL_NAME
-            self.edge(out[-1], F.prefetch[R])
-            self.f_bc = out
-            return out
-        for i in range(F.NI):
-            if i == F.NI - 1 and F.NI > 1 and self.ffn_pf_head:
-                b = F.prefetch[R].kernel_args
-                self.f_pf_args = b
-                self.f_head = self.cx_chip(R).host_node(f"pf_prefetch_head_k{R:02x}",
-                                                        HostBingoKernelWeightPrefetchRangeArgs.KERNEL_NAME,
-                                                        _range_args(b, 0, self.ffn_pf_head), after=prev)
-                F.prefetch[R].kernel_args = _range_args(b, self.ffn_pf_head, 0)
-                F.prefetch[R].kernel_name = F.prefetch[R].kernel_args.KERNEL_NAME
-                prev = [self.f_head]
-            out.append(bcast(i, prev))
+            out.append(self.hbm_cast(R, f"pf_x_hbm_bcast_i{i}_k{R:02x}", args,
+                                     after=prev + self.g_conf[i] + self._slot_free(i), ahead_of_rings=False))
             prev = [self.done_of(out[-1])]
-        self.edge(out[-1], F.prefetch[R])
+        S = min(self.x_slots, F.NI) if self.x_slots else F.NI
+        self.pushes_after(F, R, [out[S - 1]])
         self.f_bc = out
         return out
 
@@ -1065,18 +929,15 @@ class LayerBuild(cm.ChipletBuild):
     def _ffn_ring(self):
         """The FFN's X ring (more passes than slots): X_i (i >= x_slots) multicast after pass i - 2's last gather and
         before pass i - 1's first (every multicast ordered against every gather; its slot's previous X, pass i - x_slots,
-        was fetched before pass i - 2's down GEMMs), and the first gather after the last multicast made up front. The
-        root's prefetcher parts around the multicasts are _ffn_parts'."""
+        was fetched before pass i - 2's down GEMMs), and the first gather after the last multicast made up front."""
         F, R, S = self.ffn, self.ROOT, self.x_slots
-        chains, loads = {}, {}
+        chains = {}
         for t in self.dfg.nodes:
             if t.assigned_chiplet_id != R:
                 continue
             mm = re.match(r"y_chain_(?:i(\d+))?j\d+_k", t.node_name)
             if mm:
                 chains.setdefault(int(mm.group(1) or 0), []).append(t)
-            if t.node_name.startswith("Ld_c") and getattr(t, "exec_chunk", None) is not None:
-                loads[tuple(t.exec_chunk)] = t
         first = {i: min(ts, key=lambda t: t.node_id) for i, ts in chains.items()}
         last = {i: max(ts, key=lambda t: t.node_id) for i, ts in chains.items()}
         xb = self.f_bc
@@ -1086,84 +947,21 @@ class LayerBuild(cm.ChipletBuild):
         for i in range(S, F.NI):
             self.edge(last[i - 2], xb[i])
             self.edge(xb[i], first[i - 1])
-        self.f_loads = loads
-
-    def _ffn_parts(self):
-        """The root's FFN prefetcher parts, once every edge before the multicasts is in the graph. Part i - x_slots runs
-        on the root's host ahead of X_i, and the part after it behind X_i, so every ring load that X_i waits for (by any
-        path) must be fed by part i - x_slots or an earlier one: the part ends after the last such load on either ring,
-        and no earlier than pass i - 1's chunk layer.ffn_part_chunk (pass i - 1's first chunks then land before X_i,
-        which waits for pass i - 2's last gathers). X_i also comes before the first load the next part feeds (an edge on
-        each ring): that load cannot end before the next part pushes its chunk anyway, and no core's program can then
-        run it ahead of what X_i waits for."""
-        import networkx as nx
-        F, R, S, xb, loads = self.ffn, self.ROOT, self.x_slots, self.f_bc, self.f_loads
-        # the loads each multicast waits for, in one backward sweep per multicast over the graph so far: the ring loads
-        # among its ancestors, and on each of the root's DM cores every ring load made before the last ancestor there
-        # (the cores' programs keep the order the tasks were made in where the dependencies allow, so a task placed
-        # behind a pass's first loads, as the FFN's store lag places pass i - 2's last Y_raw puts, stays there)
-        by_node = {t: k for k, t in loads.items()}
-        floor = {}                              # pass -> ring index of its chunk ffn_part_chunk (the larger ring's)
-        for (r, idx), t in loads.items():
-            mm = re.match(r"Ld_c(\d+)_i(\d+)_", t.node_name)
-            if mm and int(mm.group(1)) == self.ffn_part_chunk:
-                floor[int(mm.group(2))] = max(floor.get(int(mm.group(2)), 0), idx)
-        dm = self.roles["dm"]
-        made = {}
-        for t in loads.values():
-            made.setdefault(t.assigned_cluster_id, []).append((t.node_id, t.exec_chunk[1]))
-        for v in made.values():
-            v.sort()
-        G = self.dfg.bingo_order_view()       # the ordering-only edges (_order_reuses) wait too
-        bounds, lo = [], 0
-        for i in range(S, F.NI):
-            anc = nx.ancestors(G, self.first_of(xb[i]))
-            need = [by_node[t][1] for t in anc if t in by_node]
-            for c, v in made.items():
-                top = max((t.node_id for t in anc if t.assigned_chiplet_id == R and t.assigned_cluster_id == c
-                           and t.assigned_core_id == dm), default=-1)
-                need += [idx for nid, idx in v if nid < top]
-            hi = max(1 + max(need, default=lo - 1), floor.get(i - 1, 0), lo + 1)
-            if any((r, hi) not in loads for r in range(self.NC)):
-                raise ValueError(f"X_{i}: the root's prefetcher part would end at ring index {hi}, past a ring's end")
-            for r in range(self.NC):
-                self.edge(xb[i], loads[(r, hi)])
-                if G is not self.dfg:
-                    G.add_edge(self.done_of(xb[i]), loads[(r, hi)])
-            bounds.append(hi)
-            lo = hi
-        lo = 0
-        for part, hi in zip(self.f_parts, bounds):
-            part.kernel_args = _range_args(self.f_pf_args, lo, hi)
-            lo = hi
-        F.prefetch[R].kernel_args = _range_args(self.f_pf_args, lo, 0)
-        self.f_bounds = list(zip([self.first_of(x) for x in xb[S:]], bounds))
-        print(f"[{self.TAG}] FFN X ring of {S}: {len(bounds)} multicasts between the gathers, the root's FFN prefetcher in "
-              f"{len(bounds) + 1} parts ending at ring index {bounds}")
 
     def _ring_alias_edges(self):
         """params layer.alias_l3: the blocks' weight rings are one region, so each chip's FFN pushes follow both its
         clusters' last attention ring loads (the slots read)."""
-        A, F, R = self.attn, self.ffn, self.ROOT
+        F = self.ffn
         last = {}
         for t in self.dfg.nodes:
             if t.node_name.startswith("Ld_w") and getattr(t, "exec_chunk", None) is not None:
                 key = (t.assigned_chiplet_id, t.assigned_cluster_id)
                 if key not in last or t.exec_chunk[1] > last[key].exec_chunk[1]:
                     last[key] = t
-        if self.cluster_rings:
-            # each FFN ring's first post (every later post follows it) after both clusters' last attention loads
-            for k in self.chips:
-                self.pushes_after(F, k, [last[(k, c)] for c in range(self.NC)])
-            self.ring_first = {k: self.push_firsts(F, k) for k in self.chips}
-            self.ring_last = last
-            return
+        # each FFN ring's first post (every later post follows it) after both clusters' last attention loads
         for k in self.chips:
-            first = F.prefetch[k] if k != R else (self.f_parts[0] if self.f_parts else self.f_head or F.prefetch[R])
-            for c in range(self.NC):
-                self.edge(last[(k, c)], first)
-        self.ring_first = {k: (F.prefetch[k] if k != R else (self.f_parts[0] if self.f_parts else self.f_head or
-                                                              F.prefetch[R])) for k in self.chips}
+            self.pushes_after(F, k, [last[(k, c)] for c in range(self.NC)])
+        self.ring_first = {k: self.push_firsts(F, k) for k in self.chips}
         self.ring_last = last
 
     def close_window(self, after):
@@ -1179,21 +977,19 @@ class LayerBuild(cm.ChipletBuild):
         A, F = self.attn, self.ffn
         A.build()
         self.at(("attn_end",))
-        self._set_attn_parts()
+        self._x_after_o8()
         for i in range(A.NP):
             if len(self.n_conf[i]) != self.NQ:
                 raise ValueError(f"pass {i}: {len(self.n_conf[i])} norms made")
             for t in self.n_conf[i]:
                 self.edge(t, self.x_bc[i])
         F.build()
-        if self.f_parts or (self.cluster_rings and self.x_slots and F.NI > self.x_slots):
+        if self.x_slots and F.NI > self.x_slots:
             self._ffn_ring()
         if self.alias_l3:
             self._ring_alias_edges()
         if self.x_slots or self.alias_l3:
             self._order_reuses()
-        if self.f_parts:
-            self._ffn_parts()
         self._wait_edges()
         self.xch = dict(F.xch)        # the FFN's exchange buffers: the gathers name them by the root's address
         self.run_checks(self.layer_checks())
@@ -1317,42 +1113,6 @@ class LayerBuild(cm.ChipletBuild):
             kinds[t.kernel_name.split("kernel_")[-1]] = kinds.get(t.kernel_name.split("kernel_")[-1], 0) + 1
         print(f"[{self.TAG}] collectives: {len(items)} ({kinds}), each ordered before the next by a path")
 
-    def _check_prefetch_parts(self):
-        """Each prefetcher part that a multicast follows on the root's host ends once its last chunk is pushed, which
-        needs the chunk n_slots before it read (its ring load done). That ring load must not follow (by any path) the
-        multicast after the part, or the host would wait for it forever: checked for the attention's parts (x_i) and
-        the FFN's head part (the last X)."""
-        import networkx as nx
-        if self.cluster_rings:
-            print(f"[{self.TAG}] prefetcher parts: none (weight_ring.mode cluster: every ring wait is a graph edge)")
-            return
-        G = self.dfg.bingo_order_view()
-        A, F, R = self.attn, self.ffn, self.ROOT
-        loads = {}
-        for t in self.dfg.node_list:
-            if t.assigned_chiplet_id == R and getattr(t, "exec_chunk", None) is not None:
-                blk = "attn" if t.node_name.startswith("Ld_w") else "ffn" if t.node_name.startswith("Ld_c") else None
-                if blk:
-                    loads[(blk,) + tuple(t.exec_chunk)] = t
-        checks = [("attn", A.n_slots, hi, self.first_of(self.x_bc[i])) for i, hi in enumerate(self.a_bounds) if i]
-        # the attention's last part, before the FFN's first X multicast on the same host
-        first = [t for t in self.dfg.node_list if t.node_name.startswith("pf_x_hbm_bcast_i0_")][0]
-        checks.append(("attn", A.n_slots, len(A.rings[R].entries[0]), first))
-        if self.f_head is not None:
-            last = [t for t in self.dfg.node_list if t.node_name.startswith(f"pf_x_hbm_bcast_i{F.NI - 1}_")][0]
-            checks.append(("ffn", F.n_slots, self.ffn_pf_head, last))
-        for mc, hi in getattr(self, "f_bounds", []):
-            checks.append(("ffn", F.n_slots, hi, mc))
-        bad = []
-        for blk, ns, hi, mc in checks:
-            desc = nx.descendants(G, mc)
-            need = [loads[(blk, r, k)] for r in range(self.NC) for k in range(max(0, hi - ns))
-                    if (blk, r, k) in loads]
-            bad += [(blk, hi, t.node_name) for t in need if t in desc]
-        if bad:
-            raise ValueError(f"prefetcher parts that wait for a ring load behind their own multicast: {bad[:4]}")
-        print(f"[{self.TAG}] prefetcher parts: {len(checks)} parts before a multicast, none waits for a load behind it")
-
     def _reuse_groups(self):
         """params layer.x_slots / alias_l3: [(earlier users, the task that reuses their slot or region)] of every buffer
         reuse the rings and aliases make. A slot's next multicast and every task of its previous pass that reads or
@@ -1372,7 +1132,7 @@ class LayerBuild(cm.ChipletBuild):
         def users_ffn(i):
             pat = re.compile(rf"^x_wait_i{i}(b\d+)?$")
             return [t for n, ts in by.items() if pat.match(n) for t in ts]
-        # a multicast reuses its slot from its first queued tile on (first_of: the one host task, or its first post)
+        # a multicast reuses its slot from its first queued tile on (first_of: its first post)
         out = [(users_attn(i - S), self.first_of(self.x_bc[i])) for i in range(S, A.NP)]
         out += [(users_ffn(i - S), self.first_of(self.f_bc[i])) for i in range(S, F.NI)]
         if self.alias_l3:
@@ -1462,27 +1222,13 @@ class LayerBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] rings and aliases: {n} earlier users each before the reuse of their slot or region")
 
     def _check_ring_waits(self, header):
-        """No cycle among what the hardware waits for, in the emitted header: every dependency edge; each core's program,
-        the descriptor list's order (a core runs its tasks one after the other); and the weight rings' waits no
-        dependency names. A prefetcher (or a part of one) pushes each of its rings' chunks in runs, in ring order, from
-        its start, and ends after its last run; a run waits until every slot it writes is free, i.e. the chunk n_slots
-        before each of its chunks has been read; a ring load spins until its chunk's run is pushed. A run is taken as
-        long as the prefetcher may make it (at most `batch` chunks, `batch_head` within the ring's first `head`, never
-        across a wrap or a part's bounds): its waits then hold for every shorter run too. A cycle here is a deadlock."""
+        """No cycle among what the hardware waits for, in the emitted header: every dependency edge (each ring load
+        follows its run's post, each post the loads of the slots it overwrites) and each core's program, the descriptor
+        list's order (a core runs its tasks one after the other). A cycle here is a deadlock."""
         import networkx as nx
-        from bingo_kernel_args import HostBingoKernelWeightPrefetchArgs
-
-        def flag(a):
-            f = getattr(a, "flag_addr", None) if a is not None else None
-            return getattr(getattr(f, "base", f), "symbol_name", None) or getattr(f, "name", None)
-        pfs = [n for n in self.dfg.node_list if isinstance(n.kernel_args, HostBingoKernelWeightPrefetchArgs)]
-        end = {p: ("end", p.node_id) for p in pfs}
-
-        def tail(n):
-            return end.get(n, n)
         G = nx.DiGraph()
         G.add_nodes_from(self.dfg.nodes())
-        G.add_edges_from((tail(u), v) for u, v in self.dfg.edges())
+        G.add_edges_from(self.dfg.edges())
         by_id = {str(n.node_id): n for n in self.dfg.node_list}
         prev, n_prog = {}, 0
         for chip, nid, ty, cl, core in cm.desc_rows(open(header).read()):
@@ -1491,48 +1237,14 @@ class LayerBuild(cm.ChipletBuild):
                 continue
             key = (chip, cl, core)
             if key in prev:
-                G.add_edge(tail(prev[key]), n)
+                G.add_edge(prev[key], n)
                 n_prog += 1
             prev[key] = n
-        rings = {}
-        for n in self.dfg.node_list:
-            if (n.kernel_name or "").endswith("idma_ring_load") and getattr(n, "exec_chunk", None) is not None:
-                rings.setdefault((n.assigned_chiplet_id, flag(n.kernel_args)), {})[tuple(n.exec_chunk)] = n
-        fed, n_runs = {}, 0
-        for p in pfs:
-            a = p.kernel_args
-            loads = rings.get((p.assigned_chiplet_id, flag(a)), {})
-            lo, hi = int(getattr(a, "chunk_lo", 0)), int(getattr(a, "chunk_hi", 0)) or None
-            ns, batch = int(a.n_slots), max(1, int(a.batch))
-            head, batch_head = int(getattr(a, "head", 0)), int(getattr(a, "batch_head", 0))
-            last = p
-            for r in sorted({rr for rr, _ in loads}):
-                ks = sorted(k for rr, k in loads if rr == r and k >= lo and (hi is None or k < hi))
-                run, at = [], last
-                for i, k in enumerate(ks + [None]):
-                    lim = batch_head if batch_head and run and run[0] < head else batch
-                    if run and (k is None or k != run[-1] + 1 or len(run) >= lim or k % ns == 0 or k == 1):
-                        v = ("run", p.node_id, r, run[0])
-                        G.add_edge(at, v)
-                        for j in run:
-                            G.add_edge(v, loads[(r, j)])
-                            fed[(p.assigned_chiplet_id, flag(a), r, j)] = fed.get((p.assigned_chiplet_id, flag(a), r, j), 0) + 1
-                            if (r, j - ns) in loads:
-                                G.add_edge(loads[(r, j - ns)], v)
-                        at, run = v, []
-                        n_runs += 1
-                    if k is not None:
-                        run.append(k)
-                G.add_edge(at, end[p])
-            G.add_edge(p, end[p])
-        # weight_ring.mode cluster: no prefetcher; each load follows its run's post by a dependency edge
-        stray = [] if self.cluster_rings else \
-            [(k, f, r, j) for (k, f), ls in rings.items() for (r, j) in ls if fed.get((k, f, r, j), 0) != 1]
-        if stray:
-            raise ValueError(f"{len(stray)} ring loads fed by no prefetcher or by more than one, e.g. {stray[:4]}")
+        n_loads = sum(1 for n in self.dfg.node_list if (n.kernel_name or "").endswith("idma_ring_load")
+                      and getattr(n, "exec_chunk", None) is not None)
         if nx.is_directed_acyclic_graph(G):
             print(f"[{self.TAG}] ring waits: no cycle over {G.number_of_nodes()} nodes ({n_prog} program-order edges, "
-                  f"{len(pfs)} prefetchers in {n_runs} runs, {sum(len(v) for v in rings.values())} ring loads)")
+                  f"{n_loads} ring loads)")
             return
         from bingo_reach import find_cycle          # linear, where networkx's walks again from every start
         cyc = find_cycle(G)
@@ -1574,7 +1286,7 @@ class LayerBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] fold slots: {n} Y_raw puts each before the next gather into their slot")
 
     # ---- emission -----------------------------------------------------------------------------------------------------
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
+    def finish(self, app_name):
         A, F = self.attn, self.ffn
         bad = [b for b in F.check_hazards() if "root fold slot" not in b]
         if bad:
@@ -1582,7 +1294,6 @@ class LayerBuild(cm.ChipletBuild):
         print(f"[{self.TAG}] FFN buffer hazards: none (A16, A16a, A8, X, output slots; every cluster)")
         self._check_fold_slots()
         self._check_collectives()
-        self._check_prefetch_parts()
         writes = [t for t in self.dfg.node_list if t.kernel_name in COPIES
                   and isinstance(getattr(t.kernel_args, "dst_addr", None), BingoMemFixedAddr)]
         print(f"[{self.TAG}] {len(writes)} device writes into HBM (" + ", ".join(
@@ -1601,7 +1312,7 @@ class LayerBuild(cm.ChipletBuild):
             add_node(node)
 
         self.dfg.bingo_add_node = add_resident
-        cm.ChipletBuild.finish(self, app_name, x_prefixes)
+        cm.ChipletBuild.finish(self, app_name)
         self._check_ring_waits(os.path.join(self.args.output_dir, self.args.output_offload_file_name))
         self._check_step_l1()
 

@@ -13,9 +13,10 @@ stage 0  X from HBM: the prompt's rows sit in the HBM of the root's memory chip 
          (cluster x_put_cluster) multicasts them a tile of 16 tokens (32 KiB) at a time into every chip's L3 through the
          D2D routers, one multicast in flight, each tile behind a landed flag of its own. Every cluster waits for the
          tiles stage 1 reads (cluster c: the tiles t with t mod 2 = c). params x_bcast "memchip": the memory chip's
-         push engine multicasts the tiles itself, from its HBM, configured by the root's host (one host task,
-         __host_bingo_kernel_hbm_bcast); the root then gets its copy from the multicast like every other chip. The
-         root's prefetcher shares that engine: it runs after the multicast, or before it with x_bcast_after_prefetch.
+         push engine multicasts the tiles itself, from its HBM, queued by the root's host (ChipletBuild.hbm_cast: its
+         engine posts and a wait on the landed flags); the root then gets its copy from the multicast like every other
+         chip. The root's ring shares that engine: its posts queue behind the multicast's, or with x_pf_split its
+         W_KVA runs ahead of it.
 stage 1  + the keys by columns: each cluster's tiles of X from the chip's L3 into L1 behind the tile's flag, split between
          the iDMA and the xDMA (params split_loads, the xDMA's share split_frac), which reach L3 through two different
          wide ports; the chip's W_KVA columns from the ring; a GEMM a tile; each slice into the tile owner's L3 behind a
@@ -120,18 +121,12 @@ class FaStages(fa.FaBuild):
         if self.x_bcast not in ("root", "memchip"):
             raise ValueError(f"params x_bcast={self.x_bcast}: root or memchip")
         self.x_mem = self.x_bcast == "memchip"
-        # params x_bcast_after_prefetch (memchip): the root's prefetcher, which drives the same engine, pushes the root's
-        # weights first and the multicast follows, instead of the multicast first
-        self.bcast_after_pf = bool(p.get("x_bcast_after_prefetch", False))
-        if self.bcast_after_pf and not self.x_mem:
-            raise ValueError("params x_bcast_after_prefetch: needs x_bcast memchip")
-        # params x_pf_split (memchip): the root's prefetcher in two parts on its host, its W_KVA chunks before the
-        # multicast and the rest after it (HostBingoKernelWeightPrefetchRangeArgs), so the root's keys do not wait
-        # for the multicast and the multicast does not wait for the root's stage-4 weights; weight_ring.mode cluster:
-        # the same queue order by boundaries of the root's ring (_cluster_x_order)
+        # params x_pf_split (memchip): the root's W_KVA ring runs ahead of the multicast in its memory chip's engine
+        # queue and the rest of its ring after it, by boundaries of the root's ring (_cluster_x_order), so the root's
+        # keys do not wait for the multicast and the multicast does not wait for the root's stage-4 weights
         self.pf_split = bool(p.get("x_pf_split", False))
-        if self.pf_split and (not self.x_mem or self.bcast_after_pf):
-            raise ValueError("params x_pf_split: needs x_bcast memchip, without x_bcast_after_prefetch")
+        if self.pf_split and not self.x_mem:
+            raise ValueError("params x_pf_split: needs x_bcast memchip")
         # params kv_wkva_first (stage 1): each cluster copies the chip's W_KVA into L1 before its first tile of x, for
         # when W_KVA is in L3 before x's first tiles land
         self.wkva_first = bool(p.get("kv_wkva_first", False))
@@ -202,10 +197,10 @@ class FaStages(fa.FaBuild):
             raise ValueError("params keys_by_chunk: stage full, with x_pf_split and full_kv_all false")
         self._key_runs = []     # keys_by_chunk: (first node id, key chunk or None) of each run of key tasks, in order
         # params x_rest_early (keys_by_chunk): the rest of x (chunks 2 on) right after chunk 0's key multicast, ahead of
-        # the root's prefetcher, not behind it. The prefetcher is one host task that streams every chunk's weights, so
-        # behind it the rest lands only once the chips have consumed the last chunk's weights, which needs chunk 2's
-        # keys and so its x: a full block's cycle. Only the root chip's own ring waits for the rest; chunk 1's key
-        # multicast and every reduce chain follow it (one multicast source at a time)
+        # the rest of the root's ring, not behind its last run: behind it the rest lands only once the chips have
+        # consumed the last chunk's weights, which needs chunk 2's keys and so its x: a full block's cycle. Only the
+        # root chip's own ring waits for the rest; chunk 1's key multicast and every reduce chain follow it (one
+        # multicast source at a time)
         self.x_rest_early = bool(p.get("x_rest_early", False))
         if self.x_rest_early and not self.keys_by_chunk:
             raise ValueError("params x_rest_early: needs keys_by_chunk")
@@ -241,9 +236,6 @@ class FaStages(fa.FaBuild):
         self.post_root_first = bool(p.get("post_root_first", False))
         if self.s4_tile_absorb and not self.s4_reorder:
             raise ValueError("params s4_tile_absorb needs s4_reorder (stage_proj_r)")
-        # params s4_warm_ring (stage 4): the prefetcher pushes every chunk of the head's weights before the window (the
-        # ring needs a slot a chunk: weight_ring slots >= 4 NCH), as stages 0-3 leave them in the layer
-        self.s4_warm_ring = bool(p.get("s4_warm_ring", False))
         self._x_extra = {}
         self.s3_route = str(p.get("s3_route", "gather"))
         # params s3_group (s3_route gather): the root multicasts this many pieces at a time, each group once its pieces
@@ -352,17 +344,6 @@ class FaStages(fa.FaBuild):
             return self.h_w[k].address + off, size
         return super()._src(k, n)
 
-    def check_core_order(self, header, x_prefixes):
-        """The base check wants an x task before every DM core's first ring load: a ring load spins on a push that only
-        starts after the start stamp, which shares the root's DM core. With kv_wkva_first each Ld_wkvc depends on its
-        chip's start instead (stage_keys), which the hang check verifies, so it counts as reaching the start. A graph
-        without ring loads (stage 2) has nothing to check."""
-        if not any((n.kernel_name or "").endswith("idma_ring_load") for n in self.dfg.node_list):
-            return
-        # 678 (no x): each cluster's first ring load depends on its chip's start (load), as Ld_wkvc does
-        extra = (("Ld_wkvc",) if self.wkva_first else ()) + (("Ld_wuv_i0",) if self.stage == "678" else ())
-        super().check_core_order(header, tuple(x_prefixes) + extra)
-
     def load(self, cl, n, name, deps=(), slab=None, dst=None):
         # 678: a cluster's first ring load behind its chip's start, so no DM core spins on a push before the start
         if self.stage == "678" and cl not in self._first_ld:
@@ -378,13 +359,13 @@ class FaStages(fa.FaBuild):
     def stage_x_bcast(self, go):
         R, T, dm = self.ROOT, self.TAG, self.roles["dm"]
         if self.x_mem:
-            # the root's prefetcher pushes on the same engine, after this task (build); keys_by_chunk: chunk 0's tiles,
-            # chunk 1's, then the rest, each a task of its own (build_full orders them around the prefetcher)
+            # the root's ring pushes on the same engine; keys_by_chunk: chunk 0's tiles, chunk 1's, then the rest, each
+            # a cast of its own (_cluster_x_order places the root's ring runs among them)
             m = self.mem[R]
             P = self.C // 16
             cuts = ([0, P] + ([2 * P] if self.NX > 2 * P else []) + [self.NX]) if self.keys_by_chunk else [0, self.NX]
-            # ChipletBuild.hbm_cast: one host task a part, or with hbm_cast.mode posts its posts and waits (HbmCast;
-            # first_of, done_of, queued_of name its tasks), each part after the one before
+            # ChipletBuild.hbm_cast: a part's posts and waits (HbmCast; first_of, done_of, queued_of name its tasks),
+            # each part after the one before
             puts = []
             for a, b in zip(cuts, cuts[1:]):
                 puts.append(self.hbm_cast(
@@ -394,8 +375,8 @@ class FaStages(fa.FaBuild):
                         BingoMemSymbol(f"{T}_xtflag", offset=a * 64), self.h_seq[m].address + 64, 1, self.XT, b - a, m,
                         self.engine[R]),
                     after=[go[R]] + puts[-1:],
-                    # weight_ring.mode cluster with x_pf_split: the root ring's boundaries place them (_cluster_x_order)
-                    ahead_of_rings=not (self.ring_mode == "cluster" and self.pf_split)))
+                    # x_pf_split: the root ring's boundaries place them (_cluster_x_order)
+                    ahead_of_rings=not self.pf_split))
             return puts
         puts = []
         for t in range(self.NX):
@@ -408,8 +389,8 @@ class FaStages(fa.FaBuild):
         return puts
 
     def _cluster_x_order(self):
-        """weight_ring.mode cluster with x_pf_split: the root memory chip's engine queue in the order the split
-        prefetcher gives it, by boundaries of the root's ring (WeightRings.boundary): its W_KVA runs, x's first part,
+        """x_pf_split: the root memory chip's engine queue, by boundaries of the root's ring (WeightRings.boundary): its
+        W_KVA runs, x's first part,
         then the rest of the ring once that part has landed. keys_by_chunk: W_KVA, chunk 0's x, chunk 0's stage-4 runs
         (PER_CHUNK_HEAD chunks, behind that x's landing), chunk 1's x, the rest of the ring behind chunk 1's x landing
         (x_rest_early: behind the third part's, which goes after chunk 0's key multicast), else the third part of x
@@ -426,34 +407,6 @@ class FaStages(fa.FaBuild):
                       after=[self.done_of(xp[2] if rest_early else xp[1])])
         if len(xp) > 2 and not rest_early:
             ring.tail_before(0, [self.first_of(xp[2])])
-
-    def split_root_prefetch(self, go, head=0):
-        """x_pf_split: the root's W_KVA ring chunks in a prefetcher task of their own, behind the start; the root's
-        prefetcher then starts at the next chunk. Returns the first task (the multicast goes between the two). head > 0
-        (keys_by_chunk): the next `head` chunks (chunk 0's stage-4 weights) in a second task of their own, and the
-        prefetcher starts after them; returns both."""
-        if self.ring_mode != "prefetcher":
-            raise ValueError("params pf_split: splits the root's prefetcher, which weight_ring.mode cluster has none of")
-        from bingo_kernel_args import HostBingoKernelWeightPrefetchRangeArgs
-        R, n = self.ROOT, self.kva_in_ring()
-        # the first part never waits for a slot: its chunks fit the empty ring
-        if not 0 < n <= self.n_slots:
-            raise ValueError(f"params x_pf_split: {n} W_KVA ring chunks, 1..{self.n_slots} (the ring's slots)")
-        t, b = self.prefetch[R], self.prefetch[R].kernel_args
-        part = lambda lo, hi: HostBingoKernelWeightPrefetchRangeArgs(
-            b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-            b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-            batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed, head=b.head,
-            batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-        if head and n + head > self.n_slots:
-            raise ValueError(f"params keys_by_chunk: {n} + {head} ring chunks ahead of the multicast, {self.n_slots} slots")
-        t.kernel_args = part(n + head, 0)
-        t.kernel_name = t.kernel_args.KERNEL_NAME
-        first = self.cx_chip(R).host_node(f"weight_prefetch_k{R:02x}_kva", t.kernel_name, part(0, n), after=[go[R]])
-        if not head:
-            return first
-        return first, self.cx_chip(R).host_node(f"weight_prefetch_k{R:02x}_head", t.kernel_name, part(n, n + head),
-                                                after=[go[R]])
 
     def x_wait(self, k, c, t, go, name=None):
         """Chip k cluster c waits for tile t's landed flag in its chip's L3 (the flag proves the multicast's data)."""
@@ -585,7 +538,7 @@ class FaStages(fa.FaBuild):
                 if self.wkva_first:
                     # kv_wkva_first: the in-order DM core copies the chip's W_KVA first, then the first tiles of x;
                     # the helped pair, needed only later, after them. The copy depends on the chip's start, so a ring
-                    # load queued ahead of the start stamp is a dependency the hang check sees (check_core_order)
+                    # load queued ahead of the start stamp is a dependency the hang check sees
                     ld, si, slab = self.load(cl, 0, "Ld_wkvc", deps=[go[k]], dst=wkva)
                     ld_x[0] = kx(0)
                     if len(tiles) > 1:
@@ -888,22 +841,6 @@ class FaStages(fa.FaBuild):
                                  sm_batch=self.sm_batch, prologue=self.sm_prologue, geom_core=self.sm_geom)
                 self.sw_of[(cl, i)] = sw
                 last[k] += list(sw["tr"])
-
-    def setup(self, extra=None):
-        if not (self.stage == 4 and self.s4_warm_ring):
-            return super().setup(extra)
-        if self.ring_mode != "prefetcher":
-            raise ValueError("params s4_warm_ring: the start waits for the prefetchers, which weight_ring.mode cluster "
-                             "has none of")
-        # s4_warm_ring: the start waits for each chip's prefetcher (FaBuild's setup without its go -> prefetch edges)
-        if self.n_slots < self.PER_CHUNK_HEAD * self.NCH:
-            raise ValueError(f"s4_warm_ring: weight_ring slots {self.n_slots} < {self.PER_CHUNK_HEAD * self.NCH}")
-        ends = []
-        for k in self.chips:
-            ends += list((extra or {}).get(k, [])) + [self.prefetch[k]]
-        start = self.stamp("start", ends)
-        self.go = {k: start for k in self.chips}
-        return self.go
 
     def stage_proj_r(self, cl, i, x):
         """s4_reorder: FaBuild.stage_proj with the in-order SIMD core's program reordered: q_nope's quantisation before
@@ -1219,38 +1156,10 @@ class FaStages(fa.FaBuild):
         # stages 0 to 3 (the stage builder's): X multicast from HBM, the keys by columns, the owners, the root's
         # multicasts of the keys
         self.x_puts = [] if post_only else self.stage_x_bcast(go)
-        if self.ring_mode != "prefetcher":
-            # weight_ring.mode cluster: no prefetcher; hbm_cast puts x first in the queue, or with x_pf_split the root
-            # ring's boundaries order the two (_cluster_x_order)
-            if self.pf_split and self.x_mem and self.x_puts:
-                self._cluster_x_order()
-        elif self.prefetch_after_x and self.x_puts:
-            for k in self.chips:
-                self.edge(self.done_of(self.x_puts[-1]), self.prefetch[k])
-        elif self.x_mem and self.x_puts:
-            if self.bcast_after_pf:
-                self.edge(self.prefetch[R], self.first_of(self.x_puts[-1]))
-            else:
-                if self.pf_split and self.keys_by_chunk:
-                    # W_KVA, chunk 0's x, chunk 0's stage-4 weights, chunk 1's x, the rest of the weights; the rest of x
-                    # (chunks 2 on, whose keys come after the window) once the prefetcher is done. No multicast of x
-                    # then overlaps the root's key multicasts of chunks 0 and 1: two multicast sources at once
-                    # deadlock the fabric (stg_dsv2poc_t1024_ab, HANG-AXI 29 Oct)
-                    kva, head = self.split_root_prefetch(go, head=self.PER_CHUNK_HEAD)
-                    self.edge(kva, self.first_of(self.x_puts[0]))
-                    self.edge(self.done_of(self.x_puts[0]), head)
-                    self.edge(head, self.first_of(self.x_puts[1]))
-                    if len(self.x_puts) > 2 and self.x_rest_early:
-                        # x_rest_early: the rest of x (behind chunk 0's key multicast, below), then the prefetcher
-                        self.edge(self.done_of(self.x_puts[2]), self.prefetch[R])
-                    else:
-                        self.edge(self.done_of(self.x_puts[1]), self.prefetch[R])
-                        if len(self.x_puts) > 2:
-                            self.edge(self.prefetch[R], self.first_of(self.x_puts[2]))
-                else:
-                    if self.pf_split:
-                        self.edge(self.split_root_prefetch(go), self.first_of(self.x_puts[0]))
-                    self.edge(self.done_of(self.x_puts[-1]), self.prefetch[R])
+        # hbm_cast puts x first in the root memory chip's engine queue, or with x_pf_split the root ring's boundaries
+        # order the two (_cluster_x_order)
+        if self.pf_split and self.x_mem and self.x_puts:
+            self._cluster_x_order()
         front = {k: [] for k in self.chips}
         if not post_only:
             k0 = self._next_id()
@@ -2098,25 +2007,10 @@ class FaStages(fa.FaBuild):
             self.dfg.relay_prefer_cores = {self.roles[c]: [self.roles[r] for r in rs]
                                            for c, rs in self.p["relay_prefer"].items()}
         self.x_puts = self.stage_x_bcast(go) if self.stage not in ("xu", 2, 3, 4, 5) else []
-        if self.ring_mode != "prefetcher":
-            # weight_ring.mode cluster: no prefetcher; hbm_cast puts x first in the queue, or with x_pf_split the root
-            # ring's boundaries put its W_KVA runs ahead of it
-            if self.pf_split and self.x_mem and self.x_puts:
-                self._cluster_x_order()
-        elif self.prefetch_after_x and self.x_puts:
-            # the memory chips push only once the multicast of x is done: the root's own copy of a tile, read from HBM
-            # over the link the root's ring pushes also arrive on, otherwise holds the root's L3 write port while its
-            # data waits behind a push that needs that port
-            for k in self.chips:
-                self.edge(self.done_of(self.x_puts[-1]), self.prefetch[k])
-        elif self.x_mem and self.x_puts:
-            # the root's prefetcher drives the same engine of the same memory chip: one runs after the other
-            if self.bcast_after_pf:
-                self.edge(self.prefetch[R], self.first_of(self.x_puts[-1]))
-            else:
-                if self.pf_split:
-                    self.edge(self.split_root_prefetch(go), self.first_of(self.x_puts[0]))
-                self.edge(self.done_of(self.x_puts[-1]), self.prefetch[R])
+        # hbm_cast puts x first in the root memory chip's engine queue, or with x_pf_split the root ring's boundaries
+        # put its W_KVA runs ahead of it (_cluster_x_order)
+        if self.pf_split and self.x_mem and self.x_puts:
+            self._cluster_x_order()
         last = {k: [] for k in self.chips}
         if self.stage == "xu":
             self.stage_xdma_unit(go, last)

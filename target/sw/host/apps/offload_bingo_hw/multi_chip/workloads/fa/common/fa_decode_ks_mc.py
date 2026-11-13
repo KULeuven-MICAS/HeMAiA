@@ -10,13 +10,13 @@ two passes, m* exchanged, the partials folded into the root, normalised); the pr
 every input comes from HBM.
 
 The token at position P (params cache, default 1,024) attends to keys 0 .. P: the P cached keys and its own. The data
-and the scales are fa_decode_mc.FaDecodeData's (a fresh causal prompt of P + 1 tokens, the token its last; rope_perm;
+and the scales are fa_decode_data.FaDecodeData's (a fresh causal prompt of P + 1 tokens, the token its last; rope_perm;
 the mask as the score matmul's INT32 C); the golden is the arithmetic of the steps below (KsGolden).
 
 THE MAPPING. Chip i (chips[i], i = 0 .. 15) owns head i, the cached key tiles i, i + 16, .. (64 keys each: one tile a
 chip at P = 1,024) and W_O's columns of its two clusters; the root C00 (chips[0]) also owns the new key and its tile.
-Each chip's memory chip pushes ONE ring holding all of the chip's chunks in the order they are needed (one prefetcher,
-one ring: the push order is the ring order).
+Each chip's memory chip pushes ONE ring holding all of the chip's chunks in the order they are needed (the push order
+is the ring order).
 
     x          the token's INT8 row in a_row (value c at byte (c // 4) * 8 + c % 4, the other bytes zero; 4 KiB) in
                the HBM of the root's memory chip; that memory chip's push engine multicasts it into every chip's L3
@@ -58,7 +58,7 @@ one ring: the push order is the ring order).
     W_O        C00 waits for the 16 and multicasts every head's o8 (one a_row of 4 KiB) into every chip's L3; every
                cluster runs W_O BY COLUMNS: its 64 columns of y over the full depth of 2,048, two GEMVs of 32 columns,
                one exact INT32 sum each, and puts its 64 FP16 values into C00's L3 row behind its flag; C00 waits for
-               the 32 and writes y (FP16 [2048], before W_O's per-column dequantisation, as fa_decode_mc leaves it)
+               the 32 and writes y (FP16 [2048], before W_O's per-column dequantisation, as the prefill leaves it)
                into the HBM of the root's memory chip (stage_store)
     append     C00's cluster 1 writes the new piece into its cache shard in HBM at the new tile's slot: the key rows (a
                1-D copy), then the value columns (32 runs of 256 B, one 16-row block apart), after y
@@ -90,16 +90,16 @@ beside a memory-chip push (m_exchange gather makes no other chain; m_exchange ch
 way). Every write into HBM (y, the append) follows every collective and every chip's last ring load. The gathers (the
 W_KVA rows, the query rows, the maxima, the o8 rows, the y columns) are unicast iDMA puts behind flags.
 
-IN A LAYER (hooks, as fa_decode_mc's): x_multicast(go, bcast) returns the task the x fetches are ordered after (a
+IN A LAYER (hooks): x_multicast(go, bcast) returns the task the x fetches are ordered after (a
 layer's input norm puts x into fk_xland on every chip behind fk_xtflag: the a_row above, INT8 at the block's s_x,
 4,096 B); stage_store(yw) stores y (a layer copies the root's L3 row fk_yrow into its own buffer instead, after `yw`);
 kv_append(deps) makes the append (a layer may make it at its own end). What a layer reads: d (FaDecodeData), gold
-(y_raw), prefetch, _chains, _y_stores, append, XB, P.
+(y_raw), _chains, _y_stores, append, XB, P.
 
 PARAMETERS (params.hjson): cache (P, a multiple of 64 x 16), n_calib, m_exchange (gather | chain), chains_after_stream,
 kva_extra (the chips whose cluster 1 takes W_KVA's chunks 16, 17; hex strings), checks (y | stages), stats (max) and
 passes (2) (the only values: the statistics' merge and the one-pass rebase are not built here), w_chunk_bytes (one K
-tile, 36,864), weight_ring (slots, batch, policy, head, batch_head), and the platform's and the graph's switches (static_l1,
+tile, 36,864), weight_ring (slots, batch, head, batch_head, queue), and the platform's and the graph's switches (static_l1,
 l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, desc_in_image, fast_host_init, d2d_ddr,
 d2d_rx_yield, relay_per_gather).
 """
@@ -114,10 +114,10 @@ sys.path.insert(0, HERE)
 # fa_mc puts util/sim/multichip and mini_compiler on sys.path
 from fa_mc import (ARENA, BC, BEAT, BR, D_QK, D_V, EW_F16_MAX, FA, LRUN, MRUN, PVK, REPO, XFER, FaBuild,  # noqa: E402
                    cm, run_driver)
-import fa_decode_mc as fdm  # noqa: E402
+import fa_decode_data as fdd  # noqa: E402
 
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmBcastArgs, HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelGemmFaQkArgs,
+    HostBingoKernelHbmBcastArgs, SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelGemvArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs,
     SnaxBingoKernelIdmaFetchFlaggedArgs, SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelIdmaRingLoadArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFp16ToInt8Args, SnaxBingoKernelSimdMlaNormaliseArgs,
@@ -364,12 +364,12 @@ class FaDecodeKs(FaBuild):
 
     def mem_handles(self):
         """The data and the memory; no task yet. FaBuild.mem_handles is not run, as FaBuild.__init__ is not: the data
-        (fa_decode_mc.FaDecodeData) and its golden (KsGolden) with their report and the cross-check of head 0's Q8;
+        (fa_decode_data.FaDecodeData) and its golden (KsGolden) with their report and the cross-check of head 0's Q8;
         _stage (x, y, the gathers' and multicasts' areas in L3, every chip's weights, cache shard and constants in its
         memory chip's HBM); one weight ring a chip (_make_ring); every cluster's exchange buffer (its offsets: the
         query, the flags, the arenas, the partial)."""
         R, nchip, extra = self.ROOT, len(self.chips), self.kva_extra
-        d = self.d = fdm.FaDecodeData(self.kv_path, self.w_cache, cache=self.P, bc=BC, n_calib=self.n_calib,
+        d = self.d = fdd.FaDecodeData(self.kv_path, self.w_cache, cache=self.P, bc=BC, n_calib=self.n_calib,
                                       rope_perm=True, mask_c=True, wbits=4)
         if d.H != nchip:
             raise ValueError(f"{nchip} chips: the attention has {d.H} heads, one a chip")
@@ -486,38 +486,29 @@ class FaDecodeKs(FaBuild):
         return out
 
     def _make_ring(self):
-        """One ring a chip (every chunk of both clusters, in ring order), pushed by its memory chip's engine under the
-        chip's host prefetcher; each chunk is read and released by one cluster. weight_ring.mode cluster: no
-        prefetcher, each run posted by the DM core of the cluster that reads its first chunk (WeightRings post_chunk,
-        made by load() in ring order), the queue's weight_ring.queue entries the ring's share."""
+        """One ring a chip (every chunk of both clusters, in ring order), pushed by its memory chip's engine; each run
+        posted by the DM core of the cluster that reads its first chunk (WeightRings post_chunk, made by load() in ring
+        order), the queue's weight_ring.queue entries the ring's share; each chunk read by one cluster."""
         p, st, T = self.p, self.st, self.TAG
-        wr = p.get("weight_ring", {})
-        self.ring_mode = str(wr.get("mode", "prefetcher"))
-        if self.ring_mode not in ("prefetcher", "cluster"):
-            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
-        self.ring_queue = int(wr.get("queue", 32))
-        if self.ring_mode == "cluster" and not 2 <= self.ring_queue <= 32:
+        wr = cm.ring_params(p)
+        self.ring_queue = int(wr.get("queue", 16))
+        if not 2 <= self.ring_queue <= 32:
             raise ValueError(f"params weight_ring.queue={self.ring_queue}: 2..32 entries (two a run, one ring)")
         self.n_slots, self.ring_batch = int(wr.get("slots", 16)), int(wr.get("batch", 4))
         self.ring_head, self.ring_batch_head = int(wr.get("head", 0)), int(wr.get("batch_head", 0))
-        self.ring_trailer, self.ring_queued = False, 0
-        policy = int(wr.get("policy", 1))
         seq = np.zeros((1024, 8), dtype=np.uint64)
         seq[:, 0] = np.arange(1024, dtype=np.uint64)
         self.h_seq = {m: st.put_hbm(f"{T}_ring_seq_m{m:02x}", seq.view(np.int8).reshape(-1), mem_chip=(m >> 4, m & 15))
                       for m in sorted(set(self.mem.values()))}
         self.h_flags = st.put_zeros(f"{T}_ring_flags", "uint8_t", self.n_slots * 64)
-        self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", self.n_slots * 64)
-        self.h_rec = st.put_zeros(f"{T}_rec_l3", "uint8_t", 128)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", self.n_slots * self.slot_bytes, preload=True)
         self.rings, self.tk, self.ring_bytes = {}, {}, {}
-        self.prefetch = {} if self.ring_mode == "prefetcher" else cm._NoPrefetcher(T)
-        self.ring_posted = {k: 0 for k in self.chips}       # cluster mode: the chunks posted, in ring order
+        self.ring_posted = {k: 0 for k in self.chips}       # the chunks posted, in ring order
         self.last_chunk = {k: None for k in self.chips}
         for k in self.chips:
             rings = self.rings[k] = WeightRings(
-                slots=self.h_wslots, flags=self.h_flags, releases=self.h_rel, n_rings=1, n_slots=self.n_slots,
-                slot_bytes=self.slot_bytes, batch=self.ring_batch, head=self.ring_head, batch_head=self.ring_batch_head)
+                slots=self.h_wslots, flags=self.h_flags, n_rings=1, n_slots=self.n_slots, slot_bytes=self.slot_bytes,
+                batch=self.ring_batch, head=self.ring_head, batch_head=self.ring_batch_head)
             order = self.ring_order(k)
             if len(order) > self.n_slots:
                 raise ValueError(f"params weight_ring.slots={self.n_slots}: chip {k:02x} streams {len(order)} chunks "
@@ -527,21 +518,10 @@ class FaDecodeKs(FaBuild):
                 if nb > self.slot_bytes:
                     raise ValueError(f"chunk {nm}: {nb} B over a {self.slot_bytes}-B slot")
             self.ring_bytes[k] = sum(nb for _, _, nb, _ in order)
-            if self.ring_mode == "cluster":
-                rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
-                                edge=self.edge, depth=self.ring_queue)
-                self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
-                                  rings.queue_span)
-                continue
-            for nm, src, nb, c in order:
-                self.tk[k][nm] = rings.take_ex(0, src=src, nbytes=nb) + (nb, c, rings.last_take)
-            self.prefetch[k] = self.cx_chip(k).host_node(
-                f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
-                HostBingoKernelWeightPrefetchArgs(
-                    self.ring_schedule(k, rings), rings.slots, self.h_flags, self.h_rel,
-                    self.h_seq[self.mem[k]], self.h_rec, 1, 1, self.n_slots, self.slot_bytes, self.mem[k],
-                    batch=self.ring_batch, policy=policy, engine=self.engine[k], queued=0, head=self.ring_head,
-                    batch_head=self.ring_batch_head))
+            rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]], edge=self.edge,
+                            depth=self.ring_queue)
+            self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
+                              rings.queue_span)
         self.last_name = {k: self.ring_order(k)[-1][0] for k in self.chips}
 
     # ---- nodes -------------------------------------------------------------------------------------------------------
@@ -561,26 +541,22 @@ class FaDecodeKs(FaBuild):
         return None if k == self.ROOT else self.ROOT
 
     def load(self, k, name, dst, deps=()):
-        """Chip k's ring chunk `name` into the L1 buffer dst, on its reader's DM core: waits for the chunk's flag.
-        weight_ring.mode cluster: every chunk of the ring up to this one posted first, in ring order (WeightRings
-        post_chunk on the DM core of the cluster that reads the run's first chunk), and the load follows its post."""
-        cluster = self.ring_mode == "cluster"
-        if cluster:
-            order = self.ring_order(k)
-            i = next(j for j, o in enumerate(order) if o[0] == name)
-            while self.ring_posted[k] <= i:
-                nm, src, nb_, c_ = order[self.ring_posted[k]]
-                tk, post = self.rings[k].post_chunk(
-                    lambda n, core, kern, args, after, c_=c_: self.node(k, c_, core, n, kern, args, after), 0,
-                    f"Ld_{nm}", src=src, nbytes=nb_, dm=self.roles["dm"])
-                self.tk[k][nm] = tk + (nb_, c_, self.rings[k].last_take, post)
-                self.ring_posted[k] += 1
-        sl, fl, rl, seq, _, _, nb, c, ex = self.tk[k][name][:9]
+        """Chip k's ring chunk `name` into the L1 buffer dst, on its reader's DM core: waits for the chunk's flag. Every
+        chunk of the ring up to this one is posted first, in ring order (WeightRings post_chunk on the DM core of the
+        cluster that reads the run's first chunk), and the load follows its post."""
+        order = self.ring_order(k)
+        i = next(j for j, o in enumerate(order) if o[0] == name)
+        while self.ring_posted[k] <= i:
+            nm, src, nb_, c_ = order[self.ring_posted[k]]
+            tk, post = self.rings[k].post_chunk(
+                lambda n, core, kern, args, after, c_=c_: self.node(k, c_, core, n, kern, args, after), 0,
+                f"Ld_{nm}", src=src, nbytes=nb_, dm=self.roles["dm"])
+            self.tk[k][nm] = tk + (c_, self.rings[k].last_take, post)
+            self.ring_posted[k] += 1
+        sl, fl, seq, nb, c, ex, post = self.tk[k][name]
         ld = self.nd(k, c, "dm", f"Ld_{name}", "__snax_bingo_kernel_idma_ring_load",
-                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb, rl),
-                     list(deps) + ([self.tk[k][name][9]] if cluster else []))
-        if cluster:
-            self.rings[k].read_chunk(0, seq - 1, ld, last=True)
+                     SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, dst, nb, 0), list(deps) + [post])
+        self.rings[k].read_chunk(0, seq - 1, ld, last=True)
         ld.exec_chunk = ex
         if name == self.last_name[k]:
             self.last_chunk[k] = ld
@@ -725,17 +701,14 @@ class FaDecodeKs(FaBuild):
         m = self.mem[R]
 
         def bcast(name, src, dst, flag, nb, n, after):
-            # ChipletBuild.hbm_cast: one host task, or with hbm_cast.mode posts its posts and waits
+            # ChipletBuild.hbm_cast: its posts and waits
             return self.hbm_cast(
                 R, f"{name}_k{R:02x}",
                 HostBingoKernelHbmBcastArgs(src, BingoMemSymbol(dst), BingoMemSymbol(flag), self.h_seq[m].address + 64,
                                             1, nb, n, m, self.engine[R]), after=after)
         xm = self.x_put = self.x_multicast(go, bcast)
         if self.x_on_host:                                  # x first on the root memory chip's engine, then its ring
-            if self.ring_mode == "cluster":
-                self.rings[R].start_after(self.done_of(xm))
-            else:
-                self.edge(self.done_of(xm), self.prefetch[R])
+            self.rings[R].start_after(self.done_of(xm))
         # ---- x into every cluster's L1 ------------------------------------------------------------------------------
         xa, xw = {}, {}
         for k in self.chips:
@@ -1105,16 +1078,16 @@ class FaDecodeKs(FaBuild):
                 kind[ln][what] += nb
 
         for k in self.chips:
-            add(fdm._route(self.mem[k], k), self.ring_bytes[k], "ring")
-        add(fdm._bcast_tree(self.mem[R], grid), XB, "x")
+            add(fdd._route(self.mem[k], k), self.ring_bytes[k], "ring")
+        add(fdd._bcast_tree(self.mem[R], grid), XB, "x")
         for nb, what in ((QB, "query"), (XFER, "m*"), (BR * LAT, "o~"), (nchip * OAR, "o8")):
-            add(fdm._bcast_tree(R, grid), nb, what)
+            add(fdd._bcast_tree(R, grid), nb, what)
         for k in self.chips:
-            add(fdm._route(k, R), QROW + XFER + OAR + self.NC * 4 * QC + 2 * QC * len(self.kva[k]), "gathers")
+            add(fdd._route(k, R), QROW + XFER + OAR + self.NC * 4 * QC + 2 * QC * len(self.kva[k]), "gathers")
         hops = self.order[1:] + [R]
         for a, b in zip(hops, hops[1:]):
-            add(fdm._route(a, b), PB, "chain")
-        add(fdm._route(R, self.mem[R]), 2 * HIDDEN + PK + PVB, "y+append")
+            add(fdd._route(a, b), PB, "chain")
+        add(fdd._route(R, self.mem[R]), 2 * HIDDEN + PK + PVB, "y+append")
         top = sorted(load, key=lambda ln: -load[ln])[:4]
         self.floor = load[top[0]] / LINK_BW
         print(f"[{self.TAG}] streams: ring {sum(self.ring_bytes.values()):,} B over {nchip} chips "
@@ -1151,9 +1124,9 @@ class FaDecodeKs(FaBuild):
             print(f"[{self.TAG}] WARNING: L1 estimate over l1_capacity on {over} clusters")
 
     # ---- emission ----------------------------------------------------------------------------------------------------
-    def finish(self, app_name, x_prefixes=("x_wait_",)):
+    def finish(self, app_name):
         self._check_collectives()
-        cm.ChipletBuild.finish(self, app_name, x_prefixes)
+        cm.ChipletBuild.finish(self, app_name)
         self.l1_report()
 
 

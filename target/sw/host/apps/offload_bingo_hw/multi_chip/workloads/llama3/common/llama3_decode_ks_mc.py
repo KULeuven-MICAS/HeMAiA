@@ -39,8 +39,8 @@ THE STEPS, per cluster unless named:
                elsewhere: the exchange buffer is zeroed before the window); one multicast a half into its cluster
                index (half 0 into every cluster 0, half 1 into every cluster 1), the second behind the first
     cache      each chip's memory chip pushes the chip's shard (K tiles of both halves, then V tiles: two parts behind a
-               flag each) into its L3 between the W_q chunks and the rest of its weights (the prefetcher split around
-               the push); each cluster copies its half's tiles into L1
+               flag each) into its L3 between the W_q chunks and the rest of its weights (a run boundary of each
+               ring around the push); each cluster copies its half's tiles into L1
     pass 1     per K tile S^T = K Q^T (gemm_fa_qk) and the FA softmax: the shard's row maximum (passes 2), or the
                online softmax and PV (passes 1)
     k / v      2 GEMVs, the chip's half of its group's K (cluster 0: dequantised, RoPE, row 0 of a [16, 64] A tile,
@@ -69,13 +69,14 @@ THE STEPS, per cluster unless named:
                16-key block of the 64-key tile ctx / 64) and V^T tiles (each 16-dimension block's first four 64-B blocks)
                into the cache image's next tile in its memory chip's HBM
 
-THE STREAM. Each chip's host runs its weight prefetcher in three parts: W_q's 4 chunks of each ring, the cache push, the
-k / v's 2 chunks, W_O's 4 chunks. params wo_push:
-    after_reduce   (default) each chip's W_O part waits for the partials' ChainGather too: every chunk of the earlier
+THE STREAM. Each chip's memory-chip engine queue takes, per ring, W_q's 4 chunks, then the cache push, then the k / v's
+2 chunks, then W_O's 4 chunks, each part a run of its own (WeightRings.boundary; each run posted by its ring's cluster).
+params wo_push:
+    after_reduce   (default) each ring's W_O run waits for the partials' ChainGather too: every chunk of the earlier
                    parts has landed before the statistics' ChainGather (the new key needs every chip's k / v chunks),
                    and no W_O chunk is pushed before the reduce has ended, so no ChainGather runs beside a push
-    after_kv       W_O's part right behind the k / v part: its pushes run beside both ChainGathers
-    before_chains  W_O's part right behind the k / v part, every cluster's W_O chunks loaded into its slabs (params
+    after_kv       W_O's runs right behind the k / v runs: their pushes run beside both ChainGathers
+    before_chains  W_O's runs right behind the k / v runs, every cluster's W_O chunks loaded into its slabs (params
                    w_buffers at least W_O's chunks a cluster) right after its k / v run (and the new key's chip's run
                    wait), and each chip's statistics handed to the chain only once both its clusters have loaded their
                    last W_O chunk: every push of every part has landed before the statistics' ChainGather, so no
@@ -103,9 +104,9 @@ fast_host_init, args_phase_bytes). bcast bcast_l1, reduce chain and sync edge on
 IN A LAYER the block runs with shared=the layer, as llama3_decode_mc.py's: x_on_host false (the layer's input norm on
 the root's cluster 0 makes x8 in a_row and multicasts it from L1 into every chip's L3 at <TAG>_xland behind <TAG>_xtflag;
 x_multicast returns that put) and y_to_hbm false (y stays in the root's L3 row <TAG>_yrow; y_out returns the root's
-wait). prefetch[k] is the chip's last prefetcher part (W_O), behind which a layer chains its next block's. append_now
-(deps) makes the append where the block does (behind the new key's chip's cluster-1 y put); a layer that writes into
-HBM only after all its collectives and pushes overrides it to return [] and calls kv_append(deps) at its end.
+wait). append_now(deps) makes the append where the block does (behind the new key's chip's cluster-1 y put); a layer
+that writes into HBM only after all its collectives and pushes overrides it to return [] and calls kv_append(deps) at
+its end.
 """
 
 import itertools
@@ -122,7 +123,7 @@ from llama3_attn_mc import BR, QC, run_driver  # noqa: E402
 
 import networkx as nx  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmUcastArgs, HostBingoKernelWeightPrefetchRangeArgs, SnaxBingoKernelGemmFaPvArgs,
+    HostBingoKernelHbmUcastArgs, SnaxBingoKernelGemmFaPvArgs,
     SnaxBingoKernelGemmFaQkArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
     SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelSimdMlaNormaliseArgs, SnaxBingoKernelSimdMulF16Args, SnaxBingoKernelWaitFlagsArgs,
@@ -660,24 +661,6 @@ class KsBuild(lmd.DBuild):
         """Chip k cluster c's exchange buffer at `off`, as a task on chip k_from names it."""
         return self.xch_view(k, c, off) if k == k_from else cm.remote(k, self.xch_addr(c, off))
 
-    def _prefetch_parts(self, k, after):
-        """Chip k's prefetcher in three parts: W_q's chunks of each ring (a task of its own, behind `after`), the k / v
-        chunks (a task of its own), W_O's (the prefetcher task itself). Returns (the first part, the second)."""
-        t, b = self.prefetch[k], self.prefetch[k].kernel_args
-        if not 0 < self.NQC <= self.n_slots:
-            raise ValueError(f"params weight_ring.slots={self.n_slots}: the W_q chunks of a ring must fit its slots")
-        part = lambda lo, hi: HostBingoKernelWeightPrefetchRangeArgs(                  # noqa: E731
-            b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-            b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-            batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed, head=b.head,
-            batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-        t.kernel_args = part(self.WO0, 0)
-        t.kernel_name = t.kernel_args.KERNEL_NAME
-        host = self.cx_chip(k)
-        head = host.host_node(f"weight_prefetch_k{k:02x}_wq", t.kernel_name, part(0, self.NQC), after=list(after))
-        mid = host.host_node(f"weight_prefetch_k{k:02x}_kv", t.kernel_name, part(self.NQC, self.WO0), after=[])
-        return head, mid
-
     def x_multicast(self, go):
         """x's row into every chip's L3 (xland) behind the flag xtflag; params x_cast unicast: the root memory chip's push
         engine writes a copy into each chip in turn (a progress flag a chip on the root), else DBuild's multicast."""
@@ -801,45 +784,30 @@ class KsBuild(lmd.DBuild):
             pre[k] += prev
         go = self.setup(extra=pre)
         self.dfg.relay_one_consumer_cores = [xdma]
-        # ---- the hosts: x's multicast (the root); per chip the W_q part of its prefetcher, its cache, the k / v part,
-        # the W_O part -------------------------------------------------------------------------------------------------
+        # ---- the hosts: x's multicast (the root); per chip its cache between each ring's W_q runs and the rest --------
         one = lambda mm: self.h_seq[mm].address + 64     # noqa: E731  a word holding 1 in the memory chip's HBM
         self.x_put = self.x_multicast(go)
-        self.ucast, self.pf_parts = {}, {}
-        cluster = self.ring_mode == "cluster"
+        self.ucast = {}
         for k in self.chips:
             first = [go[k]] + ([self.done_of(self.x_put)] if k == R and self.x_on_host else [])
             mk = self.mem[k]
-            if cluster:
-                # weight_ring.mode cluster: no prefetcher parts; the chip's engine queue takes each ring's W_q runs, the
-                # cache, then the k / v runs (WeightRings.boundary), and W_O's chunks start a run of their own (its post
-                # waits for the reduce with wo_push after_reduce, below)
-                self.ucast[k] = self.hbm_cast(
-                    k, f"kv_ucast_k{k:02x}",
-                    HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"),
-                                                self.l3("kvcprog"), one(mk), 1, self.PB, self.P, mk, self.engine[k], [k]),
-                    after=first, ahead_of_rings=False)
-                for r in range(self.rings[k].n_rings):
-                    self.rings[k].boundary(r, self.NQC, before=[self.ucast[k].first], after=[self.ucast[k].posts[-1]])
-                    self.rings[k].boundary(r, self.WO0)
-                continue
-            head, mid = self._prefetch_parts(k, first)
+            # the chip's engine queue takes each ring's W_q runs, the cache, then the k / v runs (WeightRings.boundary),
+            # and W_O's chunks start a run of their own (its post waits for the reduce with wo_push after_reduce, below)
             self.ucast[k] = self.hbm_cast(
                 k, f"kv_ucast_k{k:02x}",
-                HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"), self.l3("kvcprog"),
-                                            one(mk), 1, self.PB, self.P, mk, self.engine[k], [k]), after=[head])
-            self.edge(self.ucast[k], mid)
-            self.edge(mid, self.prefetch[k])
-            self.pf_parts[k] = (head, mid, self.prefetch[k])
+                HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"),
+                                            self.l3("kvcprog"), one(mk), 1, self.PB, self.P, mk, self.engine[k], [k]),
+                after=first, ahead_of_rings=False)
+            for r in range(self.rings[k].n_rings):
+                self.rings[k].boundary(r, self.NQC, before=[self.ucast[k].first], after=[self.ucast[k].posts[-1]])
+                self.rings[k].boundary(r, self.WO0)
         if self.cache_order == "after_wq" and not self.per_kernel:
             for k in self.chips:
                 for j in self.chips:
                     if j != k and self.mem[j] == self.mem[k]:
-                        if cluster:             # chip j's W_q runs before chip k's cache
-                            for r in range(self.rings[j].n_rings):
-                                self.rings[j].boundary(r, self.NQC, before=[self.ucast[k].first])
-                        else:
-                            self.edge(self.pf_parts[j][0], self.ucast[k])
+                        # chip j's W_q runs before chip k's cache
+                        for r in range(self.rings[j].n_rings):
+                            self.rings[j].boundary(r, self.NQC, before=[self.ucast[k].first])
         # ---- x into every cluster's L1 ---------------------------------------------------------------------------------
         xf = {}
         for cl in range(self.N_CL):
@@ -880,8 +848,12 @@ class KsBuild(lmd.DBuild):
         if self.cache_order == "after_wq" and b_xq:
             for k in self.chips:
                 self.edge(b_xq[k], self.ucast[k])
+        # x multicast from the root memory chip's HBM: the q gather after it has landed, so it ends before the root's
+        # first multicast (no barrier orders the host's posts)
+        x_landed = [self.x_put] if self.x_on_host and self.x_cast == "multicast" else []
         qw = self.node(R, 0, dm, "q_gather", "__snax_bingo_kernel_wait_flags",
-                       SnaxBingoKernelWaitFlagsArgs(self.xch_view(R, 0, self.OFF_QSFL), len(self.chips), 1), [qput[R]])
+                       SnaxBingoKernelWaitFlagsArgs(self.xch_view(R, 0, self.OFF_QSFL), len(self.chips), 1),
+                       [qput[R]] + x_landed)
         for k in self.chips:
             if k != R:
                 self.dfg.bingo_add_order_edge(qput[k], qw)
@@ -1063,15 +1035,12 @@ class KsBuild(lmd.DBuild):
                 junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD, holds=[self.dst_buf])
             self.o_chain = self.node(R, 0, xdma, "o_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                      list(dict.fromkeys(before[k] for k in self.chips)))
-        # sync barrier: each chip's W_O part behind its own barrier after the reduce, not the root's reduce itself
+        # sync barrier: each chip's W_O runs behind its own barrier after the reduce, not the root's reduce itself
         br = self.kernel_barrier({R: [self.o_chain]})
         if self.wo_push == "after_reduce":
             for k in self.chips:
-                if self.ring_mode == "cluster":     # the run of W_O's first chunk, on each ring
-                    for r in range(self.rings[k].n_rings):
-                        self.rings[k].post_after(r, self.WO0, [br[k] if br else self.o_chain])
-                else:
-                    self.edge(br[k] if br else self.o_chain, self.prefetch[k])
+                for r in range(self.rings[k].n_rings):      # the run of W_O's first chunk, on each ring
+                    self.rings[k].post_after(r, self.WO0, [br[k] if br else self.o_chain])
         nrm, tr = [], []
         for h in range(NHF):
             o_in = self.dst.view(h * self.OH)
@@ -1243,7 +1212,7 @@ class KsBuild(lmd.DBuild):
     def _check_collectives(self):
         """Every multicast (a device bcast put, a memory chip's HBM multicast) and every ChainGather is ordered against
         every other by a path of dependency and order edges. wo_push after_reduce: every ring load and cache fetch of
-        the first two prefetcher parts precedes the first ChainGather, and every chip's W_O part follows the last;
+        the W_q and k / v runs precedes the first ChainGather, and every ring's W_O run is posted after the last;
         before_chains: every ring load of every part (W_O's included) and every cache fetch precedes the first.
         Returns (multicasts, gathers)."""
         spans = self.collectives()      # each collective by its first task, descendants of its done one; before the view
@@ -1273,8 +1242,7 @@ class KsBuild(lmd.DBuild):
             early = [t for t, j in self.load_chunk.items() if j < self.WO0 and t not in anc]
             fetch = [t for cl in range(self.N_CL) for t in (self.kc_ready[cl], self.vc_ready[cl]) if t not in anc]
             late = [k for k in self.chips
-                    if (any(self.rings[k].post_of(r, self.WO0) not in after for r in range(self.rings[k].n_rings))
-                        if self.ring_mode == "cluster" else self.prefetch[k] not in after)]
+                    if any(self.rings[k].post_of(r, self.WO0) not in after for r in range(self.rings[k].n_rings))]
             after_m = desc[self.m_made] if self.m_made in desc else nx.descendants(G, self.m_made)
             if early or fetch or late or self.o_chain not in after_m:
                 raise ValueError(f"wo_push after_reduce: {len(early)} W_q / k / v ring loads and {len(fetch)} cache "
@@ -1343,7 +1311,7 @@ class KsBuild(lmd.DBuild):
         self.run_checks(checks)
 
     # ---- emission -------------------------------------------------------------------------------------------------------
-    def finish(self, app_name, x_prefixes=("x_wait_",)):
+    def finish(self, app_name):
         bad = [t.node_name for t in self.dfg.node_list if (t.kernel_name or "") in
                ("__snax_bingo_kernel_gemm_full", "__snax_bingo_kernel_gemm_minimal")]
         if bad:
@@ -1359,7 +1327,7 @@ class KsBuild(lmd.DBuild):
             print(f"[{self.TAG}] sync barrier: {self.n_barrier} barriers a chip, no edge crosses chips inside the window")
         self._check_collectives()
         self._args_report()
-        lmd.DBuild.finish(self, app_name, x_prefixes)
+        lmd.DBuild.finish(self, app_name)
 
     def _args_report(self):
         """Each cluster's task args (the compiler's arena estimate: each struct 64-byte aligned), beside its static L1."""

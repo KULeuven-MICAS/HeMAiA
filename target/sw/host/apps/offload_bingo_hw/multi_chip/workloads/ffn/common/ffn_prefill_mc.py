@@ -27,11 +27,11 @@ reduced by a ChainGather into the root. Per pass:
     reduce      per slice (or group of slices): one ChainGather through every chip, each hop's xDMA adding its partial
                 in transit, into the root's fold buffer; the root stores it to L3
 
-X COMES FROM HBM: every pass's X sits in the HBM of the root's memory chip; the root's host
-queues that memory chip's push engine (the root's own prefetch engine), which multicasts X a tile at a time into every
-chip's L3, each tile behind a flag (__host_bingo_kernel_hbm_bcast). Every pass's X is multicast at the start, ahead of
-the root's weight prefetcher, which drives the same engine and holds the host for the whole window. Every cluster
-copies a pass's X from its own L3 into L1 once the pass's flags have landed.
+X COMES FROM HBM: every pass's X sits in the HBM of the root's memory chip; the root's host posts into that memory
+chip's push engine (the one that also pushes the root's weights), which multicasts X a tile at a time into every chip's
+L3, each tile behind a flag (ChipletBuild.hbm_cast). Every pass's X is multicast at the start, ahead of the root's
+weight rings in that engine's queue. Every cluster copies a pass's X from its own L3 into L1 once the pass's flags have
+landed.
 
 THE WEIGHTS. Each cluster's gate|up and down chunks sit in its memory chip's HBM; the memory chip pushes them into the
 chip's L3 ring and the DM core loads each into an L1 slab behind its landed flag. The first pass loads them from the
@@ -191,13 +191,13 @@ class PBuild(cm.ChipletBuild):
         self.NTL = -(-self.T // 16 // len(self.chips))
 
     def mem_handles(self):
-        """The data, the golden and the memory; the only tasks made are the prefetchers. The FFN's data (_data) and the
+        """The data, the golden and the memory; no task is made. The FFN's data (_data) and the
         mapping its sizes give: the intermediate columns each cluster computes (split_columns) and their gate|up chunks,
         each chip's columns (K) for the down projection, each cluster's output slices (_dn_out_split); the golden Y,
         added in the fold order the ChainGathers add in; the sizes of X and Y_raw a pass and the output slots; then
         _stage(): every pass's X and every cluster's weight chunks and gate|up factors into HBM, X's landing area and
         Y_raw's place in L3; make_streams(): each cluster's L1 weight slabs; make_rings(): each chip's weight rings in
-        its L3 and its host's prefetcher task (weight_prefetch_k<chip>); _buffers(): every cluster's L1 buffers."""
+        its L3; _buffers(): every cluster's L1 buffers."""
         d = self.d = self._data(self.args, self.p)
         R = self.ROWS
         self.lay = d.layout
@@ -429,10 +429,9 @@ class PBuild(cm.ChipletBuild):
         return self.xbuf[cl][0].view((so - self.xch_slots) * self.SLICE)
 
     def x_hbm_bcasts(self, go):
-        """The root's host queues its memory chip's push engine, one cast a pass (ChipletBuild.hbm_cast: one host task,
-        or with hbm_cast.mode posts a post a group of tiles): the pass's X a tile at a time into every chip's L3, each
-        tile behind its flag. The root's prefetcher drives the same engine and holds the host for the whole window, so
-        it starts after the last of them. Returns the casts (HbmCast), one a pass."""
+        """The root's host posts into its memory chip's push engine, one cast a pass (ChipletBuild.hbm_cast: a post a
+        group of tiles): the pass's X a tile at a time into every chip's L3, each tile behind its flag, ahead of the
+        root's weight rings in that engine's queue. Returns the casts (HbmCast), one a pass."""
         R, T = self.ROOT, self.TAG
         m = self.mem[R]
         one = self.h_seq[m].address + 64                    # a word holding 1 in the memory chip's HBM: the flags' value
@@ -447,8 +446,6 @@ class PBuild(cm.ChipletBuild):
             else:
                 kargs = HostBingoKernelHbmBcastArgs(src, dst, flag, one, 1, self.XT, self.TPP, m, self.engine[R])
             out.append(self.hbm_cast(R, f"x_hbm_bcast_i{i}_k{R:02x}", kargs, after=[go[R]] + out[-1:]))
-        if getattr(self, "ring_mode", "prefetcher") == "prefetcher":
-            self.edge(out[-1].end, self.prefetch[R])
         return out
 
     def x_post(self, cast, t, k):
@@ -1257,7 +1254,7 @@ class PBuild(cm.ChipletBuild):
                             ordered(r, store(i, c * h + jl, c), f"X_{i} read before the store over it, y i{i}j{c * h + jl}")
         return bad
 
-    def finish(self, app_name, x_prefixes=("x_wait_",)):
+    def finish(self, app_name):
         if self.sync == "barrier":
             if self.barrier_fence:              # the fences first, so the hazard check sees them
                 self.fence_barriers()
@@ -1272,7 +1269,7 @@ class PBuild(cm.ChipletBuild):
         if bad:
             raise ValueError(f"{len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))
         print(f"[{self.TAG}] buffer hazards: none (A16, A16a, A8, X, output and fold slots; every cluster)")
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
 
 
 def _app_name(S):

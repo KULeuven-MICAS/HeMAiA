@@ -49,24 +49,21 @@ same number. Per piece, each cluster runs:
                  chunks are pushed before the route is known.
 
 THE ROUTE runs on the root's cluster 0. The router's weights and factors are the first chunk of that cluster's weight
-ring, pushed by the root's prefetcher from the HBM of the root's memory chip: only the root routes, so they cross the
+ring, pushed from the HBM of the root's memory chip: only the root routes, so they cross the
 links to the root only, not the multicast into every chip's L3 the prefill's route (every cluster routing its tiles)
 needs. The router GEMM over the token's tile, its factors, the softmax and the top 6 into the route table's entry, which
 the root multicasts to every chip's L3 behind a flag. Every cluster fetches it and turns it into its chip's row lists
 (moe_dispatch), which fails when a held expert's count is not the placement's: the check of the device's route against
 the generator's. The row lists feed the quantise (the route weight) and the down's scatter-add (the token's row).
 
-ROUTE BEFORE THE ROUTED PUSHES. Each chip's weight prefetcher runs as two host tasks over the ring schedule
-(host_kernel_lib.h weight_prefetch_range): the first pushes each ring's first n chunks, those no route decides (the
-router's chunk, the shared MLP's gate|up and down) and starts with the window once X has landed (the prefill's
-prefetch_after_x: an HBM multicast into an L3 beside a push into it can deadlock); the second pushes the rest, the
-routed experts' chunks, and depends on both of the chip's moe_dispatch tasks. So no routed byte leaves a memory chip
-before the device's route has reached that chip and passed its check, while the shared MLP's stream covers the route's
-latency. n is the fewer such chunks of the chip's two rings, so a chunk past it that no route decides (the root's cluster
-0 ring has the router's chunk extra) waits with the routed ones. The HBM image of each ring has a 64-byte gap before
-chunk n: no run of the prefetcher crosses the split, so the ring places the compiler fixed are the ones the two tasks
-push into. With weight_ring.mode cluster (each cluster posts its ring's runs) chunk n starts a run of its own
-(WeightRings.boundary), whose post depends on the chip's moe_dispatch tasks: the route's wait is a graph edge.
+ROUTE BEFORE THE ROUTED PUSHES. Each cluster posts its ring's runs to its memory chip's push engine. Each ring's first
+n chunks are those no route decides (the router's chunk, the shared MLP's gate|up and down); their runs start once X has
+landed (the prefill's prefetch_after_x: an HBM multicast into an L3 beside a push into it can deadlock). Chunk n starts a
+run of its own (WeightRings.boundary), whose post depends on both of the chip's moe_dispatch tasks. So no routed byte
+leaves a memory chip before the device's route has reached that chip and passed its check, while the shared MLP's stream
+covers the route's latency: the route's wait is a graph edge. n is the fewer such chunks of the chip's two rings, so a
+chunk past it that no route decides (the root's cluster 0 ring has the router's chunk extra) waits with the routed ones.
+The HBM image of each ring has a 64-byte gap before chunk n.
 
 X FROM HBM. The root's host queues its memory chip's push engine, which multicasts the token's row from HBM into every
 chip's L3 behind one flag (the prefill's x_hbm, one tile of one row); every cluster waits for the flag and copies the
@@ -95,7 +92,7 @@ THE GEMV MODE (params gemv). Every weight multiply, the router's included, on Ve
 __snax_bingo_kernel_gemv, 128 weights a pass: 128 INT8 bytes, or 64 bytes of INT4 nibbles through B's converter), its
 operands in the layouts of shapes 0..2 (the generator's images: the (16, 4, 16) B blocks, INT4 in their paired form), A
 the token's a_row; no 8-row tile anywhere, every activation one row. The placement, the cluster split, the rings and their
-two prefetcher tasks, the route's path, the exchange and the reduce are the ones above. Per step:
+split at the route, the route's path, the exchange and the reduce are the ones above. Per step:
     X          the token's INT8 row in a_row (THE X LAYOUT below), multicast from HBM into every chip's L3 behind one
                flag as above; every cluster copies it into L1
     route      one INT8 GEMV of the router's chunk (W_r in the B layout, then its factors' row) into the logits' row,
@@ -152,7 +149,7 @@ sys.path.insert(0, HERE)
 import moe_prefill_mc as mp  # noqa: E402  (puts util/sim/multichip and mini_compiler on sys.path)
 from driver import run_driver  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmBcastArgs, HostBingoKernelWeightPrefetchRangeArgs, SnaxBingoKernelGemvArgs,
+    HostBingoKernelHbmBcastArgs, SnaxBingoKernelGemvArgs,
     SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdma2dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
     SnaxBingoKernelIdmaPutFlaggedArgs, SnaxBingoKernelMoeDispatchArgs, SnaxBingoKernelMoeTopkRowsArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelSimdDeqSwigluArgs, SnaxBingoKernelSimdMulF16Args,
@@ -167,7 +164,7 @@ import moe_prefill_data as md  # noqa: E402
 
 BLK, D_BLOCK, MESH3, ROUTE_B, SIMD_BEAT = mp.BLK, mp.D_BLOCK, mp.MESH3, mp.ROUTE_B, mp.SIMD_BEAT
 ROWS = md.TILE_ROWS           # the token's row tile: the token, then zero rows
-GAP = 64                      # the HBM image's gap before a ring's first chunk of the second prefetcher task
+GAP = 64                      # the HBM image's gap before a ring's first chunk that waits for the route
 GV_MESH = (16, 4, 16)         # gemv: the layouts of VersaCore's shapes 0..2, which the GEMV reads
 ATOM, LANES = 8, 8            # gemv: the xDMA's 8-byte atom (4 FP16 values) and its lanes a beat
 SPREAD_ATOMS = 2 * LANES      # gemv: the atoms of the A16 row one step of the spread's outer loop moves
@@ -263,9 +260,6 @@ class DBuild(mp.MBuild):
                 raise ValueError(f"params {k}: a prefill switch the decode does not take")
         # the switches of the prefill's helpers, at what the decode builds
         self.x_hbm, self.x_device, self.l3_overlay, self.args_phases = True, False, False, False
-        self.plain_trailer = bool(p.get("weight_ring", {}).get("trailer", False))
-        if self.plain_trailer:
-            raise ValueError("params weight_ring.trailer: the decode's rings push flags (queued)")
         self.resid, self.phase_starts, self.phase_names, self.loaders = None, [], [], {}
         self.b_parity = bool(p.get("b_parity", False))
         self.w4_paired = bool(p.get("w4_paired", False))
@@ -294,14 +288,13 @@ class DBuild(mp.MBuild):
         self.BPC = int(p.get("blocks", 3))
 
     def mem_handles(self):
-        """The data, the placement, the golden and the memory; the only tasks made are the prefetchers. The decode's
+        """The data, the placement, the golden and the memory; no task is made here. The decode's
         own, not MBuild's (which sizes its buffers by a prompt's 8-token tiles and places whole experts by their
         tokens): the token's data (_data) and the sizes it gives (the output slices, params slice, its default a
         cluster's outputs; X's multicast tile); the pieces of the token's experts and of the shared MLP on the chips
         (_place, params routed_split); the golden (_golden); then _stage(): X and Y's row in the HBM of the root's memory
         chip, every chip's landing areas and flags, every cluster's weight chunks and factors in its memory chip's HBM;
-        make_streams(): each cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's
-        prefetcher task; _buffers(): every cluster's L1 buffers."""
+        make_streams(): each cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3; _buffers(): every cluster's L1 buffers."""
         d = self.d = self._data(self.args, self.p, self.hw)
         self.lay = d.layout
         self.H, self.IE, self.ISH = d.H, d.I_e, d.I_sh
@@ -488,8 +481,8 @@ class DBuild(mp.MBuild):
 
     def _images(self, blobs, free):
         """Each cluster's weight image in its memory chip's HBM: blobs {cl: [(key, chunk bytes, factors' offset)]} in
-        the order the cluster loads them, free {cl: its first chunks no route decides}; the gap before the first chunk
-        of each chip's second prefetcher task; then the stream report."""
+        the order the cluster loads them, free {cl: its first chunks no route decides}; the gap before each ring's
+        first chunk that waits for the route; then the stream report."""
         st, T = self.st, self.TAG
         for cl, items in blobs.items():
             for key, b, _ in items:
@@ -497,7 +490,7 @@ class DBuild(mp.MBuild):
                     raise ValueError(f"cluster {cl}: weight chunk {key} of {b.size} B; params w_chunk_bytes is "
                                      f"{self.chunk}")
         self.img, self.chunk_off, self.cidx = {}, {}, {}
-        # the split between each chip's two prefetcher tasks: the fewer route-free chunks of its two rings
+        # each chip's split at the route: the fewer route-free chunks of its two rings
         self.n_free = {k: min(free[cl] for cl in self.clusters(k)) for k in self.chips}
         for cl in range(self.N_CL):
             k = self.chip(cl)
@@ -586,8 +579,8 @@ class DBuild(mp.MBuild):
 
     def _stream_report(self):
         """The bytes a token streams: per memory chip, per link (a memory chip's link carries the chips behind it), and
-        per chip the route-free chunks, pushed before the route is known (the first prefetcher task, or a cluster ring's
-        runs before its boundary), which cover the route's latency."""
+        per chip the route-free chunks, pushed before the route is known (each ring's runs before its boundary), which
+        cover the route's latency."""
         R = self.ROOT
         chip_b = {k: sum(sum(nb for _, nb, _ in self.chunk_off[cl]) for cl in self.clusters(k)) for k in self.chips}
         free_b = {k: sum(sum(nb for _, nb, _ in self.chunk_off[cl][:self.n_free[k]]) for cl in self.clusters(k))
@@ -696,7 +689,7 @@ class DBuild(mp.MBuild):
     # ---- helpers ------------------------------------------------------------------------------------------------------
     def _ld(self, cl, key):
         """The ring load of cluster cl's chunk `key`: loads are created in the image's order, so a ring's entries are
-        its image's chunks and the first prefetcher task's range is the image's first chunks."""
+        its image's chunks and the route-free runs are the image's first chunks."""
         j = self.cidx[cl][key]
         k, c = self.chip(cl), self.local(cl)
         if len(self.rings[k].entries[c]) != j:
@@ -738,49 +731,22 @@ class DBuild(mp.MBuild):
                 warm.append(self.node(k, c, simd, "warm_softmax", "__snax_bingo_kernel_simd_softmax_f16_f16",
                                       SnaxBingoKernelSimdSoftmaxF16F16Args(wz, wz.view(768), 2, 64), [warm[-1]]))
 
-    def _split_prefetch(self, go, after):
-        """Each chip's prefetcher as two host tasks: its rings' first n_free chunks, after the start and `after`; then
-        the rest, the original task (the routed chunks), which the caller makes wait for the route (_after_route).
-        weight_ring.mode cluster: each ring's first post after `after` too, and its chunk n_free starts a run of its
-        own. Returns the first tasks (none in cluster mode)."""
-        first = {}
-        if self.ring_mode == "cluster":
-            for k in self.chips:
-                for t in [go[k]] + list(after):
-                    self.rings[k].start_after(t)
-                for r in range(self.rings[k].n_rings):
-                    self.rings[k].boundary(r, self.n_free[k])
-            return first
+    def _split_rings(self, go, after):
+        """Each ring's first post after the start and `after`, and its chunk n_free starts a run of its own, which
+        waits for the route (_after_route)."""
         for k in self.chips:
-            t, b = self.prefetch[k], self.prefetch[k].kernel_args
-            n = self.n_free[k]
-            if not 0 < n <= self.n_slots:
-                raise ValueError(f"chip {k:02x}: {n} route-free ring chunks, 1..{self.n_slots} (the ring's slots: the "
-                                 f"first task never waits for a release)")
-            part = lambda lo, hi, b=b: HostBingoKernelWeightPrefetchRangeArgs(
-                b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-                b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-                batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed,
-                head=b.head, batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-            t.kernel_args = part(n, 0)
-            t.kernel_name = t.kernel_args.KERNEL_NAME
-            first[k] = self.cx_chip(k).host_node(f"weight_prefetch_k{k:02x}_free", t.kernel_name, part(0, n),
-                                                 after=[go[k]] + list(after))
-            self.edge(first[k], t)
-        return first
+            for t in [go[k]] + list(after):
+                self.rings[k].start_after(t)
+            for r in range(self.rings[k].n_rings):
+                self.rings[k].boundary(r, self.n_free[k])
 
     def _after_route(self, disp):
-        """The routed chunks are pushed only once the chip has the device's route and its check passed: each chip's
-        second prefetcher task after its clusters' moe_dispatch tasks (disp {cluster: task}); weight_ring.mode cluster:
-        the post of each ring's run from chunk n_free on."""
+        """The routed chunks are pushed only once the chip has the device's route and its check passed: the post of
+        each ring's run from chunk n_free on waits for its clusters' moe_dispatch tasks (disp {cluster: task})."""
         for k in self.chips:
             ds = [disp[cl] for cl in self.clusters(k)]
-            if self.ring_mode == "cluster":
-                for r in range(self.rings[k].n_rings):
-                    self.rings[k].post_after(r, self.n_free[k], ds)
-                continue
-            for d in ds:
-                self.edge(d, self.prefetch[k])
+            for r in range(self.rings[k].n_rings):
+                self.rings[k].post_after(r, self.n_free[k], ds)
 
     # ---- the decode -------------------------------------------------------------------------------------------------
     def build(self):
@@ -794,9 +760,9 @@ class DBuild(mp.MBuild):
         if self.warm_root:
             self._warm(pre)
         go = self.setup(extra=pre)
-        # ---- X from HBM into every chip's L3, then the prefetchers' first tasks ----
+        # ---- X from HBM into every chip's L3, then the rings' first posts ----
         self.x_bcast = self.x_multicast(go)
-        self._split_prefetch(go, [self.done_of(self.x_bcast)])
+        self._split_rings(go, [self.done_of(self.x_bcast)])
         xc = {}
         for cl in range(N_CL):
             k, c = self.chip(cl), self.local(cl)
@@ -1015,9 +981,9 @@ class DBuild(mp.MBuild):
                 prev = [self.node(k, self.local(cl), xdma, f"row_zero", "__snax_bingo_kernel_xdma_memset", zero, prev)]
             pre[k] += prev
         go = self.setup(extra=pre)
-        # ---- X from HBM into every chip's L3, then the prefetchers' first tasks ----
+        # ---- X from HBM into every chip's L3, then the rings' first posts ----
         self.x_bcast = self.x_multicast(go)
-        self._split_prefetch(go, [self.done_of(self.x_bcast)])
+        self._split_rings(go, [self.done_of(self.x_bcast)])
         xc = {}
         for cl in range(N_CL):
             k, c = self.chip(cl), self.local(cl)
@@ -1216,7 +1182,7 @@ class DBuild(mp.MBuild):
     def x_multicast(self, go):
         """X into every chip's L3 behind one flag (md_xland, md_xtflag): the root's host queues its memory chip's push
         engine, which multicasts the token's row from HBM (ChipletBuild.hbm_cast). Returns the HbmCast the X waits and
-        the first prefetcher tasks follow. A whole layer (dsv2/common/dsv2_decode_mc.py) multicasts its glue's row here
+        the rings' first posts follow. A whole layer (dsv2/common/dsv2_decode_mc.py) multicasts its glue's row here
         instead."""
         R, m = self.ROOT, self.mem[self.ROOT]
         one = self.h_seq[m].address + 64                  # a word holding 1 in the memory chip's HBM: the flag's value

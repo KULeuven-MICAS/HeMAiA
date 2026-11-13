@@ -137,13 +137,13 @@ class Stage45(cm.ChipletBuild):
         self.dn_balance = bool(p.get("dn_balance", False))
 
     def mem_handles(self):
-        """The mapping, the data, the golden and the memory; the only tasks made are the prefetchers. The model's FFN
-        data (FFNData); each chip's intermediate columns (split_columns) and each cluster's output columns as down slices
+        """The mapping, the data, the golden and the memory; no task is made here. The model's FFN data (FFNData);
+        each chip's intermediate columns (split_columns) and each cluster's output columns as down slices
         (_dn_out_split); the golden Y, added in the fold order the ChainGathers add in; _stage(): each chip's A8 and
         every cluster's down chunks into HBM, Y_raw's place in the root's L3; make_streams(): each cluster's L1 weight
-        slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
-        (weight_prefetch_k<chip>); _buffers(): the output slots of every cluster's exchange buffer, the root's fold
-        slots, every cluster's A8."""
+        slabs; make_rings(): each chip's weight rings in its L3, each run of a ring posted by its cluster to the memory
+        chip's push engine; _buffers(): the output slots of every cluster's exchange buffer, the root's fold slots,
+        every cluster's A8."""
         d = self.d = ffn_data.FFNData(CACHE, self.model, wbits=self.wbits, tokens=self.T)
         R, GS = self.ROWS, self.chain_group
         self.D, self.I = d.H, d.I
@@ -278,8 +278,8 @@ class Stage45(cm.ChipletBuild):
 
           before the window     a8_pre                             DM: the chip's A8, HBM -> L1
                                      |
-                                 S0_start  ---------->  weight_prefetch_k<chip>   host: its memory chip pushes the
-                                     :                                            chunks into the L3 ring
+                                 S0_start  ---------->  Ld_c<j>_i0_push   DM, a ring run's first chunk j: its memory
+                                     :                                    chip pushes the run into the L3 ring
           every slice j         Ld_c<j>_i0                         DM: the chunk, ring slot -> L1 slab, once landed
                                      |
                                 dn_c<j>_i0[b<b>]                   GEMM: A8 x the chunk, the chip's FP16 partial of
@@ -420,9 +420,9 @@ class Stage45(cm.ChipletBuild):
             raise ValueError(f"{len(bad)} buffer hazards, e.g. " + "; ".join(bad[:4]))
         print(f"[{self.TAG}] buffer hazards: none (output and fold slots)")
 
-    def finish(self, app_name, x_prefixes=("a8_pre_",)):
+    def finish(self, app_name):
         self.check_hazards()
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
 
 
 def _app_name(S):

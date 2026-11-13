@@ -46,10 +46,9 @@ value buffers use (K: each key tile in the A layout, rope_pairs' column order, a
 16-key block; V: each tile's V^T in the A layout, a half being one contiguous 4 KiB) and in the order the prefill's
 trade buffer kvx holds a pass: [K halves | V halves], in params cache_parts parts of whole tiles, then the new key's
 tile (zero until the append). Each half crosses its chip's memory link once: the chip's host queues its memory chip's
-push engine (__host_bingo_kernel_hbm_ucast, a part a tile behind its flag) between the two parts of its weight
-prefetcher (params cache_after: the chunks of each ring before it; weight_ring.mode cluster: a run boundary of each
-ring there, the cache's posts between the two runs), so the cache lands after the q weights and before
-the k/v and W_O weights; each cluster copies the half into its key and value tiles, and the chip relays it into its
+push engine (ChipletBuild.hbm_cast: host posts of __host_bingo_kernel_hbm_ucast, a part a tile behind its flag)
+between two runs of each of the chip's weight rings (params cache_after: the chunks of each ring before it, a run
+boundary there), so the cache lands after the q weights and before the k/v and W_O weights; each cluster copies the half into its key and value tiles, and the chip relays it into its
 mate's L3 (cluster 0 the K half, cluster 1 the V half, a flagged put each), where both of the mate's clusters copy it.
 Per pair link: one half each way; per memory link: the halves of the chips it feeds. No chip copies remote data into its
 own L3, and no multicast meets a chain (there is none): the two multicasts (x at the start, o after every sweep) are
@@ -85,8 +84,7 @@ sys.path.insert(0, HERE)
 from llama3_attn_mc import BR, QC, L1Tiles, ABuild, run_driver  # noqa: E402
 
 from bingo_kernel_args import (  # noqa: E402
-    HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs, HostBingoKernelWeightPrefetchRangeArgs,
-    SnaxBingoKernelGemvArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
+    HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs, SnaxBingoKernelGemvArgs, SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelIdmaFetchFlaggedArgs,
     SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdma1dCopyArgs, SnaxBingoKernelXdma6dArgs,
     SnaxBingoKernelXdmaMemsetArgs, SnaxBingoKernelXdmaTranspose2dArgs, simd_fp16_lanes)
@@ -353,7 +351,7 @@ class DBuild(ABuild):
         if self.P < 1 or self.CT % self.P:
             raise ValueError(f"params cache_parts={self.P}: whole key tiles of the {self.CT} cached ones a part")
         self.PT = self.CT // self.P                          # key tiles a part
-        # params cache_after: each ring's chunks the prefetcher pushes before the cache (its first part)
+        # params cache_after: each ring's chunks pushed before the cache (0: the cache before every ring's runs)
         self.cache_after = int(p.get("cache_after", self.NQC))
         # ---- the split: key/value groups on chip pairs of a column, a query head a cluster (the prefill's) -----------
         pairs = sorted({(k, k + 1) for k in self.chips if (k & 15) % 2 == 0 and k + 1 in self.chips})
@@ -606,21 +604,6 @@ class DBuild(ABuild):
         """An L3 symbol of this block at byte `off`, on chip `chip` (None: the chip that names it)."""
         return BingoMemSymbol(f"{self.TAG}_{name}", offset=off, chip_id=chip)
 
-    def _prefetch_head(self, k, n, after):
-        """Chip k's prefetcher's first n chunks of each ring in a task of their own behind `after`; the prefetcher then
-        starts at the next chunk (the prefill's split_root_prefetch on any chip). Returns the first part."""
-        t, b = self.prefetch[k], self.prefetch[k].kernel_args
-        if not 0 < n <= self.n_slots:
-            raise ValueError(f"params cache_after={n}: 1..{self.n_slots} (the ring's slots: the first part never waits)")
-        part = lambda lo, hi: HostBingoKernelWeightPrefetchRangeArgs(
-            b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-            b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-            batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed, head=b.head,
-            batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-        t.kernel_args = part(n, 0)
-        t.kernel_name = t.kernel_args.KERNEL_NAME
-        return self.cx_chip(k).host_node(f"weight_prefetch_k{k:02x}_head", t.kernel_name, part(0, n), after=list(after))
-
     def x_multicast(self, go):
         """x's row into every chip's L3 (xland) behind the flag xtflag: the root's host has its memory chip's push engine
         multicast it from HBM, behind the root's go (ChipletBuild.hbm_cast). Returns the HbmCast the x fetches follow."""
@@ -662,7 +645,8 @@ class DBuild(ABuild):
             pre[k] += prev
         go = self.setup(extra=pre)
         self.dfg.relay_one_consumer_cores = [xdma]
-        # ---- the hosts: x's multicast (the root), the weight prefetcher's first part, the chip's cache half, the rest
+        # ---- the hosts: x's multicast (the root), each chip's cache half between its rings' first cache_after chunks
+        # and the rest
         one = lambda mm: self.h_seq[mm].address + 64     # a word holding 1 in the memory chip's HBM: the flags' value
         self.x_put = self.x_multicast(go)
         self.ucast = {}
@@ -671,21 +655,15 @@ class DBuild(ABuild):
             mk = self.mem[k]
             args = HostBingoKernelHbmUcastArgs(self.h_kv[k].address, self.l3("kvc"), self.l3("kvcflag"),
                                                self.l3("kvcprog"), one(mk), 1, self.PB, self.P, mk, self.engine[k], [k])
-            if self.ring_mode == "cluster":
-                # weight_ring.mode cluster: the chip's engine queue takes each ring's first cache_after chunks, the
-                # cache, then the rest (WeightRings.boundary); cache_after 0: the cache before every ring's runs
-                if self.cache_after and not 0 < self.cache_after <= self.n_slots:
-                    raise ValueError(f"params cache_after={self.cache_after}: 0..{self.n_slots} (the ring's slots)")
-                self.ucast[k] = self.hbm_cast(k, f"kv_ucast_k{k:02x}", args, after=first,
-                                              ahead_of_rings=not self.cache_after)
-                for r in range(self.rings[k].n_rings) if self.cache_after else ():
-                    self.rings[k].boundary(r, self.cache_after, before=[self.ucast[k].first],
-                                           after=[self.ucast[k].posts[-1]])
-                continue
-            if self.cache_after:
-                first = [self._prefetch_head(k, self.cache_after, first)]
-            self.ucast[k] = self.hbm_cast(k, f"kv_ucast_k{k:02x}", args, after=first)
-            self.edge(self.ucast[k], self.prefetch[k])
+            # the chip's engine queue takes each ring's first cache_after chunks, the cache, then the rest
+            # (WeightRings.boundary)
+            if self.cache_after and not 0 < self.cache_after <= self.n_slots:
+                raise ValueError(f"params cache_after={self.cache_after}: 0..{self.n_slots} (the ring's slots)")
+            self.ucast[k] = self.hbm_cast(k, f"kv_ucast_k{k:02x}", args, after=first,
+                                          ahead_of_rings=not self.cache_after)
+            for r in range(self.rings[k].n_rings) if self.cache_after else ():
+                self.rings[k].boundary(r, self.cache_after, before=[self.ucast[k].first],
+                                       after=[self.ucast[k].posts[-1]])
         # ---- x into every cluster's L1 ---------------------------------------------------------------------------------
         xf = {}
         for cl in range(self.N_CL):
@@ -944,8 +922,8 @@ class DBuild(ABuild):
         self.run_checks(checks)
 
     # ---- emission -------------------------------------------------------------------------------------------------------
-    def finish(self, app_name, x_prefixes=("x_wait_",)):
-        cm.ChipletBuild.finish(self, app_name, x_prefixes)
+    def finish(self, app_name):
+        cm.ChipletBuild.finish(self, app_name)
 
 
 def _app_name(S):

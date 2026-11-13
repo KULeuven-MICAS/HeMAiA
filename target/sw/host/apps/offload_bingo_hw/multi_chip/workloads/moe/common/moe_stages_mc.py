@@ -63,13 +63,6 @@ class MStages(mp.MBuild):
         p["stop"] = STOP[self.stage]                        # 0, 01: no weight chunk staged, loaded or pushed
         super().__init__(args, p, plat, hw, shared=shared)
 
-    def check_core_order(self, header, x_prefixes):
-        """The base check wants an X task before every DM core's first ring load; a stage without ring loads (0, 01)
-        has nothing to check."""
-        if not any((n.kernel_name or "").endswith("idma_ring_load") for n in self.dfg.node_list):
-            return
-        super().check_core_order(header, x_prefixes)
-
     def build(self):
         if self.stage != 0:
             return super().build()
@@ -77,8 +70,6 @@ class MStages(mp.MBuild):
         go = self.setup()
         self.rw_hbm_cast, self.x_hbm_cast = self.hbm_bcasts(go)
         self.rw_bcast, self.x_bcast = self.rw_hbm_cast.posts[-1], self.x_hbm_cast.posts[-1]
-        if self.ring_mode == "prefetcher":                 # the root's prefetcher drives the same engine
-            self.edge(self.x_hbm_cast.end, self.prefetch[R])
         last = {k: [] for k in self.chips}
         for k in self.chips:
             for c in range(self.NC):

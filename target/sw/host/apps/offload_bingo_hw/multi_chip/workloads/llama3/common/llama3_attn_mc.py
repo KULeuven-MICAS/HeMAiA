@@ -225,11 +225,11 @@ class ABuild(cm.ChipletBuild):
             raise ValueError("params front_after_sm: needs front_first \"x\" and x_after_sm")
         self.x_device = bool(p.get("x_device", False))
         # x comes from HBM, as DSv2's block: the root memory chip's push engine multicasts each pass's x from its HBM,
-        # configured by the root's host (one host task a pass, all of them at the start, ahead of the root's weight
-        # prefetcher, which drives the same engine); or (x_device) a device task makes it in C00's L3 and C00 cluster 0's
-        # iDMA multicasts it. x is never put in L3 before the window. x_tile_bytes: the multicast's tile (a flag after
-        # each); x_pf_split: the root's prefetcher in two parts, its first x_pf_chunks chunks of each ring before the
-        # multicasts, the rest after (host_kernel_lib.h weight_prefetch_range)
+        # posted by the root's host (ChipletBuild.hbm_cast, every pass's at the start, ahead of the root's weight rings
+        # in the same engine's queue); or (x_device) a device task makes it in C00's L3 and C00 cluster 0's iDMA
+        # multicasts it. x is never put in L3 before the window. x_tile_bytes: the multicast's tile (a flag after each);
+        # x_pf_split: the first x_pf_chunks chunks of each of the root's rings ahead of the multicasts in that queue, the
+        # rest of the rings after the last multicast has landed (WeightRings.boundary)
         if p.get("x_bcast", "memchip") != "memchip":
             raise ValueError(f"params x_bcast={p.get('x_bcast')!r}: x comes from HBM (memchip), never preloaded in L3")
         self.x_mem = not self.x_device
@@ -253,7 +253,7 @@ class ABuild(cm.ChipletBuild):
         # params x_tiles_xdma (x_row_tiles, x_after_sm): from the second pass on, each row tile of x a wait for its flags
         # and a copy on the xDMA core, not a fetch on the DM core, ahead of the previous pass's o8 copies in that core's
         # program: the xDMA's TCDM ports are arbitrated (a policy can put them last), the iDMA's wide port is not. The
-        # first pass's x stays on the DM core, ahead of its ring loads (check_core_order)
+        # first pass's x stays on the DM core, ahead of its ring loads
         self.x_tiles_xdma = bool(p.get("x_tiles_xdma", False))
         if self.x_tiles_xdma and not (self.x_row_tiles and p.get("x_after_sm", False)):
             raise ValueError("params x_tiles_xdma: needs x_row_tiles and x_after_sm")
@@ -659,7 +659,7 @@ class ABuild(cm.ChipletBuild):
         T, R = self.TAG, self.ROOT
         if self.x_mem and getattr(self, "x_cast", "multicast") == "unicast":
             # params x_cast unicast: a copy a chip in turn, in the fold order, the same tiles and flags
-            # ChipletBuild.hbm_cast (an HbmCast: one host task, or with hbm_cast.mode posts its posts and waits)
+            # ChipletBuild.hbm_cast (an HbmCast: the host's engine posts and the wait for their landing)
             from bingo_kernel_args import HostBingoKernelHbmUcastArgs
             m = self.mem[R]
             return self.hbm_cast(
@@ -687,41 +687,25 @@ class ABuild(cm.ChipletBuild):
 
     def x_puts_up_front(self, go):
         """The first pass's multicast; with x from HBM every pass's, one after the other on the root's host, ahead of
-        its weight prefetcher (x_pf_split: behind the prefetcher's first part)."""
+        the root's weight rings in its memory chip's engine queue, or with x_pf_split behind the first x_pf_chunks chunks
+        of each of the root's rings, the rest of the rings after the last multicast has landed."""
         R = self.ROOT
-        first = [go[R]]
-        if self.pf_split:
-            first.append(self.split_root_prefetch(go))
-        puts = [self.stage_x_put(0, first)]
+        ahead = not self.pf_split
+        puts = [self.stage_x_put(0, [go[R]], ahead_of_rings=ahead)]
         if self.x_mem:
             for i in range(1, self.NP):
-                puts.append(self.stage_x_put(i, [go[R]] + puts[-1:]))
-            if self.ring_mode == "prefetcher":         # weight_ring.mode cluster: no prefetcher on the root's host
-                self.edge(puts[-1], self.prefetch[R])
+                puts.append(self.stage_x_put(i, [go[R]] + puts[-1:], ahead_of_rings=ahead))
             # every o8 multicast of the root's waits for the last of these: two multicast sources at once stall the
             # fabric, and the task ends only once its last flag has landed
             self._x_put_last = puts[-1]
+        if self.pf_split:
+            n = int(self.p.get("x_pf_chunks", self.WO0))
+            if not 0 < n <= self.n_slots:
+                raise ValueError(f"params x_pf_chunks={n}: 1..{self.n_slots} (the ring's slots)")
+            ring = self.rings[R]
+            for r in range(ring.n_rings):
+                ring.boundary(r, n, before=[self.first_of(puts[0])], after=[self.done_of(puts[-1])])
         return puts
-
-    def split_root_prefetch(self, go):
-        """x_pf_split: the root's prefetcher's first x_pf_chunks chunks of each ring in a task of their own behind the
-        start; the prefetcher then starts at the next chunk. Returns the first part."""
-        from bingo_kernel_args import HostBingoKernelWeightPrefetchRangeArgs
-        R = self.ROOT
-        if self.ring_mode != "prefetcher":
-            raise ValueError("params x_pf_split: splits the root's prefetcher, which weight_ring.mode cluster has none of")
-        n = int(self.p.get("x_pf_chunks", self.WO0))
-        if not 0 < n <= self.n_slots:
-            raise ValueError(f"params x_pf_chunks={n}: 1..{self.n_slots} (the ring's slots: the first part never waits)")
-        t, b = self.prefetch[R], self.prefetch[R].kernel_args
-        part = lambda lo, hi: HostBingoKernelWeightPrefetchRangeArgs(
-            b.sched_addr, b.ring_addr, b.flag_addr, b.release_addr, b.seq_addr, b.rec_addr, b.rec_slots, b.n_rings,
-            b.n_slots, b.slot_bytes, b.memchip_id, batch=b.batch, policy=b.policy, engine=b.engine,
-            batch_routed=b.batch_routed, queued=b.queued, queued_inflight_routed=b.queued_inflight_routed, head=b.head,
-            batch_head=b.batch_head, chunk_lo=lo, chunk_hi=hi)
-        t.kernel_args = part(n, 0)
-        t.kernel_name = t.kernel_args.KERNEL_NAME
-        return self.cx_chip(R).host_node(f"weight_prefetch_k{R:02x}_head", t.kernel_name, part(0, n), after=[go[R]])
 
     def stage_x(self, cl, i, put, deps):
         T, k = self.TAG, self.chip(cl)
@@ -1551,7 +1535,7 @@ class ABuild(cm.ChipletBuild):
         return [(u, v) for u, v in self.dfg.edges()
                 if u.assigned_chiplet_id != v.assigned_chiplet_id and u not in pre and u not in post and v not in post]
 
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
+    def finish(self, app_name):
         if getattr(self, "per_kernel", False):
             if self.barrier_fence:                  # the fences before the args phases' loads exist
                 self.fence_barriers()
@@ -1561,7 +1545,7 @@ class ABuild(cm.ChipletBuild):
                 raise ValueError(f"sync barrier: {len(cross)} dependency edges cross chips inside the window, e.g. "
                                  + "; ".join(f"{u.node_name} -> {v.node_name}" for u, v in cross[:4]))
             print(f"[{self.TAG}] sync barrier: {self.n_barrier} barriers a chip, no edge crosses chips inside the window")
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
 
 
 def _app_name(S):

@@ -30,7 +30,7 @@ THE STEPS, a 16-row tile at a time (tile q on chip chips[q mod 16], cluster (q /
                  (simd_mul_tiles), reshaped to the A layout (xDMA), quantised (simd_fp16_to_int8), into the attention's
                  x region in HBM; each of the attention's x multicasts (chunk 0's tiles, chunk 1's, the rest) waits for
                  the tiles it carries. Every tile of the prompt runs at the window's head: the attention's keys need
-                 all of x, and its multicasts run ahead of the root's weight prefetcher on the same engine
+                 all of x, and its multicasts run ahead of the root's weight rings in the same engine's queue
     glue         once the attention is done: y's rows from the two collectors of their chunk (the D layout of each W_O
                  block), D -> row major (xDMA), dequantised (W_O's factors), plus x: h; h into HBM (layer 1: in the MoE
                  output's slice layout, where the residual chip reads it; layer 0: row major, where the final reads it);
@@ -61,10 +61,10 @@ its own); every device task's args come in phases of at most params args_phase_b
 lifetimes are disjoint, so each sits at offset 0 of its cluster's arena.
 
 L3: the attention's activations (its x landing, the y blocks over it, the keys) and the MoE's / FFN's (its X landing,
-its ring of weight slots) are one region, dl_act (LayerStaging): the second block's prefetchers start after its X
+its ring of weight slots) are one region, dl_act (LayerStaging): the second block's pushes start after its X
 multicast, which follows the glue, which follows the attention. With params layer.l3_arena (layer 1) the attention's
 weight ring and L3 scratch join that region, past its activations, and the router's weights land past the MoE's ring,
-over them; each ring schedule stays in its own chip's image. _check_l3_arena proves the order the overlays rely on.
+over them. _check_l3_arena proves the order the overlays rely on.
 
 PARAMETERS (params.hjson): the platform and the graph switches every block shares (num_chiplets, num_clusters,
 static_l1, l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, desc_in_image, fast_host_init, d2d_ddr,
@@ -176,9 +176,7 @@ PASS_TAGS = ("mp", "mq", "mr", "ms")   # the MoE passes' tags (params layer.moe_
 # params layer.l3_arena: what of the attention's joins dl_act, past its activations
 ARENA_ATTN = ("fp_wring_slots", "fp_kvraw", "fp_wkvc3", "fp_kc3", "fp_wkvx3")
 ARENA_ALIGN = 4096
-ATTN_PUSHES = ("__host_bingo_kernel_weight_prefetch", "__host_bingo_kernel_weight_prefetch_range",
-               "__host_bingo_kernel_hbm_bcast", "__host_bingo_kernel_engine_post", "__host_bingo_kernel_wait_flag",
-               "__snax_bingo_kernel_engine_post")
+ATTN_PUSHES = ("__host_bingo_kernel_engine_post", "__host_bingo_kernel_wait_flag", "__snax_bingo_kernel_engine_post")
 
 
 def arg_symbols(args, field=""):
@@ -195,29 +193,9 @@ class LayerStaging(AliasStaging):
     """AliasStaging (names that are one L3 region), and HBM regions the layer's steps write: put_hbm of such a name
     stages zeros of the same size, so a step that never wrote its output fails its check."""
 
-    def __init__(self, st, aliases, zero_hbm=(), chip_arrays=False):
+    def __init__(self, st, aliases, zero_hbm=()):
         super().__init__(st, aliases)
         self.zero_hbm = set(zero_hbm)
-        self.chip_arrays = [] if chip_arrays else None
-
-    def put(self, name, ctype, arr, mem_chip=None):
-        """With chip_arrays a ring schedule goes into its own chip's image only (lines()): only that chip's prefetcher
-        reads it, and in the shared data every image would hold every chip's."""
-        m = re.fullmatch(r"\w+_ring_sched_k([0-9a-f]{2})", name)
-        if self.chip_arrays is None or m is None:
-            return self._st.put(name, ctype, arr, mem_chip=mem_chip)
-        self.chip_arrays.append((int(m.group(1), 16), name, ctype, np.asarray(arr).reshape(-1)))
-        return BingoMemSymbol(name)
-
-    def lines(self):
-        out = super().lines()
-        for chip, name, ctype, arr in self.chip_arrays or ():
-            vals = [f"{int(v)}ULL" for v in arr]
-            out += [f"#if !defined(BINGO_ONLY_CHIP) || BINGO_ONLY_CHIP == 0x{chip:02x}",
-                    f'{ctype} {name}[{arr.size}] __attribute__ ((aligned (64), section (".bingo_chip.data"))) = {{']
-            out += ["    " + ", ".join(vals[i:i + 8]) + "," for i in range(0, len(vals), 8)]
-            out += ["};", "#endif"]
-        return out
 
     def put_hbm(self, name, arr, mem_chip=None):
         if name in self.zero_hbm:
@@ -463,8 +441,7 @@ class LayerBuild(cm.ChipletBuild):
                 raise ValueError("params layer.l3_arena: layer 1")
             aliases.update({n: ("dl_act", 0) for n in ARENA_ATTN})
             aliases.update({f"{t}_rwland": ("dl_act", 0) for t in tags})
-        self.st = LayerStaging(self.st, aliases, zero_hbm=("fp_xhbm",) + tuple(f"{t}_xhbm" for t in tags),
-                               chip_arrays=self.l3_arena)
+        self.st = LayerStaging(self.st, aliases, zero_hbm=("fp_xhbm",) + tuple(f"{t}_xhbm" for t in tags))
         self.xch_zero = False
         self.phase_starts = []
         self.attn_ends, self.block_checks, self.deferred = [], [], []
@@ -529,7 +506,7 @@ class LayerBuild(cm.ChipletBuild):
                 raise ValueError("params ffn.rows: the attention's chunk (a pass a chunk)")
 
     def mem_handles(self):
-        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        """The data, the golden and the memory; no task is made. The attention's
         (AttnPart's mem_handles: FaBuild's, with the stage-full inputs), then the golden on its data: x, y of the chunks
         made (each W_O block folded in its collector's chain order), h, and the rows the second block's data is made
         on. Layer 1: each MoE pass's (MoePart's mem_handles, on its rows of h), the output's golden (each pass's y with
@@ -648,7 +625,7 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- the window ------------------------------------------------------------------------------------------
     def open_window(self, extra):
-        """The start stamp (after every chip's setup), the attention's prefetchers behind it, and the input norm."""
+        """The start stamp (after every chip's setup), the attention's pushes behind it, and the input norm."""
         ends = [t for k in self.chips for t in (extra or {}).get(k, [])]
         start = self.stamp("start", ends)
         for k in self.chips:
@@ -772,7 +749,7 @@ class LayerBuild(cm.ChipletBuild):
     def mlp_window(self, extra, part, n):
         """Where the MoE / FFN `part` (pass n) starts on each chip: behind the chip's glue probe (pass n > 0: behind the
         pass before's end on every chip, the root's last stores), then the block's own setup tasks; its pushes behind
-        it (its prefetchers, or its rings' first posts)."""
+        it (its rings' first posts)."""
         go = {}
         for k in self.chips:
             if n:
@@ -888,10 +865,8 @@ class LayerBuild(cm.ChipletBuild):
     def data_h_extra(self):
         return self.st.lines()
 
-    def check_core_order(self, header, x_prefixes):
-        self.attn.check_core_order(header, x_prefixes)
 
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_", "kx_ld_")):
+    def finish(self, app_name):
         A, M = self.attn, self.mlp
         A.relocate_post_keys(self.end)
         self.prune_post_edges()
@@ -907,7 +882,7 @@ class LayerBuild(cm.ChipletBuild):
             self._place_l3_arena()
             self._check_l3_arena()
         self.st.finish()
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
         # every block's exchange buffer at offset 0 of its cluster's arena (super checked the second block's)
         pl = self.dfg.static_l1_placement
         for part in [A] + self.mlps:

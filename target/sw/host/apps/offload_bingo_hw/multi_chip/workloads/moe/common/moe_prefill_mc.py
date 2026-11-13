@@ -364,13 +364,13 @@ class MBuild(cm.ChipletBuild):
         # (its own copies and weight loads after), and both root clusters copy their blocks from the root's
         # own source; the root's cluster 0 DM core is left the router's copies and the top 6
         self.x_puts_first = bool(p.get("x_puts_first", False))
-        # params prefetch_after_x: every chip's weight prefetcher starts once the root's last X row block
-        # multicast is done (landed on every chip), so the multicast has the half-duplex D2D links to itself
+        # params prefetch_after_x: every chip's weight rings start (their first posts) once the root's last X row
+        # block multicast is done (landed on every chip), so the multicast has the half-duplex D2D links to itself
         # instead of crossing the memory chips' pushes
         self.prefetch_after_x = bool(p.get("prefetch_after_x", False))
-        # params prefetch_hold_rows (with prefetch_after_x): only the chips in these grid rows hold their prefetchers
-        # for X. The broadcast from the root runs along row 0, then down every column, so only row 0's pushes share
-        # links with it; the other rows' prefetchers start with the window
+        # params prefetch_hold_rows (with prefetch_after_x): only the chips in these grid rows hold their rings for X.
+        # The broadcast from the root runs along row 0, then down every column, so only row 0's pushes share links
+        # with it; the other rows' rings start with the window
         hr = p.get("prefetch_hold_rows")
         self.prefetch_hold_rows = None if hr is None else {int(r) for r in hr}
         # params chain_first_alt: the cluster whose ChainGather of a slice runs first alternates from slice to slice
@@ -473,8 +473,6 @@ class MBuild(cm.ChipletBuild):
             raise ValueError("params stop route: needs x_hbm and route_tile_buf (the route alone, no shared MLP)")
         if self.x_local + self.x_put_c1 + self.x_puts_first > 1:
             raise ValueError("params x_local, x_put_c1, x_puts_first: one of them")
-        # params weight_ring.trailer: every chunk ends in a 64-B record that says it has landed
-        # (chunk_trailer), so the prefetcher pushes no flag after it -- one launch a run, not two
         if self.x_cast == "unicast" and not self.x_hbm:
             raise ValueError("params x_cast unicast: X from HBM (x_hbm)")
         if self.sync == "barrier" and (self.halves or self.chain_group != 1 or self.NOUT != 2 or self.sd_early is not None
@@ -484,17 +482,16 @@ class MBuild(cm.ChipletBuild):
             raise ValueError("params sync barrier: X from HBM, route dist with route_tile_buf, dispatch_blocks and "
                              "route_early, prefetch_after_x, two output slots, stop full; no chain_halves, chain_group, "
                              "shared_down_early or residual")
-        self.plain_trailer = bool(p.get("weight_ring", {}).get("trailer", False))
 
     def mem_handles(self):
-        """The data, the placement, the golden and the memory; the only tasks made are the prefetchers. The MoE's data
+        """The data, the placement, the golden and the memory; no task is made. The MoE's data
         (_data: the experts, the shared MLP, the router, X and the route) and the sizes it gives: the shared MLP's
         column blocks a chip (shk, from params root_shared_blocks) and each chip's first (sho), the slices a cluster,
         the row pitches; the placement of the experts on the chips (_place, params slot_order) and their split over
         each chip's clusters (_split_all); the golden (_golden); then _stage(): X, the router's weights and every
         cluster's weight chunks and factors into HBM, every L3 landing area, table and flag; make_streams(): each
-        cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3 and its host's prefetcher task
-        (weight_prefetch_k<chip>); _buffers(): every cluster's L1 buffers."""
+        cluster's L1 weight slabs; make_rings(): each chip's weight rings in its L3; _buffers(): every cluster's L1
+        buffers."""
         d = self.d = self._data(self.args, self.p, self.hw)
         self.lay = d.layout
         self.H, self.IE, self.ISH = d.H, d.I_e, d.I_sh
@@ -799,8 +796,6 @@ class MBuild(cm.ChipletBuild):
         off = -(-wb.size // 64) * 64
         st = self._scale_tile(f).view(np.int8)
         parts = [wb, np.zeros(off - wb.size, dtype=np.int8), st]
-        if self.plain_trailer:
-            parts.append(self.chunk_trailer())
         return np.concatenate(parts), off
 
     def _stage(self):
@@ -1069,14 +1064,14 @@ class MBuild(cm.ChipletBuild):
         ld, _ = ls.rings.load_chunk(
             lambda n, core, kern, args, after: self.node(k, c, core, n, kern, args, after), c,
             f"Ld_w{j}{tag}", src=self.img[cl].address + off, nbytes=nb, slab=slab, war=war,
-            deps=deps, dm=self.roles["dm"], trailer=True)
+            deps=deps, dm=self.roles["dm"])
         if not self.scale_out:
             return ld, si, slab, Scale(slab.view(soff))
         i = self.sc_next[cl]
         self.sc_next[cl] = (i + 1) % self.n_sc
         buf, rd = self.B[cl]["sc"][i], self.sc_reader[cl][i]
         cp = self.node(k, c, self.roles["dm"], f"sc_w{j}{tag}", "__snax_bingo_kernel_idma_1d_copy",
-                       SnaxBingoKernelIdma1dCopyArgs(slab.view(soff), buf, nb - soff - (64 if self.plain_trailer else 0)),
+                       SnaxBingoKernelIdma1dCopyArgs(slab.view(soff), buf, nb - soff),
                        [ld] + ([rd] if rd is not None else []))
         return ld, si, slab, Scale(buf, cp, i)
 
@@ -1183,7 +1178,7 @@ class MBuild(cm.ChipletBuild):
                                      self.node(k, c, dm, "rws_load", "__snax_bingo_kernel_idma_1d_copy",
                                                SnaxBingoKernelIdma1dCopyArgs(self.h_rws, bg["rws"], 4 * D_BLOCK), [w]))
             if self.sync == "barrier":
-                # params sync barrier: no prefetcher waits for the root's multicast across chips; each chip's waits for
+                # params sync barrier: no ring waits for the root's multicast across chips; each chip's waits for
                 # X's last tile in its own L3 (a flag), on its cluster 0 xDMA core, which is idle until its top 6
                 self.x_landed = {}
                 for k in self.chips:
@@ -1525,14 +1520,10 @@ class MBuild(cm.ChipletBuild):
                     if b == self.XB - 1:
                         self._release(cl, si, sg_gms[(cl, j)], sw, sc)
 
-        # weight_ring.mode cluster: no prefetcher; what a prefetcher would follow, each chip's rings' first posts do
-        # (start_after), and hbm_cast already queues X ahead of the root's rings
-        cluster = self.ring_mode == "cluster"
+        # hbm_cast queues X ahead of the root's rings; with prefetch_after_x every chip's rings' first posts follow X's
+        # landing (start_after)
         if self.x_hbm:
-            # the root's prefetcher drives the multicast's engine: it pushes once X has landed
             x_last = {0: self.x_hbm_cast.end}
-            if not cluster:
-                self.edge(self.x_hbm_cast.end, self.prefetch[R])
         if self.prefetch_after_x:
             if not puts:
                 raise ValueError("params prefetch_after_x: needs the X multicast (bcast_l1)")
@@ -1540,10 +1531,7 @@ class MBuild(cm.ChipletBuild):
                 if self.prefetch_hold_rows is not None and (k & 15) not in self.prefetch_hold_rows:
                     continue
                 for t in ([self.x_landed[k]] if self.sync == "barrier" else list(x_last.values())):
-                    if cluster:
-                        self.rings[k].start_after(t)
-                    else:
-                        self.edge(t, self.prefetch[k])
+                    self.rings[k].start_after(t)
 
         # ---- the route: the top 6, the table to every chip, each cluster's row lists ---------------
         # after every core's X-stage tasks in each core's order, as topk_plan assumes
@@ -2144,10 +2132,9 @@ class MBuild(cm.ChipletBuild):
         self._checks()
 
     def hbm_bcasts(self, go):
-        """x_hbm: the root's host queues its memory chip's push engine (the root's prefetch engine, which pushes the
-        root's weights only after these): the router's weights behind one flag, then X a tile at a time, each tile
-        and its flag multicast into every chip's L3 (ChipletBuild.hbm_cast: one host task each, or with hbm_cast.mode
-        posts their posts and waits). Returns the two casts (HbmCast); X's `end` is the task after which its last
+        """x_hbm: the root's host queues its memory chip's push engine (the engine of the root's rings, whose posts
+        queue after these): the router's weights behind one flag, then X a tile at a time, each tile and its flag
+        multicast into every chip's L3 (ChipletBuild.hbm_cast: their posts and waits). Returns the two casts (HbmCast); X's `end` is the task after which its last
         flag has landed on the root."""
         R, T = self.ROOT, self.TAG
         m = self.mem[R]
@@ -2261,7 +2248,7 @@ class MBuild(cm.ChipletBuild):
         return [(u, v) for u, v in self.dfg.edges()
                 if u.assigned_chiplet_id != v.assigned_chiplet_id and u not in pre and u not in post and v not in post]
 
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
+    def finish(self, app_name):
         if self.sync == "barrier":
             if self.barrier_fence:                          # the fences before the args phases' loads exist
                 self.fence_barriers()
@@ -2274,7 +2261,7 @@ class MBuild(cm.ChipletBuild):
                   f"chips inside the window")
         if self.args_phases:
             self._assign_phases()
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
 
 
 def _app_name(S):

@@ -46,9 +46,10 @@ and cluster:
                ChainGather in the fold order; root: the root pulls and adds), stored in the root's L3
 
 THE RING. A chip's two clusters read the SAME stream of chunks: one ring a chip, pushed once by the
-memory chip's engine under the chip's prefetcher. Per token chunk it is W_q (3), W_UK, then the cache
-tile by tile K0 V0 K1 V1 ..., then W_UV and W_O (2). Cluster 1 loads each chunk without releasing its
-slot; cluster 0's load releases it and follows cluster 1's. The ring's chunks are not all one size; a
+memory chip's engine, each run posted by the cluster that first asks for its first chunk. Per token chunk it
+is W_q (3), W_UK, then the cache tile by tile K0 V0 K1 V1 ..., then W_UV and W_O (2). Cluster 1 loads each
+chunk first; cluster 0's load follows it and is the chunk's last reader, which the post that overwrites the
+slot follows. The ring's chunks are not all one size; a
 cluster takes them into `w_buffers` L1 slabs in ring order, in turn, or (kv_slabs split, three slabs) the
 K tiles always into one slab and the V tiles into the other two (fa_sweep's tile source).
 
@@ -66,7 +67,7 @@ bcast, reduce, sync, barrier_mode, barrier_fence, async_exec, static_l1, l1_capa
 n_calib (calibration tokens), kv_cache and weights (paths under the repository), root_slice (the
 root's pull slice), compact_id_maps, gid_lists, relay_per_gather (each dependency-tag relay of
 an xDMA task serves that one task; default true). The orders and buffers (each explained where it is read):
-prefetch_after_x, l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
+l3_overlay, kv_slabs, y_halves, y_block_chains, chain_concurrent,
 wo_split_rows, o_land; fresh (a fresh prompt: keys = tokens, a multiple of 256, kv_slabs split), kv_clusters
 (fresh: a chip's n-th tile makes its keys on cluster n mod 2 instead of cluster 0), kv_cols (fresh: W_KVA by columns
 over the chips, the rows traded, stage_kv_cols).
@@ -419,8 +420,10 @@ class FaBuild(cm.ChipletBuild):
         if self.wo_row_pipe and not (self.post_tiles and self.wo_split_rows):
             raise ValueError("params wo_row_pipe: needs post_tiles and wo_split_rows")
         self._o8_tiles = {}
-        # prefetch_after_x: the memory chips' pushes start after the multicast of x (fa_stages_mc)
-        self.prefetch_after_x = bool(p.get("prefetch_after_x", False))
+        for key in ("x_bcast_after_prefetch", "prefetch_after_x"):
+            if key in p:
+                raise ValueError(f"params {key}: not taken (the root's ring posts queue behind x's multicast; x_pf_split "
+                                 f"puts its W_KVA runs ahead of it)")
         # y_block_chains: a ChainGather per W_O block (the whole partial y in the exchange buffer)
         self.y_block_chains = bool(p.get("y_block_chains", False))
         if self.y_block_chains and (self.y_halves or self.reduce_impl != "chain" or self.sync == "barrier"):
@@ -451,13 +454,11 @@ class FaBuild(cm.ChipletBuild):
         self._last_chain = None
         self._chains = []                           # every reduce chain, in creation order
         # last_pair_chains (with serial chains): the last chunk's two clusters' chains of a W_O block run at the same
-        # time, once every chip's prefetcher has pushed its last chunk (no memory-chip push then transits a hop chip,
-        # the third party of the concurrent-chain deadlock); the blocks stay in series. With weight_ring.mode cluster
-        # these chains (and chain_gate_prefetch's) wait instead for every chip's ring to land its last chunk
-        # (after_pushes_landed)
+        # time, once every chip's ring has landed its last chunk (after_pushes_landed: no memory-chip push then transits
+        # a hop chip, the third party of the concurrent-chain deadlock); the blocks stay in series
         self.last_pair_chains = bool(p.get("last_pair_chains", False))
-        # chain_gate_prefetch: every reduce chain waits for every chip's prefetcher (all its pushes done), so with
-        # chain_concurrent no memory-chip push can transit a hop chip while two chains run
+        # chain_gate_prefetch: every reduce chain waits for every chip's ring to land its last chunk (all its pushes
+        # done), so with chain_concurrent no memory-chip push can transit a hop chip while two chains run
         self.chain_gate_prefetch = bool(p.get("chain_gate_prefetch", False))
         # y_dst_shared (y_block_chains, y_store_halves): a chunk's two W_O blocks' chains (but the last chunk's) land in
         # one half-size buffer on each root cluster, block 1's chain behind block 0's store, so a root cluster's sweep keeps
@@ -661,56 +662,37 @@ class FaBuild(cm.ChipletBuild):
         self.C_BYTES = self.C_MASK + (len(d.mask_patterns) * self.MASK_B if self.fresh else 0)
 
     def _make_rings(self):
-        """One ring a chip, shared by its two clusters: the per-chip schedule is the same for both. weight_ring.mode
-        cluster: no prefetcher; the cluster that first asks for a chunk posts its run (WeightRings.post_chunk), and
-        weight_ring.queue is the entries of the push engine's queue the ring may hold (ChipletBuild.make_rings)."""
+        """One ring a chip, shared by its two clusters: the per-chip schedule is the same for both. The cluster that
+        first asks for a chunk posts its run (WeightRings.post_chunk); params weight_ring (cm.RING_KEYS) as
+        ChipletBuild.make_rings reads them."""
         p, st, T = self.p, self.st, self.TAG
-        wr = p.get("weight_ring", {})
-        self.ring_mode = wr.get("mode", "prefetcher")
-        if self.ring_mode not in ("prefetcher", "cluster"):
-            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
-        self.ring_queue = int(wr.get("queue", 32))
+        wr = cm.ring_params(p)
+        self.ring_queue = int(wr.get("queue", 16))
         self.n_slots = int(wr.get("slots", 16))
         self.ring_batch = int(wr.get("batch", 4))
-        self.ring_trailer = False
         self.ring_head = int(wr.get("head", 0))
         self.ring_batch_head = int(wr.get("batch_head", 0))
-        self.ring_queued = int(bool(wr.get("queued", False)))
         seq = np.zeros((1024, 8), dtype=np.uint64)
         seq[:, 0] = np.arange(1024, dtype=np.uint64)
         mems = sorted(set(self.mem.values()))
         self.h_seq = {m: st.put_hbm(f"{T}_ring_seq_m{m:02x}", seq.view(np.int8).reshape(-1),
                                     mem_chip=(m >> 4, m & 15)) for m in mems}
         self.h_flags = st.put_zeros(f"{T}_ring_flags", "uint8_t", self.n_slots * 64)
-        self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", self.n_slots * 64)
-        self.h_rec = st.put_zeros(f"{T}_rec_l3", "uint8_t", 128)
         self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", self.n_slots * self.slot_bytes, preload=True)
         self.rings, self.ring_take, self.ring_pos = {}, {}, {}
-        self.prefetch = {} if self.ring_mode == "prefetcher" else cm._NoPrefetcher(T)
-        from bingo_kernel_args import HostBingoKernelWeightPrefetchArgs
         for k in self.chips:
             self.rings[k] = WeightRings(
-                slots=self.h_wslots, flags=self.h_flags, releases=self.h_rel, n_rings=1, n_slots=self.n_slots,
-                slot_bytes=self.slot_bytes, batch=self.ring_batch, head=self.ring_head,
-                batch_head=self.ring_batch_head)
+                slots=self.h_wslots, flags=self.h_flags, n_rings=1, n_slots=self.n_slots, slot_bytes=self.slot_bytes,
+                batch=self.ring_batch, head=self.ring_head, batch_head=self.ring_batch_head)
             self.ring_take[k] = []
             self.ring_pos[k] = {}
-            if self.ring_mode == "cluster":
-                self.rings[k].push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
-                                        edge=self.edge, depth=self.ring_queue)
-                self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
-                                  self.rings[k].queue_span)
-                continue
-            self.prefetch[k] = self.cx_chip(k).host_node(
-                f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
-                HostBingoKernelWeightPrefetchArgs(
-                    self.ring_schedule(k, self.rings[k]), self.rings[k].slots, self.h_flags, self.h_rel,
-                    self.h_seq[self.mem[k]], self.h_rec, 1, 1, self.n_slots, self.slot_bytes, self.mem[k],
-                    batch=self.ring_batch, policy=int(wr.get("policy", 1)), engine=self.engine[k],
-                    queued=self.ring_queued, head=self.ring_head, batch_head=self.ring_batch_head))
+            self.rings[k].push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
+                                    edge=self.edge, depth=self.ring_queue)
+            self.queue_poster((self.mem[k], self.engine[k]), f"{T} ring, chip {k:#04x}", self.ring_queue,
+                              self.rings[k].queue_span)
         self.ld_node = {}
-        # (chip, ring chunk) whose slot cluster 1's read releases, after cluster 0's; every other chunk's slot is
-        # released by cluster 0's read
+        # (chip, ring chunk) whose last reader is cluster 1's read, after cluster 0's; every other chunk's last reader
+        # is cluster 0's read
         self.ring_rel1 = set()
 
     def _src(self, k, n):
@@ -852,8 +834,8 @@ class FaBuild(cm.ChipletBuild):
 
     # ---- the ring's loads -----------------------------------------------------------------------
     def load(self, cl, n, name, deps=(), slab=None, dst=None):
-        """Ring chunk n of chip(cl) into cluster cl's next slab: cluster 1 reads it, cluster 0 reads it and
-        releases the slot, after cluster 1's read. Returns (load task, slab index, slab). dst: into that L1
+        """Ring chunk n of chip(cl) into cluster cl's next slab: cluster 1 reads it, cluster 0 reads it after
+        cluster 1's read, the chunk's last reader. Returns (load task, slab index, slab). dst: into that L1
         buffer instead, outside the cluster's load stream (slab index None, no WAR edge)."""
         k, c, dm = self.chip(cl), self.local(cl), self.roles["dm"]
         takes, pos = self.ring_take[k], self.ring_pos[k]
@@ -864,32 +846,28 @@ class FaBuild(cm.ChipletBuild):
                 raise ValueError(f"ring chunk {n} of chip {k:#04x} asked for before {len(takes)}")
             src, nb = self._src(k, n)
             pos[n] = len(takes)
-            if self.ring_mode == "cluster":
-                # the run's post on this cluster's DM core; release word 0: the post that reuses the slot follows its
-                # last reader (read_chunk below)
-                tup, post = self.rings[k].post_chunk(
-                    lambda nm, core, kern, args, after: self.node(k, c, core, nm, kern, args, after), 0, name,
-                    src=src, nbytes=nb, dm=dm)
-                takes.append(tup + (nb, self.rings[k].last_take, post))
-            else:
-                takes.append(self.rings[k].take_ex(0, src=src, nbytes=nb) + (nb, self.rings[k].last_take, None))
-        sl, fl, rl, seq, _, _, nb, ex, post = takes[pos[n]]
+            # the run's post on this cluster's DM core; the post that reuses the slot follows the chunk's last reader
+            # (read_chunk below)
+            tup, post = self.rings[k].post_chunk(
+                lambda nm, core, kern, args, after: self.node(k, c, core, nm, kern, args, after), 0, name,
+                src=src, nbytes=nb, dm=dm)
+            takes.append(tup + (self.rings[k].last_take, post))
+        sl, fl, seq, nb, ex, post = takes[pos[n]]
         ls = self.ls[cl]
         if dst is not None:
             si, slab, war = None, dst, []
         else:
             si, slab, war = ls.take(nb) if slab is None else ls.take_at(slab, nb)
         prev = [self.last_ld[cl]] if cl in self.last_ld else []
-        # the slot is released by one cluster's read (cluster 0's, or cluster 1's for a chunk in ring_rel1), which
+        # the chunk's last reader is one cluster's read (cluster 0's, or cluster 1's for a chunk in ring_rel1), which
         # follows every other cluster's read of it
         rel = 1 if (k, n) in self.ring_rel1 else 0
         readers = [self.ld_node[(k, c2, n)] for c2 in range(self.NC) if c2 != rel and (k, c2, n) in self.ld_node] \
             if c == rel else []
         ld = self.node(k, c, dm, f"{name}", "__snax_bingo_kernel_idma_ring_load",
-                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, rl if c == rel else 0),
-                       list(dict.fromkeys(war + prev + list(deps) + readers + ([post] if post is not None else []))))
-        if post is not None:
-            self.rings[k].read_chunk(0, seq - 1, ld, last=c == rel)
+                       SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nb, 0),
+                       list(dict.fromkeys(war + prev + list(deps) + readers + [post])))
+        self.rings[k].read_chunk(0, seq - 1, ld, last=c == rel)
         if c != rel and (k, rel, n) in self.ld_node:
             self.dfg.bingo_add_edge(ld, self.ld_node[(k, rel, n)])
         self.last_ld[cl] = ld
@@ -1586,17 +1564,16 @@ class FaBuild(cm.ChipletBuild):
                     cm.remote, R, c, others, src=self.xch_addr(c, src_off), dst=dst, size=size,
                     junction=self.jct["Elementwise"], jct_csr0=EW_F16_ADD, holds=[dstb] if dstb is not None else [])
                 serial = [] if self.chain_concurrent or self._last_chain is None else [self._last_chain]
-                # the chains that wait for every chip's pushes: after its prefetcher, or with weight_ring.mode cluster
-                # after the landing of its rings' last chunk (after_pushes_landed)
-                cluster, landed = self.ring_mode == "cluster", False
+                # the chains that wait for every chip's pushes: after the landing of its rings' last chunk
+                # (after_pushes_landed)
+                landed = False
                 if self.last_pair_chains and i == self.NCH - 1 and half is not None and len(cs) == self.NC:
                     if self._pair_prev is None:
                         self._pair_prev = [self._last_chain] if self._last_chain is not None else []
-                    serial = list(self._pair_prev) + ([] if cluster else [self.prefetch[k] for k in self.chips])
-                    landed = cluster
+                    serial = list(self._pair_prev)
+                    landed = True
                 if self.chain_gate_prefetch:
-                    serial = list(serial) + ([] if cluster else [self.prefetch[k] for k in self.chips])
-                    landed = landed or cluster
+                    landed = True
                 out[c] = self.node(R, c, xdma, f"y_chain_c{c}_i{i}{tag}", "__snax_bingo_kernel_xdma_chain_gather", ga,
                                    before[c] + list(war.get(c, [])) + serial)
                 if landed:
@@ -1966,13 +1943,6 @@ class FaBuild(cm.ChipletBuild):
                                                               []), ot, nb))
             checks = stage + checks
         self.run_checks(checks)
-
-    # ---- emission -----------------------------------------------------------------------------------
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
-        if self.fresh and not self.x_device:
-            # alone, a fresh prompt's W_KVA loads run behind the cluster's tile loads (fresh_tiles): its first part of x
-            x_prefixes = tuple(x_prefixes) + ("kx_ld_",)
-        super().finish(app_name, x_prefixes)
 
 
 def _app_name(S):

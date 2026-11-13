@@ -38,8 +38,7 @@ attention gathers y in the root's L3, the FFN folds Y into the root):
 THE FFN's X PATH. The glue makes X on the root's cluster 0, so its source is that L1; the root's DM core multicasts it
 (idma_put_flagged, bcast with also_here) into every chip's L3 at the FFN block's landing area and flag, the receiving end
 the FFN block's own (a wait on the flag, a 2-D copy into row 0). Not through the HBM: that is a round trip, and the
-memory chip's push engine is driven by the root's host, which runs the FFN's weight prefetcher by then (with
-ffn_prefetch early it is inside it for the whole FFN: an X push queued behind it never runs). The root's also_here copy is
+memory chip's push engine queue holds the FFN's weight-ring runs by then. The root's also_here copy is
 L1 -> own L3, local, so no remote read meets a push into that L3 (the HBM -> own-L3 trap). Deadlock-free by order: the
 layer's collectives are three multicasts from one source (the root's cluster-0 DM core: x, the attention's o rows, X) and
 the FFN's ChainGathers, which run one at a time; each is a dependency descendant of the one before (x -> the sweeps -> o;
@@ -47,16 +46,14 @@ o -> W_O -> y -> the glue -> X; X -> every chip's X wait -> the down GEMMs -> th
 two of them are ever in flight together. _check_collectives proves it on the graph (every pair ordered by a path).
 
 THE WEIGHT STREAM. The decode is bound by the memory-chip links, and most of their bytes are the FFN's weights. Each
-chip's host runs its FFN prefetcher after its attention prefetcher; params layer.ffn_prefetch:
-    after   (default) and once that chip's attention part has ended (its appends, behind its last weight load and y put);
-            the two blocks' weight rings are one L3 region, since no attention chunk is read after then
-    early   right behind its attention prefetcher, so the FFN's first ring-full of chunks (params ffn.weight_ring.slots a
-            cluster) streams while the attention still computes (the sweep, the o rows, W_O, the glue); the rings are two
-            L3 regions
+cluster posts its rings' runs into its memory chip's push engine queue: the attention's first posts follow the start, the
+FFN's first posts follow every attention ring's last post of the chip, each a graph edge; params layer.ffn_prefetch:
+    after   (default) also the chip's attention end (its appends, behind its last weight load and y put); the two
+            blocks' weight rings are one L3 region, since no attention chunk is read after then
+    early   nothing more, so the FFN's first ring-full of chunks (params ffn.weight_ring.slots a cluster) streams while the
+            attention still computes (the sweep, the o rows, W_O, the glue); the rings are two L3 regions
 The window report prints each block's bytes over the memory links, the busiest link, and the FFN bytes the early rings
-take ahead. With weight_ring.mode cluster (both blocks; no prefetcher task) each cluster posts its rings' runs into its
-memory chip's push engine queue: the attention's first posts follow the start, the FFN's first posts follow every
-attention ring's last post of the chip (and with after, the chip's attention end), each a graph edge.
+take ahead.
 
 ORDER AND PLACEMENT. Every device core runs its tasks in creation order (one program order over the layer), except the
 attention's k / v projection (its kv_at) and the FFN's set-up (its scales into L1, its X tiles zeroed), which runs before
@@ -85,8 +82,8 @@ second ChainGather, o multicast, W_O by output columns; each chip's W_O pushes w
 The proof (_check_collectives, attn ks) adds to the pairwise order of every multicast and ChainGather (the x, q halves,
 m*, o and X multicasts; the statistics', the reduce's and the FFN's ChainGathers): every ChainGather runs after every
 push of a memory chip's push part has landed (the part's ring loads or cache fetches among its ancestors) or before the
-part starts (the part's host task among its descendants), for every part of both blocks (the attention's W_q, cache,
-k / v and W_O parts, the FFN's prefetcher); and every device write into HBM (the appends, the output row, stop attn's h
+part starts (the part's first post among its descendants), for every part of both blocks (the cache and every run of
+every ring); and every device write into HBM (the appends, the output row, stop attn's h
 and X) follows every multicast, every ChainGather and every chip's last ring load and cache fetch. With wo_push
 after_reduce and ffn_prefetch after, the FFN's own gathers need ffn.chains_after_stream (every gather behind every
 cluster's last down GEMV).
@@ -287,15 +284,9 @@ class LayerBuild(cm.ChipletBuild):
             self.ffn = FfnPart(self, args, pf, plat, hw)
         # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: ffn.gu_gemv)
         self.x_arow = bool(self.ffn.gu_gemv) if self.ffn is not None else bool(lp.get("x_arow", False))
-        # weight_ring.mode: the blocks' rings both filled by a prefetcher or both posted by their clusters
-        modes = {str(dict(common, **p[b]).get("weight_ring", {}).get("mode", "prefetcher"))
-                 for b in (("attn", "ffn") if self.ffn is not None else ("attn",))}
-        if len(modes) != 1:
-            raise ValueError(f"params attn / ffn weight_ring.mode: one mode for both blocks, not {sorted(modes)}")
-        self.cluster_rings = modes == {"cluster"}
 
     def mem_handles(self):
-        """The data, the golden and the memory; the only tasks made are the blocks' prefetchers. The attention's
+        """The data, the golden and the memory; no task is made here. The attention's
         (AttnPart's or AttnPartKs's mem_handles), then the golden on its data: x (its input norm checked against the
         block's row), x8 in a_row, h, and the post-attention gain. Stop full: the FFN's (FfnPart's mem_handles, on h),
         its gain checked against the layer's, s_h, X and the output's golden, its exchange buffers held to the end;
@@ -401,7 +392,7 @@ class LayerBuild(cm.ChipletBuild):
     # ---- the window and the input norm --------------------------------------------------------------------------------
     def open_window(self, extra):
         """Before the window: the layer's constants into the root's L1, its FP16 a_row zeroed. The start stamp after
-        every chip's set-up, the attention's prefetchers behind it, the input norm. Returns {chip: the start}."""
+        every chip's set-up, the attention's first ring posts behind it, the input norm. Returns {chip: the start}."""
         b = self.b
         pre = [self._copy("c_ld", self.h_c, b["c"], self.CB, []),
                self._r("xdma", "ar_zero", "__snax_bingo_kernel_xdma_memset",
@@ -467,24 +458,21 @@ class LayerBuild(cm.ChipletBuild):
         return self._bcast("gl_put", b["x8"], F._xland(0), F.XR, BingoMemSymbol(f"{F.TAG}_xtflag"), [qz])
 
     def ffn_window(self, extra):
-        """The FFN's set-up (its scales into L1, its X tiles zeroed) before the window, first on its cores; its
-        prefetchers per params layer.ffn_prefetch. Returns {chip: the task its X waits follow} (the chip's attention
-        end). weight_ring.mode cluster: each FFN ring's first post after every attention ring's last post of the chip
-        (the engine queue takes the attention's runs first, as the host ran its prefetchers), and with after, also
-        after the chip's attention end."""
+        """The FFN's set-up (its scales into L1, its X tiles zeroed) before the window, first on its cores; each FFN
+        ring's first post after every attention ring's last post of the chip (the engine queue takes the attention's
+        runs first), and with params layer.ffn_prefetch after, also after the chip's attention end. Returns {chip: the
+        task its X waits follow} (the chip's attention end)."""
         A, F = self.attn, self.ffn
         for t in self.ffn_pre:
             self.edge(t, self.start)            # before the window
         for k in self.chips:
             for t in (extra or {}).get(k, []):
                 self.edge(t, self.start)
-            # the chip's host runs its FFN prefetcher after its attention prefetcher (cluster: the FFN's first posts
-            # after the attention's last); after: also after the chip's attention end, so no FFN chunk lands in a slot
-            # of the shared region an attention load still reads
+            # the FFN's first posts after the attention's last; after: also after the chip's attention end, so no FFN
+            # chunk lands in a slot of the shared region an attention load still reads
             self.pushes_after(F, k, self.push_heads(A, k) + ([self.attn_fin[k]] if self.ffn_prefetch == "after"
                                                              else []))
-        who = "first posts" if self.cluster_rings else "prefetchers"
-        print(f"[{self.TAG}] FFN: {len(self.ffn_pre)} set-up tasks before the window; its {who} "
+        print(f"[{self.TAG}] FFN: {len(self.ffn_pre)} set-up tasks before the window; its first posts "
               + ("behind the attention's on each chip" if self.ffn_prefetch == "early" else
                  "behind each chip's attention end"))
         return dict(self.attn_fin)
@@ -603,52 +591,30 @@ class LayerBuild(cm.ChipletBuild):
 
     def _push_parts(self):
         """attn ks: {(chip, part): (the task that starts its pushes, the tasks after which every push of it has
-        landed)}: the attention's W_q, cache, k / v and W_O parts and the FFN's prefetcher; weight_ring.mode cluster:
-        the cache and each run of every ring (its post, its chunks' loads). A chunk has landed once its ring load (which
-        waits for the chunk's landed flag) has run, the cache once both of each cluster's flagged fetches have."""
+        landed)}: the cache and each run of every ring (its post, its chunks' loads). A chunk has landed once its ring
+        load (which waits for the chunk's landed flag) has run, the cache once both of each cluster's flagged fetches
+        have."""
         A, F = self.attn, self.ffn
-        if self.cluster_rings:
-            parts = {}
-            for k in self.chips:
-                parts[k, "cache"] = (A.ucast[k].first,
-                                     [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
-                for blk, S in (("attn", A), ("ffn", F)):
-                    if S is None:
-                        continue
-                    n = 0
-                    for r in range(S.rings[k].n_rings):
-                        for i, (post, loads) in enumerate(S.rings[k].runs_of(r)):
-                            parts[k, f"{blk} ring {r} run {i}"] = (post, loads)
-                            n += len(loads)
-                    want = sum(len(S.chunk_off[cl]) for cl in self.clusters(k))
-                    if n != want:
-                        raise ValueError(f"chip {k:#04x}: {n} {blk} ring loads of its {want} chunks")
-            return parts
-        ring = {}
-        for blk, S in (("attn", A), ("ffn", F)):
-            for (cl, j), (_, ld) in (S.slot.items() if S is not None else ()):
-                ring.setdefault((blk, self.chip(cl)), []).append((j, ld))
         parts = {}
         for k in self.chips:
-            head, mid, wo = A.pf_parts[k]
-            at = ring[("attn", k)]
-            parts[k, "W_q"] = (head, [ld for j, ld in at if j < A.NQC])
             parts[k, "cache"] = (A.ucast[k].first,
                                  [t for cl in self.clusters(k) for t in (A.kc_ready[cl], A.vc_ready[cl])])
-            parts[k, "k/v"] = (mid, [ld for j, ld in at if A.NQC <= j < A.WO0])
-            parts[k, "W_O"] = (wo, [ld for j, ld in at if j >= A.WO0])
-            want = {"attn": sum(len(A.chunk_off[cl]) for cl in self.clusters(k))}
-            if F is not None:
-                parts[k, "FFN"] = (F.prefetch[k], [ld for _, ld in ring[("ffn", k)]])
-                want["ffn"] = sum(len(F.chunk_off[cl]) for cl in self.clusters(k))
-            for blk, n in want.items():
-                if len(ring[(blk, k)]) != n:
-                    raise ValueError(f"chip {k:#04x}: {len(ring[(blk, k)])} {blk} ring loads of its {n} chunks")
+            for blk, S in (("attn", A), ("ffn", F)):
+                if S is None:
+                    continue
+                n = 0
+                for r in range(S.rings[k].n_rings):
+                    for i, (post, loads) in enumerate(S.rings[k].runs_of(r)):
+                        parts[k, f"{blk} ring {r} run {i}"] = (post, loads)
+                        n += len(loads)
+                want = sum(len(S.chunk_off[cl]) for cl in self.clusters(k))
+                if n != want:
+                    raise ValueError(f"chip {k:#04x}: {n} {blk} ring loads of its {want} chunks")
         return parts
 
     def _check_pushes(self, G, mc, ch, desc):
         """attn ks: every ChainGather runs after every push of each push part has landed or before the part starts
-        (its host task a descendant), for every part of both blocks on every chip; every device write into HBM (dst a
+        (its first post a descendant), for every part of both blocks on every chip; every device write into HBM (dst a
         global address) follows every multicast, every ChainGather and every chip's last push of every part. Returns
         the report's tail."""
         parts = self._push_parts()
@@ -746,7 +712,7 @@ class LayerBuild(cm.ChipletBuild):
     def data_h_extra(self):
         return self.st.lines() if self.ring_alias else []
 
-    def finish(self, app_name, x_prefixes=("x_wait_",)):
+    def finish(self, app_name):
         if self.ffn is not None:
             bad = self.ffn.check_hazards()
             if bad:
@@ -760,7 +726,7 @@ class LayerBuild(cm.ChipletBuild):
         self._args_report()
         if self.ring_alias:
             self.st.finish()
-        super().finish(app_name, x_prefixes)
+        super().finish(app_name)
 
 
 def _app_name(S):

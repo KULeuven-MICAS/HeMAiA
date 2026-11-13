@@ -281,11 +281,6 @@ class LStages(ABuild):
         self.checks_kind = "y"
         self._checks()
 
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_", "x_copy_")):
-        # a stage without x: its preload is the first thing every DM core runs, ahead of any weight load
-        prefixes = {"5": ("kt_pre",), "678": ("ot_pre_",)}.get(self.stage, x_prefixes)
-        super().finish(app_name, prefixes)
-
 
 def run():
     run_driver("llama3 attention stages workload generator", LStages, la._app_name)
