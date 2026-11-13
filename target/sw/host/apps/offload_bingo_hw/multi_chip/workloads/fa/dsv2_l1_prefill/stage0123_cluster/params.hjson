@@ -1,0 +1,69 @@
+// stage0123_cluster: stage0123 with every weight ring posted by the cluster that first asks for a chunk
+// (weight_ring.mode cluster, no prefetcher) and the x multicast as host graph tasks (hbm_cast.mode posts), the root
+// memory chip's engine queue split 16 + 16 between them.
+// stage0123: stages 0 to 3 chained with their optimised mappings (common/fa_stages_mc.py stage "0123"): X multicast
+// from HBM (stage 0), the keys by columns (stage 1), the owner's two clusters finishing each tile (stage 2), C00
+// gathering and multicasting a chunk at a time (stage 3). Its outputs, x and the keys in every chip's L3, are the
+// later stages' inputs.
+{
+  "stage": "0123",
+  "kv_norm_fused": true,
+  "kv_split_clusters": true,
+  "kv_vals_other": true,
+  "kv_vals_own": true,
+  "x_hbm": true,
+  "x_bcast": "memchip",
+  "kv_balance_ways": 4,
+  "kv_wkva_first": true,
+  "kv_balance": true,
+  "x_bcast_after_prefetch": true,
+  "split_loads": true,
+  "split_frac": 0.3,
+  "num_chiplets": 16,
+  "num_clusters": 2,
+  "tokens": 256,
+  "per_chip_image": true,
+  "desc_in_image": true,
+  "d2d_rx_yield": [
+    255,
+    0
+  ],
+  "model": "dsv2-lite-l1",
+  "chunk": 128,
+  "fresh": true,
+  "wo_cols": false,
+  "keys": 256,
+  "bc": 64,
+  "w_chunk_bytes": 65536,
+  "w_buffers": 3,
+  "weight_ring": {
+    "slots": 6,
+    "mode": "cluster",
+    "queue": 16,
+  },
+  "bcast": "bcast_l1",
+  "reduce": "chain",
+  "sync": "edge",
+  "l3_overlay": true,
+  "y_store_halves": false,
+  "y_windows": 4,
+  "kv_slabs": "split",
+  "prefetch_after_x": false,
+  "chain_concurrent": false,
+  "checks": "y",
+  "rope_fused": true,
+  "rope_perm": true,
+  "dq_fused": true,
+  "mask_c": true,
+  "x_put_cluster": 1,
+  "q_tiles": true,
+  "o_tiles": true,
+  "y_block_chains": true,
+  "l1_order": "search",
+  "kv_cols": true,
+  "wbits": 4
+  "hbm_cast": {
+    "mode": "posts",
+    "queue": 16,
+  },
+}

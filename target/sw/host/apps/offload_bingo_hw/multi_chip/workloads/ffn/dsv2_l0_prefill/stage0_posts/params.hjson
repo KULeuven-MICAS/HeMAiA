@@ -1,0 +1,17 @@
+// stage0: stage 0 alone (main_bingo.py): every pass's X from the root memory chip's HBM into every chip's L3, the
+// first pass's X into every cluster's L1. Model, tokens and rows are the whole block's (../full). Here the root's
+// host posts each tile and its flag to the push engine as a task of its own (hbm_cast.mode posts).
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l0
+  tokens: 256
+  rows: 128
+  hbm_cast:
+  {
+    mode: posts
+  }
+  // the D2D links' RX yield windows, compute / memory chips: a compute chip receiving a push stream hands the
+  // half-duplex link over after 255 cycles when its own writes are waiting (the layers' setting)
+  d2d_rx_yield: [255, 0]
+}

@@ -126,27 +126,29 @@ class Stage0(cm.ChipletBuild):
                                   S1_end  ->  pf_report, chk_x_<n>  ->  Check_pf_x  ->  Check_pf_x_land_last
 
         x_hbm_bcast_i<i>: the root's host queues its memory chip's push engine to multicast pass i's X, a tile (a row
-        block) at a time, into every chip's L3, each tile followed by its flag. x_wait_i0b<b>: each cluster's DM core
-        spins on tile b's flag, then copies the tile into its L1. The order edges (from the first multicast to every
-        wait) only dispatch the multicast ahead of the waits; the flag is the real dependency. P_x_bcast_done: a join
-        point after the last multicast. After S1_end the root's host prints the window (pf_report), the checked
+        block) at a time, into every chip's L3, each tile followed by its flag (with params hbm_cast.mode posts, one
+        host task a tile, x_hbm_bcast_i<i>_t<b>, and a wait for the last one to land on the root,
+        x_hbm_bcast_i<i>_land<b>: ChipletBuild.hbm_cast). x_wait_i0b<b>: each cluster's DM core spins on tile b's flag,
+        then copies the tile into its L1. The order edges (from the task that posts tile b to its waits) only dispatch
+        the post ahead of the waits; the flag is the real dependency. P_x_bcast_done: a join point after the last
+        multicast. After S1_end the root's host prints the window (pf_report), the checked
         clusters copy their X into the root's L3 (chk_x_<n>), and the root's host compares (Check_pf_*)."""
         T, R, dm = self.TAG, self.ROOT, self.roles["dm"]
         start = self.stamp("start")
         m = self.mem[R]
-        # the root's host queues its memory chip's push engine, one task a pass: the pass's X a tile at a time into
-        # every chip's L3, each tile behind its flag
+        # the root queues its memory chip's push engine, one multicast a pass: the pass's X a tile at a time into every
+        # chip's L3, each tile behind its flag (hbm_cast: the root's host, one task a pass or its posts and waits)
         bc = []
         for i in range(self.NI):
-            bc.append(self.cx_chip(R).host_node(
-                f"x_hbm_bcast_i{i}_k{R:02x}", "__host_bingo_kernel_hbm_bcast",
+            bc.append(self.hbm_cast(
+                R, f"x_hbm_bcast_i{i}_k{R:02x}",
                 HostBingoKernelHbmBcastArgs(self.h_xhbm.address + i * self.XB,
                                             BingoMemSymbol(f"{T}_xland", offset=i * self.XB),
                                             BingoMemSymbol(f"{T}_xtflag", offset=64 * i * X_BLOCKS), self.h_one.address,
                                             1, self.XT, X_BLOCKS, m, self.engine[R]),
                 after=[start] + bc[-1:]))
         # every cluster's DM core copies the first pass's blocks, one after the other, each behind its tile's flag (the
-        # multicast's flag says the tile has landed: an order edge, not a dependency)
+        # multicast's flag says the tile has landed: an order edge from the task that posts the tile, not a dependency)
         ends = []
         for cl in range(self.N_CL):
             k, c = self.chip(cl), self.local(cl)
@@ -158,10 +160,10 @@ class Stage0(cm.ChipletBuild):
                                                                   self.xbuf[cl].view(off), self.XT,
                                                                   BingoMemSymbol(f"{T}_xtflag", offset=64 * b), 1, 1),
                               prev)
-                self.dfg.bingo_add_order_edge(bc[0], t)
+                self.dfg.bingo_add_order_edge(bc[0].tile(b), t)
                 prev = [t]
             ends += prev
-        ends.append(self.probe(R, "x_bcast_done", [bc[-1]]))
+        ends.append(self.probe(R, "x_bcast_done", [bc[-1].end]))
         self.end_window(ends)
         x0 = self.x_img[:self.XB]
         items = []

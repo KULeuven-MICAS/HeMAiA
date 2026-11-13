@@ -1,0 +1,84 @@
+// llama3/decode/layer_ks_cluster: llama3/decode/layer_ks with every weight ring posted run by run by its cluster's DM
+// core (weight_ring.mode cluster: no prefetcher task) and the cache unicasts as host engine posts and waits
+// (hbm_cast.mode posts); each push engine's 32 queue entries split 12 (attention rings) + 12 (FFN rings) + 8 (casts).
+{
+  num_chiplets: 16
+  num_clusters: 2
+  tokens: 1
+  wbits: 4
+  per_chip_image: true
+  desc_in_image: true
+  d2d_rx_yield: [255, 0]
+  remote_broadcast: false
+  fast_host_init: true
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  hbm_cast:
+  {
+    mode: posts
+    queue: 8
+  }
+  // the key-split attention decode block (../../common/llama3_decode_ks_mc.py), as llama3/decode/attn_ks runs it: one
+  // cached tile of 64 keys a chip, the new key in a 16-key tile on the root's chip, two passes, the row maxima met by
+  // the FP16 MAX junction, each chip's W_O pushes behind the partials' ChainGather
+  attn:
+  {
+    ctx: 1024
+    rows: 64
+    bc: 64
+    w4_paired: true
+    w_chunk_bytes: 65536
+    w_buffers: 2
+    weight_ring:
+    {
+      slots: 8
+      batch: 4
+      policy: 1
+      head: 4
+      batch_head: 1
+      mode: cluster
+      queue: 12
+    }
+    passes: 2
+    stats: max
+    wo_push: after_reduce
+    checks: y
+  }
+  // the all-GEMV FFN decode block (../../../ffn/common/ffn_decode_mc.py, gu_gemv), as llama3/decode/ffn_gv runs it but
+  // for the gathers: X in a_row, gate|up and down on the GEMV, 16 down slices of 128 a cluster, each in its own output
+  // slot, every gather behind every cluster's last down GEMV (chains_after_stream), one ChainGather a cluster (a group
+  // of 16 slices)
+  ffn:
+  {
+    blocks: 1
+    dn_cols: 128
+    w_chunk_bytes: 98304
+    w_buffers: 2
+    weight_ring:
+    {
+      slots: 8
+      batch: 4
+      policy: 1
+      head: 4
+      batch_head: 1
+      mode: cluster
+      queue: 12
+    }
+    x_row: true
+    out_slots: 16
+    start_per_chip: true
+    gather_relay_only: true
+    chain_group: 16
+    dn_gemv: true
+    gu_gemv: true
+    chains_after_stream: true
+  }
+  layer:
+  {
+    attn: ks
+    stop: full
+    // each chip's FFN weight pushes start once its attention part has ended (one L3 region for both blocks' rings)
+    ffn_prefetch: after
+  }
+}
