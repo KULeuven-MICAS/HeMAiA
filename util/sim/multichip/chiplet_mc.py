@@ -30,6 +30,7 @@ import numpy as np
 
 from bingo_data_staging import DataStaging  # noqa: E402
 from bingo_dfg import BingoDFG  # noqa: E402
+from bingo_node import BingoNode  # noqa: E402
 
 
 # The descriptor list of an emitted header, in the order the hardware runs it: one comment line
@@ -48,7 +49,7 @@ def desc_rows(txt):
 from bingo_kernel_args import (  # noqa: E402
     HostBingoKernelChipBarrierArgs, HostBingoKernelEnginePostArgs, HostBingoKernelHbmBcastArgs,
     HostBingoKernelHbmUcastArgs, HostBingoKernelStampReportArgs, HostBingoKernelWaitFlagArgs,
-    HostBingoKernelWeightPrefetchArgs, SnaxBingoKernelChipBarrierArgs, SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelChipBarrierArgs, SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdmaPutFlaggedArgs,
     SnaxBingoKernelSimdAddF16Args, SnaxBingoKernelWaitFlagsArgs, SnaxBingoKernelXdmaChainGatherArgs,
     SnaxBingoKernelXdmaMemsetArgs, XDMA_EWJCT_FMT_FP16, XDMA_EWJCT_OP_ADD, xdma_ewjct_csr0)
@@ -62,9 +63,6 @@ from libs.verify import checks as vchecks  # noqa: E402
 from fabric import (L1_CAPACITY, MASK40, MESH, FabricBase, dist, fold_cycle,  # noqa: E402,F401
                     remote)
 
-# params weight_ring.trailer: the 64-bit magic a chunk's last beat holds once it has landed (the device's
-# BINGO_RING_TRAILER_MAGIC, offload_hw_kernels/idma.h)
-TRAILER_MAGIC = 0x5EED7A11C0DEF1A6
 EW_F16_ADD = xdma_ewjct_csr0(XDMA_EWJCT_OP_ADD, XDMA_EWJCT_FMT_FP16)
 PAIR = 32                          # an INT4 GEMV's column unit
 
@@ -81,26 +79,30 @@ class ClusterNodes:
         return self.fb.node(self.chiplet, self.cluster, core, name, kernel, args, after)
 
 
-class _NoPrefetcher(dict):
-    """ChipletBuild.prefetch with weight_ring.mode cluster: there is no prefetcher task, each cluster posts its own
-    ring's runs (WeightRings push_from); a workload that orders its tasks around one fails here, by name."""
+RING_KEYS = ("slots", "batch", "head", "batch_head", "queue")
 
-    def __init__(self, tag):
-        super().__init__()
-        self.tag = tag
 
-    def __missing__(self, k):
-        raise KeyError(f"[{self.tag}] chip {k:#04x} has no weight prefetcher: params weight_ring.mode is 'cluster', "
-                       f"where each cluster posts its own ring's runs")
+def check_keys(d, allowed, what):
+    """Refuse a params block's keys outside `allowed` (a switch of a removed mechanism does nothing, so it is an
+    error, not a silent no-op)."""
+    bad = sorted(set(d) - set(allowed))
+    if bad:
+        raise ValueError(f"params {what}: {', '.join(bad)} not taken (keys: {', '.join(allowed)})")
+
+
+def ring_params(p, extra=()):
+    """params weight_ring, its keys checked: RING_KEYS and a driver's `extra`."""
+    wr = p.get("weight_ring", {})
+    check_keys(wr, RING_KEYS + tuple(extra), "weight_ring")
+    return wr
 
 
 class HbmCast:
-    """What ChipletBuild.hbm_cast made (ChipletBuild.hbm_casts lists them all). `posts`: the tasks that queue its tiles
-    (the one host task, or its engine posts); `first`, the first of them; `unicast`, whether it is one; `key`, its
-    (memory chip, engine). tile(t, chip): the task that queues tile t (for `chip`, an unicast's), which a
-    consumer of it spins behind (its order edge's producer). `end`: the task after which the last tile has landed (on
-    the posting chip; an unicast's last progress flag): the one host task itself, or a wait made the first time it is
-    asked for."""
+    """What ChipletBuild.hbm_cast made (ChipletBuild.hbm_casts lists them all). `posts`: its engine posts, the tasks
+    that queue its tiles; `first`, the first of them; `unicast`, whether it is one; `key`, its (memory chip, engine).
+    tile(t, chip): the task that queues tile t (for `chip`, an unicast's), which a consumer of it spins behind (its
+    order edge's producer). `end`: the task after which the last tile has landed (on the posting chip; an unicast's
+    last progress flag), a wait made the first time it is asked for."""
 
     def __init__(self, posts, end=None, tiles=None, end_fn=None, unicast=False, key=None):
         self.posts, self._end, self._tiles, self._end_fn = list(posts), end, tiles, end_fn
@@ -226,7 +228,6 @@ class ChipletBuild(FabricBase):
         # ---- the graph ------------------------------------------------------------------
         self.xch = {}
         self.checks = []                       # (name, got handle, golden array, bytes)
-        self.cast_engines = set()              # (memory chip, engine) of every hbm_cast made of posts
         self.posted_casts = {}                 # hbm_cast: (memory chip, engine) -> its posts and waits
         self.hbm_casts = []                    # every HbmCast made, in order (the drivers' collective checks)
         # (memory chip, engine) -> {poster: (the queue entries it may hold there, its span)}: the cluster rings' shares
@@ -236,13 +237,11 @@ class ChipletBuild(FabricBase):
         self.ring_sets = []                    # every make_rings' {chip: WeightRings} (finish closes them)
         self.landed_waits = []                 # after_pushes_landed: (block, task), bound at the window's end
         if shared is not None:
-            for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark", "ring_scheds", "cast_engines",
-                      "posted_casts", "hbm_casts", "engine_queue", "ring_sets", "landed_waits"):
+            for a in ("st", "dfg", "roles", "ctx", "pipe", "jct", "stamps", "mark", "posted_casts", "hbm_casts", "engine_queue", "ring_sets", "landed_waits"):
                 setattr(self, a, getattr(shared, a))
             self.n_stamp = 0
             return
         self.st = DataStaging(plat, on_host=True)
-        self.ring_scheds = {}                  # schedule symbol: (its WeightRings, TAG, chip), ring_schedule()
         if not self.st.has_hbm:
             raise ValueError(f"{args.platformcfg} has no HBM")
         dfg = self.dfg = BingoDFG(num_chiplets=len(chips), num_clusters_per_chiplet=NC,
@@ -385,7 +384,7 @@ class ChipletBuild(FabricBase):
         of the chip has reached it. Each barrier task of chip k follows every device task of
         chip k created before it and precedes every one created after it, on both clusters.
         Creation order is the program order: a task belongs to the phase between the barriers
-        it was created between. The host core (the prefetcher) stays outside, as the CVA6
+        it was created between. The host core stays outside, as the CVA6
         stays outside snrt_global_barrier. The compiler's prune passes keep one edge per core
         of each fan. Returns the number of edges added."""
         import networkx as nx
@@ -447,51 +446,23 @@ class ChipletBuild(FabricBase):
                               name=getattr(self, "stream_name", "stream"))
                    for cl in range(self.N_CL)]
 
-    @staticmethod
-    def chunk_trailer():
-        """The 64-B record a plain weight chunk ends in with weight_ring.trailer: the magic the
-        ring load polls for (idma_ring_load), the rest zero."""
-        t = np.zeros(64, dtype=np.int8)
-        t[:8] = np.array([TRAILER_MAGIC], dtype="<u8").view(np.int8)
-        return t
+    def make_rings(self):
+        """Per chip: its clusters' weight rings in its L3, filled by its memory chip's push engine, each run posted by
+        its ring's cluster (WeightRings.push_from): a DM-core task whose edges to the ring's loads are the protocol.
 
-    def ring_schedule(self, k, rings):
-        """The symbol of chip k's ring schedule, the table its prefetcher walks
-        (WeightRings.schedule), for the prefetcher task made with `rings`. The rings are
-        recorded in ring_scheds, which a layer's blocks share, and finish() stages every
-        recorded table once the build has taken all its chunks."""
-        name = f"{self.TAG}_ring_sched_k{k:02x}"
-        self.ring_scheds[name] = (rings, self.TAG, k)
-        return BingoMemSymbol(name)
-
-    def make_rings(self, rec_l3=None, rec_slots=1):
-        """Per chip: its clusters' weight rings in its L3, filled by its memory chip's push
-        engine under its host's prefetcher (host_kernel_lib.h weight_prefetch), or with
-        weight_ring.mode "cluster" posted run by run by each cluster's DM core (WeightRings
-        push_from: no prefetcher task); rec_l3 the L3 record each chip's prefetcher waits for
-        (the routed runs)."""
+        params weight_ring: slots (a ring's slots), batch (the most chunks a run), head / batch_head (a ring's runs
+        that start within its first `head` chunks batch by `batch_head`, so a cluster's first chunks land one by one,
+        not behind a whole run; 0: off), queue (the entries of the push engine's 32-entry queue this chip's rings may
+        hold; the rest is for hbm_cast posts into the same engine, check_engine_queues)."""
         p, st, T = self.p, self.st, self.TAG
-        wr = p.get("weight_ring", {})
-        self.ring_mode = wr.get("mode", "prefetcher")
-        if self.ring_mode not in ("prefetcher", "cluster"):
-            raise ValueError(f"params weight_ring.mode {self.ring_mode!r}: 'prefetcher' or 'cluster'")
-        self.ring_queue = int(wr.get("queue", 32))
-        if self.ring_mode == "cluster" and not 4 <= self.ring_queue <= 32:
+        wr = ring_params(p)
+        self.ring_queue = int(wr.get("queue", 16))
+        if not 4 <= self.ring_queue <= 32:
             raise ValueError(f"params weight_ring.queue={self.ring_queue}: 4..32 entries (two a run, two rings)")
         self.n_slots = n_slots = int(wr.get("slots", 16))
         self.ring_batch = int(wr.get("batch", 4))
-        # weight_ring.trailer: a chunk's own last 64 B (a record the workload appends to every chunk,
-        # chunk_trailer()) say it has landed, so the prefetcher pushes no flag after it
-        self.ring_trailer = bool(wr.get("trailer", False))
-        # weight_ring.head / batch_head: a ring's runs that start within its first `head` chunks batch
-        # by `batch_head`, so a cluster's first chunks land one by one, not behind a whole run (0: off)
         self.ring_head = int(wr.get("head", 0))
         self.ring_batch_head = int(wr.get("batch_head", 0))
-        # weight_ring.queued: the prefetcher posts each push to the engine's descriptor queue and goes on
-        self.ring_queued = int(bool(wr.get("queued", False)))
-        if self.ring_trailer and self.ring_queued:
-            raise ValueError("params weight_ring.trailer with queued: the queue tracks landed runs by "
-                             "their flags, which trailer runs do not push")
         NR = self.NC
         seq = np.zeros((1024, 8), dtype=np.uint64)
         seq[:, 0] = np.arange(1024, dtype=np.uint64)
@@ -499,43 +470,19 @@ class ChipletBuild(FabricBase):
         self.h_seq = {m: st.put_hbm(f"{T}_ring_seq_m{m:02x}", seq.view(np.int8).reshape(-1),
                                     mem_chip=(m >> 4, m & 15)) for m in mems}
         self.h_flags = st.put_zeros(f"{T}_ring_flags", "uint8_t", NR * n_slots * 64)
-        self.h_rel = st.put_zeros(f"{T}_ring_release", "uint8_t", NR * n_slots * 64)
-        self.h_rec = rec_l3 if rec_l3 is not None else st.put_zeros(f"{T}_rec_l3", "uint8_t",
-                                                                     128)
-        # one symbol for every chip's slots (zero at boot, so a trailer poll never reads X)
-        self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", NR * n_slots * self.slot_bytes,
-                                     preload=True)
+        self.h_wslots = st.put_zeros(f"{T}_wring_slots", "uint8_t", NR * n_slots * self.slot_bytes, preload=True)
         self.rings = {}
         self.ring_sets.append(self.rings)
-        self.prefetch = {} if self.ring_mode == "prefetcher" else _NoPrefetcher(T)
         for k in self.chips:
             rings = self.rings[k] = WeightRings(
-                slots=self.h_wslots, flags=self.h_flags, releases=self.h_rel, n_rings=NR,
-                n_slots=n_slots, slot_bytes=self.slot_bytes, batch=self.ring_batch,
-                batch_routed=int(wr.get("batch_routed", 0)), head=self.ring_head,
-                batch_head=self.ring_batch_head)
-            cl_k = self.clusters(k)
-            if self.ring_trailer:
-                rings.plain_trailer = True
-            for cl in cl_k:
+                slots=self.h_wslots, flags=self.h_flags, n_rings=NR, n_slots=n_slots, slot_bytes=self.slot_bytes,
+                batch=self.ring_batch, head=self.ring_head, batch_head=self.ring_batch_head)
+            for cl in self.clusters(k):
                 self.ls[cl].rings = rings
-            if self.ring_mode == "cluster":
-                # weight_ring.queue: the entries of the push engine's 32-entry queue this chip's rings may hold;
-                # the rest is for hbm_cast posts into the same engine (check_engine_queues)
-                rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
-                                edge=self.edge, depth=self.ring_queue)
-                self.queue_poster((self.mem[k], self.engine[k]), f"{T} rings, chip {k:#04x}", self.ring_queue,
-                                  rings.queue_span)
-                continue
-            self.prefetch[k] = self.cx_chip(k).host_node(
-                f"weight_prefetch_k{k:02x}", "__host_bingo_kernel_weight_prefetch",
-                HostBingoKernelWeightPrefetchArgs(
-                    self.ring_schedule(k, rings), rings.slots, self.h_flags,
-                    self.h_rel, self.h_seq[self.mem[k]], self.h_rec, rec_slots, NR, n_slots,
-                    self.slot_bytes, self.mem[k], batch=self.ring_batch,
-                    policy=int(wr.get("policy", 1)), engine=self.engine[k],
-                    batch_routed=int(wr.get("batch_routed", 0)), queued=self.ring_queued,
-                    head=self.ring_head, batch_head=self.ring_batch_head))
+            rings.push_from(memchip=self.mem[k], engine=self.engine[k], seq=self.h_seq[self.mem[k]],
+                            edge=self.edge, depth=self.ring_queue)
+            self.queue_poster((self.mem[k], self.engine[k]), f"{T} rings, chip {k:#04x}", self.ring_queue,
+                              rings.queue_span)
 
     # ---- the phases -----------------------------------------------------------------------
     def setup(self, extra=None):
@@ -543,7 +490,7 @@ class ChipletBuild(FabricBase):
         the start stamp, and what each chip's window opens with: the start (edge) or the
         chip's first barrier, which every chip parks in before the root stamps the start and
         arrives last. `extra` {chip: [task]}: more of a chip's setup the start waits for.
-        Returns {chip: go task}; the prefetchers follow it (in cluster mode, each ring's first post)."""
+        Returns {chip: go task}; each ring's first post follows it."""
         xdma = self.roles["xdma"]
         setup_end = {}
         # xch_zero False: a workload whose every read of an exchange buffer follows a write of it in the
@@ -570,11 +517,8 @@ class ChipletBuild(FabricBase):
             armed = {k: self.probe(k, "armed", [ready]) for k in self.chips}
             start = self.stamp("start", list(armed.values()))
             go = self.barrier({k: [start] if k == self.ROOT else [armed[k]] for k in self.chips})
-        for k in self.chips:
-            if getattr(self, "ring_mode", "prefetcher") == "cluster":
-                self.rings[k].start_after(go[k])
-            else:
-                self.edge(go[k], self.prefetch[k])
+        for k in getattr(self, "rings", {}):
+            self.rings[k].start_after(go[k])
         self.go = go
         return go
 
@@ -633,40 +577,30 @@ class ChipletBuild(FabricBase):
         apart, value `args.value`, copied from the 64-B record at `args.value_addr`). A cast among `after` stands for its
         landing. Returns an HbmCast.
 
-        params hbm_cast.mode: "host" (default): one host task, named `name`, that queues the engine itself, keeps its
-        queue from filling by polling flags, and ends once the last flag has landed on chip k (host_kernel_lib.h
-        hbm_bcast, hbm_ucast). "posts": the same work as graph tasks on chip k's host, so the hang check and the
-        schedule see it: posts (engine_post, <name>_post<j>) of up to hbm_cast.tiles_per_post tiles each (default: as
-        many as the queue holds), a multicast's tiles each followed by its flag, an unicast's tiles into one chip then a
-        progress flag on chip k (args.prog_addr), each post after the engine's previous post (so a cast of the same
-        engine among `after` is ahead in the queue already, not waited for); and the waits that free
-        the queue (wait_flag on chip k, <name>_land<j>: a multicast post's last flag, an unicast post's progress flag).
-        The queue holds hbm_cast.queue entries (default 32, its depth): a post follows the waits of the oldest posts
-        until its own entries fit. With weight_ring.mode cluster, the rings that post into the same engine start after
-        the cast's last post (`ahead_of_rings`, the input a block reads first); ahead_of_rings False leaves them to the
-        driver (WeightRings.boundary: a cast between a ring's runs)."""
+        The cast is graph tasks on chip k's host, so the hang check and the schedule see it: posts (engine_post,
+        <name>_post<j>) of up to hbm_cast.tiles_per_post tiles each (default: as many as the queue share holds), a
+        multicast's tiles each followed by its flag, an unicast's tiles into one chip then a progress flag on chip k
+        (args.prog_addr), each post after the engine's previous post (so a cast of the same engine among `after` is
+        ahead in the queue already, not waited for); and the waits that free the queue (wait_flag on chip k,
+        <name>_land<j>: a multicast post's last flag, an unicast post's progress flag). The casts hold hbm_cast.queue
+        entries of the engine's queue (default 16): a post follows the waits of the oldest posts until its own entries
+        fit. The rings that post into the same engine start after the cast's last post (`ahead_of_rings`, the input a
+        block reads first); ahead_of_rings False leaves them to the driver (WeightRings.boundary: a cast between a
+        ring's runs)."""
         P = self.p.get("hbm_cast", {})
-        mode = P.get("mode", "host")
-        if mode not in ("host", "posts"):
-            raise ValueError(f"params hbm_cast.mode {mode!r}: 'host' or 'posts'")
+        check_keys(P, ("queue",), "hbm_cast")
         ucast = isinstance(args, HostBingoKernelHbmUcastArgs)
         if not ucast and not isinstance(args, HostBingoKernelHbmBcastArgs):
             raise ValueError(f"[{self.TAG}] {name}: hbm_cast takes HbmBcast or HbmUcast args, not {type(args).__name__}")
         key = (args.memchip_id, args.engine)
-        # an HbmCast in `after` stands for its landing; with posts, one into the same engine's queue is already
-        # ahead of this one there (the posts are chained in queue order)
-        after = [self.done_of(a) for a in after
-                 if not (mode == "posts" and isinstance(a, HbmCast) and a.key == key)]
-        if mode == "host":
-            kernel = "__host_bingo_kernel_hbm_ucast" if ucast else "__host_bingo_kernel_hbm_bcast"
-            t = self.cx_chip(k).host_node(name, kernel, args, after)
-            self.hbm_casts.append(HbmCast([t], t, unicast=ucast, key=key))
-            return self.hbm_casts[-1]
+        # an HbmCast in `after` stands for its landing; one into the same engine's queue is already ahead of this one
+        # there (the posts are chained in queue order)
+        after = [self.done_of(a) for a in after if not (isinstance(a, HbmCast) and a.key == key)]
         syms = [args.dst_addr, args.flag_addr] + ([args.prog_addr] if ucast else [])
         if not all(isinstance(h, BingoMemSymbol) for h in syms):
-            raise ValueError(f"[{self.TAG}] {name}: hbm_cast.mode posts needs the landing area, the flags (and an "
-                             f"unicast's progress flags) as staged symbols")
-        budget = int(P.get("queue", 32))
+            raise ValueError(f"[{self.TAG}] {name}: hbm_cast needs the landing area, the flags (and an unicast's "
+                             f"progress flags) as staged symbols")
+        budget = int(P.get("queue", 16))
         if not 2 + ucast <= budget <= HostBingoKernelEnginePostArgs.MAX_ENTRIES:
             raise ValueError(f"params hbm_cast.queue={budget}: {2 + ucast}..{HostBingoKernelEnginePostArgs.MAX_ENTRIES} "
                              f"entries")
@@ -710,13 +644,12 @@ class ChipletBuild(FabricBase):
             q["fifo"].append((len(ent), land))
             made.append(post)
             tiles.update({(c, t): post for t in ts})
-        self.cast_engines.add(key)
         self.hbm_casts.append(HbmCast(made, tiles=tiles, end_fn=land, unicast=ucast, key=key))
         self.hbm_casts[-1].tag = self.TAG
         self.queue_poster(key, f"{self.TAG} casts", budget, lambda key=key, tag=self.TAG: self._casts_span(key, tag))
-        # weight_ring.mode cluster: the rings that post into this engine's queue too start after this cast's last post,
-        # so the engine runs the cast first (a ring post made before it is already ahead in the queue)
-        if ahead_of_rings and getattr(self, "ring_mode", "prefetcher") == "cluster":
+        # the rings that post into this engine's queue too start after this cast's last post, so the engine runs the
+        # cast first (a ring post made before it is already ahead in the queue)
+        if ahead_of_rings:
             for kk, rings in getattr(self, "rings", {}).items():
                 if (self.mem[kk], self.engine[kk]) == key:
                     rings.start_after(made[-1])
@@ -724,32 +657,24 @@ class ChipletBuild(FabricBase):
 
     def pushes_after(self, part, k, deps):
         """The weight pushes of block `part` (this build, or a part of a layer) on chip k start after every task of
-        `deps`: its prefetcher follows them, or with weight_ring.mode cluster the first post of each of its rings (an
-        HBM cast among them stands for its landing)."""
+        `deps`: the first post of each of its rings follows them (an HBM cast among them stands for its landing)."""
         for d in deps:
-            if getattr(part, "ring_mode", "prefetcher") == "cluster":
-                part.rings[k].start_after(self.done_of(d))
-            else:
-                self.edge(d, part.prefetch[k])
+            part.rings[k].start_after(self.done_of(d))
 
     def push_firsts(self, part, k):
-        """The tasks with which block `part`'s weight pushes on chip k start: its prefetcher, or with weight_ring.mode
-        cluster the first post of each of its rings (made already)."""
-        if getattr(part, "ring_mode", "prefetcher") != "cluster":
-            return [part.prefetch[k]]
+        """The tasks with which block `part`'s weight pushes on chip k start: the first post of each of its rings (made
+        already)."""
         R = part.rings[k]
         return [R.runs_of(r)[0][0] for r in range(R.n_rings) if R.runs_of(r)]
 
     def push_heads(self, part, k):
-        """The tasks after which block `part` has queued every weight push on chip k: its prefetcher, or with
-        weight_ring.mode cluster the last post of each of its rings (made already)."""
-        if getattr(part, "ring_mode", "prefetcher") != "cluster":
-            return [part.prefetch[k]]
+        """The tasks after which block `part` has queued every weight push on chip k: the last post of each of its rings
+        (made already)."""
         R = part.rings[k]
         return [R.runs_of(r)[-1][0] for r in range(R.n_rings) if R.runs_of(r)]
 
     def after_pushes_landed(self, part, task):
-        """weight_ring.mode cluster: `task` follows the landing of every weight push of block `part` on every chip: the
+        """`task` follows the landing of every weight push of block `part` on every chip: the
         load of the last chunk of each of its rings (its last reader; the engine pushes a chip's runs in order). The
         loads are made later than the task may be, so the edges are added at the window's end (bind_pushes_landed)."""
         self.landed_waits.append((part, task))
@@ -770,8 +695,10 @@ class ChipletBuild(FabricBase):
         super().edge(self.done_of(a), self.first_of(b))
 
     def node(self, k, c, core, name, kernel, kargs, after=()):
-        """FabricBase.node; an HBM cast among `after` stands for its landing."""
-        return super().node(k, c, core, name, kernel, kargs, [self.done_of(a) for a in (after or ())])
+        """FabricBase.node; `after` a task or a list of them, an HBM cast among them standing for its landing."""
+        if after is None or isinstance(after, (BingoNode, HbmCast)):
+            after = [] if after is None else [after]
+        return super().node(k, c, core, name, kernel, kargs, [self.done_of(a) for a in after])
 
     @staticmethod
     def first_of(p):
@@ -790,8 +717,8 @@ class ChipletBuild(FabricBase):
 
     def collectives(self):
         """Every multicast and reduce chain of the graph as (the task it starts with, the task after which it is done,
-        kind): kind "cast" a multicast of hbm_cast, from its first queued tile to its landing on the posting chip (the
-        one host task, or its first post and its end); "put" a multicast iDMA put, "chain" a ChainGather (one task
+        kind): kind "cast" a multicast of hbm_cast, from its first post to its landing on the posting chip (its end);
+        "put" a multicast iDMA put, "chain" a ChainGather (one task
         each); hbm_cast's casts first, in the order made, then the others in node order. Concurrent multicast
         sources, or a multicast beside a chain, deadlock the fabric: the drivers' checks order them. Call it before a
         check copies the graph: a cast's end may be a wait made when asked for."""
@@ -801,9 +728,7 @@ class ChipletBuild(FabricBase):
             k = t.kernel_name or ""
             if t in cast_tasks:
                 continue
-            if k.endswith("hbm_bcast"):
-                spans.append((t, t, "cast"))
-            elif k.endswith("xdma_chain_gather"):
+            if k.endswith("xdma_chain_gather"):
                 spans.append((t, t, "chain"))
             elif k.endswith("idma_put_flagged") and getattr(t.kernel_args, "bcast", False):
                 spans.append((t, t, "put"))
@@ -902,33 +827,6 @@ class ChipletBuild(FabricBase):
                       SnaxBingoKernelWaitFlagsArgs(h, 0, 0), prev if k == self.ROOT else [self.end])
 
     # ---- emission -------------------------------------------------------------------------
-    def _stage_ring_schedules(self):
-        """Every ring schedule recorded by ring_schedule() into the data image."""
-        for name, (r, tag, k) in self.ring_scheds.items():
-            self.st.put(name, "uint64_t", np.array(r.schedule(), dtype=np.uint64))
-            print(f"[{tag}] chip {k:#04x}: {r.chunks()} chunks pushed by memory chip "
-                  f"{self.mem[k]:#04x} engine {self.engine[k]}")
-
-    def report_ring_races(self):
-        """The weight rings' overwrite races (WeightRings.races) under every prefetcher task of the
-        graph, its parts' chunk ranges together: the runs the prefetcher's byte guard holds back."""
-        pfs = {}
-        for n in self.dfg.nodes:
-            a = n.kernel_args
-            if isinstance(a, HostBingoKernelWeightPrefetchArgs):
-                pf = pfs.setdefault(a.sched_addr.symbol_name, (a, set()))
-                pf[1].add((getattr(a, "chunk_lo", 0), getattr(a, "chunk_hi", 0)))
-        if not pfs:
-            return
-        total = 0
-        for name, (a, parts) in pfs.items():
-            races = self.ring_scheds[name][0].races(a, sorted(parts))
-            total += len(races)
-            if races:
-                print(f"[{self.TAG}] {name}: {len(races)} ring races (ring, unread chunk, pushed chunk, "
-                      f"bytes of it covered) {races[:4]}")
-        print(f"[{self.TAG}] ring races (runs the prefetcher's byte guard holds back): {total}")
-
     def data_h_extra(self):
         """More lines for the end of the data header."""
         return []
@@ -940,14 +838,6 @@ class ChipletBuild(FabricBase):
         if bad:
             raise ValueError(f"[{self.TAG}] {len(bad)} HBM cast(s) used as a task in the graph (an edge or an order "
                              f"edge on the HbmCast itself): name its task with first_of, done_of or queued_of")
-        # hbm_cast.mode posts: every HBM cast is made by hbm_cast (a one-task cast left in a driver would write the
-        # queue word by word beside the posts, and no queue budget counts it)
-        if self.p.get("hbm_cast", {}).get("mode", "host") == "posts":
-            left = [n.node_name for n in self.dfg.nodes
-                    if (n.kernel_name or "") in ("__host_bingo_kernel_hbm_bcast", "__host_bingo_kernel_hbm_ucast")]
-            if left:
-                raise ValueError(f"[{self.TAG}] hbm_cast.mode posts: {len(left)} HBM cast(s) built as one host task "
-                                 f"outside ChipletBuild.hbm_cast, e.g. {left[:3]}")
 
     def queue_poster(self, key, name, entries, span):
         """Poster `name` of push engine `key` (memory chip, engine) may hold `entries` of its queue; span() gives
@@ -968,9 +858,7 @@ class ChipletBuild(FabricBase):
         waits), so the posters of one engine that may hold entries at once must fit its 32 (engine_queue). Two posters
         never do when the graph orders one's first posts after the tasks after which the other's entries have all left
         the queue (their spans; a layer's blocks one after the other): every set of posters no such path orders must
-        fit. With weight_ring.mode cluster the one-task host cast cannot share a ring's queue: the queue stages one
-        entry for all its writers, and that task writes it word by word, so a cluster's burst could land between
-        them."""
+        fit."""
         import networkx as nx
         report = []
         for (m, e), posters in sorted(self.engine_queue.items()):
@@ -1001,26 +889,13 @@ class ChipletBuild(FabricBase):
         if report:
             print(f"[{self.TAG}] engine queues: {len(report)} engines with posters over 32 entries in all, the most at "
                   f"once {max(report)} (the rest ordered by the graph)")
-        ring_engines = {(r.pusher["memchip"], r.pusher["engine"]) for s in self.ring_sets for r in s.values()
-                        if r.pusher is not None}
-        if not ring_engines:
-            return
-        for n in self.dfg.nodes:
-            a = n.kernel_args
-            if isinstance(a, (HostBingoKernelHbmBcastArgs, HostBingoKernelHbmUcastArgs)) and \
-                    (a.memchip_id, a.engine) in ring_engines:
-                raise ValueError(f"[{self.TAG}] {n.node_name}: a host post into memory chip {a.memchip_id:#04x} "
-                                 f"engine {a.engine}'s queue, which weight_ring.mode cluster's rings post into")
-
-    def finish(self, app_name, x_prefixes=("x_wait_", "x_pull_")):
+    def finish(self, app_name):
         dfg, p, st, args, T = self.dfg, self.p, self.st, self.args, self.TAG
         self.bind_pushes_landed()
         for rings in (r for s in self.ring_sets for r in s.values()):
             rings.close()                   # WeightRings.boundary past a ring's last chunk (every block's)
         self.check_casts_in_graph()
         self.check_engine_queues()
-        self._stage_ring_schedules()
-        self.report_ring_races()
         if args.data_h:
             st.emit(args.data_h, args.output_dir)
             if p.get("d2d_ddr", True):
@@ -1030,8 +905,8 @@ class ChipletBuild(FabricBase):
             # params d2d_rx_yield: [compute chips, memory chips], the data links' RX yield windows
             # (hemaia_d2d_link_rx_yield_grid; 0 = off): a side receiving a push stream hands the
             # half-duplex link over when it has its own requests waiting
-            if "d2d_rx_yield" in p:
-                wc, wm = (int(v) for v in p["d2d_rx_yield"])
+            if True:
+                wc, wm = (int(v) for v in p.get("d2d_rx_yield", (255, 0)))
                 if not (0 <= wc < 256 and 0 <= wm < 256):
                     raise ValueError(f"params d2d_rx_yield={p['d2d_rx_yield']}: 0..255 each")
                 with open(args.data_h, "a") as f:
@@ -1072,31 +947,27 @@ class ChipletBuild(FabricBase):
             desc_list_in_image=bool(p.get("desc_in_image", False)))
         self.check_xch_offsets()
         header = os.path.join(args.output_dir, args.output_offload_file_name)
-        self.check_core_order(header, x_prefixes)
         self.check_barrier_order(header)
         print(f"[{T}] HBM {st.hbm_bytes / 2**20:.2f} MiB over {len(set(self.mem.values()))} "
               f"memory chips; {sum(1 for _ in dfg.nodes)} nodes")
-        # params export_exec_ir: the compiled graph, rings and prefetch policy as the bingo
+        # params export_exec_ir: the compiled graph, rings and run shape as the bingo
         # framework's Execution IR (its chiplet DSE prices the program from it;
         # passes/bingo_exec_export.py); a string names the file, else exec_ir.json in the output dir
         if p.get("export_exec_ir", False):
             from bingo_exec_export import bingo_export_exec_ir, ring_table
-            wr = p.get("weight_ring", {})
             out = p["export_exec_ir"] if isinstance(p["export_exec_ir"], str) else \
                 os.path.join(args.output_dir, "exec_ir.json")
             bingo_export_exec_ir(
                 dfg, out,
                 ring_tables=[ring_table(self.rings[k], k, self.mem[k], self.engine[k])
                              for k in self.chips],
-                prefetch=dict(ring_slots=self.n_slots, batch=self.ring_batch,
-                              batch_routed=int(wr.get("batch_routed", 0)), head=self.ring_head,
-                              batch_head=self.ring_batch_head, policy=int(wr.get("policy", 1)),
-                              queued=bool(self.ring_queued)),
+                prefetch=dict(ring_slots=self.n_slots, batch=self.ring_batch, head=self.ring_head,
+                              batch_head=self.ring_batch_head),
                 meta=dict(workload=T, app=app_name, chips=list(self.chips), nc=self.NC,
                           tokens=self.T,
                           params={k: v for k, v in p.items()
                                   if isinstance(v, (int, float, str, bool, list, dict))},
-                          trailer=bool(self.ring_trailer), slot_bytes=self.slot_bytes))
+                          slot_bytes=self.slot_bytes))
             print(f"[{T}] Execution IR: {out}")
         # params replay_cluster: [chip (hex string or int), cluster]: that cluster's tasks inside the window, with their
         # arguments, as a standalone program for the SNAX cluster simulator (passes/bingo_cluster_replay.py), into
@@ -1112,56 +983,6 @@ class ChipletBuild(FabricBase):
                                 os.path.join(args.output_dir, f"replay_{chip:02x}_{int(rc[1])}.h"),
                                 gates=p.get("replay_gates"), durations=p.get("replay_durations"),
                                 include_pre=bool(p.get("replay_pre", False)))
-
-    def check_core_order(self, header, x_prefixes=()):
-        """No DM core runs a weight-ring load ahead of a task the prefetcher that pushes the load's chunk waits for, in
-        the order the hardware runs them: the descriptor list of the emitted header, which is not the node-id order. A
-        ring load spins on a chunk the prefetcher pushes only after it starts: one ring load ahead of a task that
-        prefetcher (through the start) waits for, on the same core, is a deadlock no dependency check sees. A load's
-        prefetcher: the one filling its ring's flags whose chunk range holds the load's chunk. With weight_ring.mode
-        cluster there is no prefetcher: a load follows its run's post by an edge. (x_prefixes: unused, kept for the
-        drivers that pass it.)"""
-        import networkx as nx
-        g = nx.DiGraph(self.dfg)
-        g.add_edges_from(self.dfg.order_edges)
-
-        def flags(a):
-            f = getattr(a, "flag_addr", None) if a is not None else None
-            return getattr(getattr(f, "base", f), "symbol_name", None) or getattr(f, "name", None)
-        pfs, anc = {}, {}
-        for n in self.dfg.node_list:
-            if isinstance(n.kernel_args, HostBingoKernelWeightPrefetchArgs):
-                pfs.setdefault(n.assigned_chiplet_id, []).append(n)
-                anc[n] = nx.ancestors(g, n)
-
-        def pushers(ld):
-            out = []
-            for p in pfs.get(ld.assigned_chiplet_id, []):
-                a = p.kernel_args
-                if flags(a) is not None and flags(a) != flags(ld.kernel_args):
-                    continue
-                chunk = getattr(ld, "exec_chunk", None)
-                lo, hi = getattr(a, "chunk_lo", 0), getattr(a, "chunk_hi", 0)
-                if chunk is None or (lo <= chunk[1] and (not hi or chunk[1] < hi)):
-                    out.append(p)
-            return out or pfs.get(ld.assigned_chiplet_id, [])[:1]
-        by_id = {str(n.node_id): n for n in self.dfg.node_list}
-        txt = open(header).read()
-        loaded, bad = {}, []
-        dm = str(self.roles["dm"])
-        for chip, nid, ty, cl, core in desc_rows(txt):
-            if ty != "0" or core != dm:
-                continue
-            n = by_id.get(nid)
-            if n is None:
-                continue
-            seen = loaded.setdefault((chip, cl), set())
-            if (n.kernel_name or "").endswith("idma_ring_load"):
-                seen.update(pushers(n))
-            elif any(n in anc[p] for p in seen):
-                bad.append(f"chip {chip} cluster {cl}: {n.node_name}")
-        if bad:
-            raise ValueError(f"a weight-ring load runs ahead of a task its prefetcher waits for: {bad[:4]}")
 
     def check_barrier_order(self, header):
         """Every chip's barrier core runs barrier 1, 2, ... in that order (the descriptor order of
