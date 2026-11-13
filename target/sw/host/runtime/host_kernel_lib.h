@@ -1189,6 +1189,45 @@ static inline uint64_t __host_bingo_kernel_hbm_ucast(void *arg){
     return BINGO_RET_SUCC;
 }
 
+// One post into a memory chiplet push engine's descriptor queue, as a task of its own
+// (ChipletBuild.hbm_cast with hbm_cast.mode posts): its entries, queued in order, which the
+// engine runs in that order, so a chiplet that sees a tile's flag holds the tile. Each entry is
+// copied from the args by this chiplet's system iDMA as ONE 32-B write burst (one transfer an
+// entry: the queue window is 32 B): the engine stages one entry for all its writers (a
+// cluster's ring posts among them), and AXI does not interleave write bursts, where the host's
+// own stores would arrive a word at a time. The task ends once every copy has retired. What the
+// queue holds is up to the graph: a post follows the waits (wait_flag) for the landing of the
+// entries whose room it takes.
+static inline uint64_t __host_bingo_kernel_engine_post(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __host_bingo_kernel_engine_post_args_t *a = (const __host_bingo_kernel_engine_post_args_t *)arg;
+    const uint8_t here = get_current_chip_id();
+    const uint64_t queue = chiplet_addr_transform_full((uint8_t)a->memchip,
+                                                       SYS_DMA_QUEUE_ADDR + a->engine * SYS_IDMA_CFG_STRIDE);
+    const uint64_t entries = chiplet_addr_transform((uint64_t)(uintptr_t)&a->e[0]);
+    const uint64_t n = a->n_entries;
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
+    asm volatile("fence" ::: "memory");     // the args' stores before the iDMA reads them
+    uint32_t last = 0;
+    for (uint64_t i = 0; i < n; i++)
+        last = (uint32_t)sys_dma_memcpy(here, queue, entries + i * sizeof(host_engine_entry_t),
+                                        sizeof(host_engine_entry_t));
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_START);
+    if (n) sys_dma_engine_wait(here, 0, last);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_END);
+    return BINGO_RET_SUCC;
+}
+
+// Wait until a flag in this chiplet's L3 holds its value: the landing of a tile a memory
+// chiplet pushed (an HBM multicast's, posted by engine_post), which no task stands for.
+static inline uint64_t __host_bingo_kernel_wait_flag(void *arg){
+    const __host_bingo_kernel_wait_flag_args_t *a = (const __host_bingo_kernel_wait_flag_args_t *)arg;
+    hbm_bcast_wait_flag(a->flag_addr, (uint32_t)a->value);
+    return BINGO_RET_SUCC;
+}
+
 // Batched host iDMA: issue up to four transfers, wait once. See the struct comment in
 // host_kernel_args.h for why this exists.
 static inline uint64_t __host_bingo_kernel_idma_multi(void *arg){

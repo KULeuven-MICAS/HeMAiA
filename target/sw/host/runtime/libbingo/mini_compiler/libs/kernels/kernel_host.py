@@ -554,6 +554,62 @@ class HostBingoKernelHbmUcastArgs(BingoKernelArgs):
         return a
 
 
+
+class HostBingoKernelEnginePostArgs(BingoKernelArgs):
+    """One post into the descriptor queue of push engine `engine` of memory chip `memchip`, from a
+    host as a task of its own (host_kernel_lib.h engine_post; ChipletBuild.hbm_cast): `entries`,
+    [(src, dst, bytes)], queued in that order (an HBM multicast's tiles, each followed by its flag;
+    an unicast's tiles into one chip, then a progress flag on the posting chip). The host's system
+    iDMA writes each entry as one burst."""
+    KERNEL_NAME = "__host_bingo_kernel_engine_post"
+    MAX_ENTRIES = 32                    # host_kernel_args.h HOST_ENGINE_POST_MAX: the queue's depth
+
+    def __init__(self, memchip: int, engine: int, entries):
+        if not 0 <= int(engine) <= 3:
+            raise ValueError(f"engine={engine}: 0..3, one of the memchip's push engines")
+        entries = [(src, dst, int(nb)) for src, dst, nb in entries]
+        if not 1 <= len(entries) <= self.MAX_ENTRIES or any(nb <= 0 for _, _, nb in entries):
+            raise ValueError(f"engine post of {len(entries)} entries: 1..{self.MAX_ENTRIES}, each of >= 1 B")
+        self.memchip, self.engine, self.entries = int(memchip), int(engine), entries
+
+    def accesses(self):
+        # the sources in HBM, the destinations and their flags: the graph's edges and the flags order them
+        return [Sync("entries")]
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_engine_post_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        # the struct holds the entries as the queue window takes them (host_kernel_args.h)
+        a = {"memchip": f"0x{self.memchip:02x}", "engine": str(self.engine), "n_entries": str(len(self.entries))}
+        for i, (src, dst, nb) in enumerate(self.entries):
+            self._process_addr(src, f"e[{i}].src", a, handle_name_map, split_64bit=False, as_64bit=True)
+            self._process_addr(dst, f"e[{i}].dst", a, handle_name_map, split_64bit=False, as_64bit=True)
+            a[f"e[{i}].len"], a[f"e[{i}].bell"] = str(nb), "0"
+        return a
+
+
+class HostBingoKernelWaitFlagArgs(BingoKernelArgs):
+    """A host waits until the 4-byte flag at `flag_addr`, in its chiplet's L3, holds `value`
+    (host_kernel_lib.h wait_flag): the landing of a tile an engine post sent."""
+    KERNEL_NAME = "__host_bingo_kernel_wait_flag"
+
+    def __init__(self, flag_addr, value: int = 1):
+        self.flag_addr, self.value = flag_addr, int(value)
+
+    def accesses(self):
+        return [Sync("flag_addr")]
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_wait_flag_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.flag_addr, "flag_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["value"] = str(self.value)
+        return a
+
+
 class HostBingoKernelIdmaArgs(BingoKernelArgs):
     def __init__(self,
                  src_addr: Union[BingoMemAlloc, int],

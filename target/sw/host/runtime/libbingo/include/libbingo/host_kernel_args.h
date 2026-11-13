@@ -212,6 +212,38 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_bcast_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_hbm_bcast_args_t;
 
+// One queue entry of a memory chiplet push engine, word for word as the queue window takes it
+// (sys_dma.h sys_dma_engine_queue): src, dst, length, then the doorbell in the low and the
+// control word in the high half (0: any write of the last word queues the entry).
+typedef struct {
+    uint64_t src;
+    uint64_t dst;
+    uint64_t len;
+    uint64_t bell;
+} host_engine_entry_t;
+_Static_assert(sizeof(host_engine_entry_t) == 32, "a queue entry is the 32-B queue window");
+#define HOST_ENGINE_POST_MAX 32     // the queue's depth (hemaia_mem_chip SysIdmaQueueDepth)
+
+// One post into a memory chiplet push engine's descriptor queue from this chiplet's host
+// (host_kernel_lib.h engine_post): entries e[0 .. n_entries - 1], queued in that order, each
+// copied by this chiplet's system iDMA as one 32-B write (an HBM multicast's tiles, each
+// followed by its flag; an unicast's tiles into one chiplet, then a progress flag here).
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_engine_post_args {
+    uint64_t memchip;       // the push engine: its memory chiplet ...
+    uint64_t engine;        // ... and its index there
+    uint64_t n_entries;
+    host_engine_entry_t e[HOST_ENGINE_POST_MAX];
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_engine_post_args_t;
+
+// Wait on this chiplet's host until the 4-byte flag at flag_addr, in its L3, holds value
+// (host_kernel_lib.h wait_flag).
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_wait_flag_args {
+    uint64_t flag_addr;
+    uint64_t value;
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_wait_flag_args_t;
+
 // The HBM unicast (host_kernel_lib.h): the same tiles and flags as the multicast, written into one
 // listed compute chiplet's L3 at a time, plus a progress flag a tile in this chiplet's L3.
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_hbm_ucast_args {
