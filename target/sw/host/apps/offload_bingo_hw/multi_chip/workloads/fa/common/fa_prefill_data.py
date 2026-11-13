@@ -24,7 +24,7 @@ rows would set every column's scale): the host applies it to the normed input be
 quantised, as the FFN's data does. The kv_a_layernorm gain is folded as the dsv2 golden folds it,
 into W_UK's columns and W_UV's rows.
 
-THE GOLDEN follows the mapping (fa_prefill_mc.py): head h on chip h, a cluster's rows = tokens. Per
+THE GOLDEN follows the mapping (fa_prefill_mc): head h on chip h, a cluster's rows = tokens. Per
 head, all T tokens at once (every stage is per row, and the attention per query lane):
 
     hq        = quant_i8(rmsnorm(x16) (.) gain, s_x)                       staged on the root
@@ -43,7 +43,7 @@ head, all T tokens at once (every stage is per row, and the attention per query 
 An FP16 sum depends on its order, so `reduce` takes the order the device folds in. The dequantisation
 of the output (s_o s_wo 2^k_wo per column) is applied after the reduce, as the FFN's.
 
-THE KEYS of a fresh prompt (fa_prefill_mc.py stage_kv, per 16-token tile):
+THE KEYS of a fresh prompt (fa_stages_mc, stages 1 and 2, per 16-token tile):
     kv        = d_port(hq @ W_KVA, k_x) (.) f_kva                           576 columns
     c~        = rmsnorm(kv[:, :512])                                        the gain folded into W_UK, W_UV
     k_pe      = RoPE(kv[:, 512:]) at the token's position
@@ -85,7 +85,7 @@ class FaPrefillData:
         # rope_perm: every rotary part's 64 columns as the pairs' first elements, then their second (0, 2, .., 62,
         # 1, 3, .., 63), in W_q's and W_KVA's columns and the RoPE tables alike, so a pair's partner sits 32 columns
         # away instead of next to it. q_pe and k_pe share the order, so their dot product, and every score, keeps
-        # its value; the swap RoPE needs moves whole halves instead of adjacent FP16 values (fa_prefill_mc.py)
+        # its value; the swap RoPE needs moves whole halves instead of adjacent FP16 values (fa_prefill_mc)
         self.rope_perm = bool(rope_perm)
         if self.rope_perm and not self.fresh:
             raise ValueError("rope_perm: needs fresh (a cache holds its keys' rotary part in pair order)")
@@ -337,7 +337,7 @@ class FaPrefillData:
         return [self.wblob(self.wkva.q[:, 64 * i:64 * (i + 1)]) for i in range(D_QK // 64)]
 
     def kva_cols(self, c0, c1):
-        """W_KVA's columns c0 .. c1 - 1 as one ring chunk, B layout (fresh, params kv_cols: a chip's slice)."""
+        """W_KVA's columns c0 .. c1 - 1 as one ring chunk, B layout (fresh: a chip's slice)."""
         return self.wblob(self.wkva.q[:, c0:c1])
 
     def kv_piece(self, t0):
@@ -470,7 +470,7 @@ class FaPrefillData:
 
     def scale_tile_a(self, vec, rows):
         """A per-column factor in the A layout of `rows` rows (a multiple of 16): `vec` repeated on every row, as
-        the D -> A reshape leaves the values it scales (fa_prefill_mc.py dq_fused)."""
+        the D -> A reshape leaves the values it scales (fa_prefill_mc: a dequantisation folded into its quantise)."""
         return self.layout.to_a(np.tile(np.asarray(vec, dtype=np.float16), (rows, 1)), self.mesh)
 
     def rope_tables(self, r0, rows):

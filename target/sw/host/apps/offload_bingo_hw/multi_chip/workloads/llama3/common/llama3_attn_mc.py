@@ -38,7 +38,7 @@ L1: the trades go through the chip's L3.
 
 PARAMETERS (params.hjson): tokens, rows, passes (the first passes only), bc, dn_cols (outputs a W_O slice), w_chunk_bytes, w_buffers, weight_ring, seed,
 w4_paired, the platform's and the graph's switches (static_l1, l1_capacity, compact_id_maps, gid_lists, per_chip_image,
-desc_in_image, d2d_ddr), checks (y | stages); async_exec; mask_c (the FA block's, fa_prefill_mc.py; default false);
+desc_in_image, d2d_ddr), checks (y | stages); async_exec; mask_c (the FA block's, fa_prefill_mc; default false);
 kv_push (with kv_split): each chip's halves pushed into its mate's L3 instead of read from there.
 """
 
@@ -169,18 +169,6 @@ class ABuild(cm.ChipletBuild):
         # params o_get_xdma (wo_cols): each cluster's gather of every head's o8 into L1 on its xDMA core instead of its DM
         # core, so the DM core's multicast (on the root) and weight loads run beside it
         self.o_get_xdma = bool(p.get("o_get_xdma", False))
-        # params o_overlap (y_scatter, wo_early): pass i's front on each DM core (its o8 put, its first W_O chunk, the
-        # root's wait and multicast, the others' wait) goes ahead of pass i - 1's y stores, and the gather no longer
-        # waits for pass i - 1's GEMMs: the static planner keeps the two passes' o8 apart, so pass i's gather and
-        # multicast run under pass i - 1's last GEMMs
-        self.o_overlap = bool(p.get("o_overlap", False))
-        # params x_ahead (stage1234): pass i's x fetch, RoPE table and first weight chunk go ahead of pass i - 1's K/V trade
-        # in each DM core's program. x still lands over pass i - 1's once its projections are done (two passes' x do not
-        # fit beside the weight slabs); the RoPE table no longer waits for pass i - 1's RoPE (the planner keeps the two
-        # apart), so the fetch starts when pass i - 1's last GEMM ends, not behind the trade
-        self.x_ahead = bool(p.get("x_ahead", False))
-        if self.o_overlap and not (self.wo_early and self.wo_cols):
-            raise ValueError("params o_overlap: needs wo_early (and so y_scatter, whose stores follow a pass's last GEMM)")
         if self.wo_under_proj and not self.wo_cols:
             raise ValueError("params wo_under_proj: needs wo_cols")
         # params x_early (wo_under_proj): pass i + 1's x fetch goes before pass i's sweep in the DM core's program, not
@@ -300,8 +288,8 @@ class ABuild(cm.ChipletBuild):
             if p.get("barrier_at", "kernel") != "kernel":
                 raise ValueError("params barrier_at: kernel only (a barrier after every kernel of a pass)")
             overlap = [n for n in ("x_early", "wo_under_proj", "front_first",
-                                   "x_after_sm", "front_after_sm", "x_tiles_xdma", "x_xdma_free", "wo_early", "o_row_tiles",
-                                   "o_overlap", "x_ahead") if p.get(n, False)]
+                                   "x_after_sm", "front_after_sm", "x_tiles_xdma", "x_xdma_free", "wo_early", "o_row_tiles")
+                       if p.get(n, False)]
             if overlap:
                 raise ValueError(f"params sync barrier: no two kernels overlap, so none of {overlap}")
             if not (self.wo_cols and self.y_scatter):
@@ -531,7 +519,7 @@ class ABuild(cm.ChipletBuild):
                     for k in self.chips for c in range(self.NC)}
         self.p1c = {c: self.cx_chip(self.ROOT).at(c).l1(f"{self.TAG}_p1c", self.xch_bytes) for c in range(self.NC)}
         self.kbuf, self.vbuf, self.consts, self.sweep_bufs, self.o8 = {}, {}, {}, {}, {}
-        self.ofull, self.ywo, self.ywo_b = {}, {}, {}
+        self.ofull, self.ywo = {}, {}
         for cl in range(self.N_CL):
             l1 = self.l1_of(cl)
             self.kbuf[cl] = l1("kt", self.NP_T * self.TPP * self.TILE_B)   # every key tile of the prompt, A layout
@@ -540,19 +528,16 @@ class ABuild(cm.ChipletBuild):
             self.o8[cl] = l1("o8", R * (1 if self.wo_cols else self.NC) * self.HD)  # the chip's heads' o8, A layout
             if self.wo_cols:
                 self.ywo[cl] = l1("ywo", self.R * self.WOC * 2)           # the cluster's columns of y
-                if self.o_overlap:
-                    # the odd passes' (o_overlap): a pass's first GEMM then waits for the stores of the pass two back
-                    self.ywo_b[cl] = l1("ywo_b", self.R * self.WOC * 2)
             self.sweep_bufs[cl] = fa_sweep_alloc(lambda name, nb, l1=l1: l1(name, nb), self.sweep_cfg(1))
         self._pb = {}
 
     def _yw(self, cl, i):
-        """Cluster cl's W_O output buffer for pass i: one, or (o_overlap) one for the even passes, one for the odd."""
-        return self.ywo_b[cl] if self.o_overlap and i % 2 else self.ywo[cl]
+        """Cluster cl's W_O output buffer for pass i (one for every pass)."""
+        return self.ywo[cl]
 
     def _ywk(self, cl, s, i):
         """The key of _ywo_war for GEMM s of pass i on cluster cl: the stores that read the buffer it writes."""
-        return (cl, s, i % 2 if self.o_overlap else 0)
+        return (cl, s, 0)
 
     def l1_of(self, cl):
         k, c = self.chip(cl), self.local(cl)
@@ -679,7 +664,7 @@ class ABuild(cm.ChipletBuild):
                                             BingoMemSymbol(f"{T}_xtflag", offset=i * self.NXT * 64),
                                             self.h_seq[m].address + 64, 1, self.XT, self.NXT, m, self.engine[R]),
                 after=list(after), ahead_of_rings=ahead_of_rings)
-        return self.node(R, 0, self.roles["dm"], f"x_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
+        return self.broadcast_put(R, 0, f"x_bput_i{i}",
                          SnaxBingoKernelIdmaPutFlaggedArgs(
                              self.xsrc(i * self.XB), self.xland(i * self.XB),
                              self.XB, BingoMemSymbol(f"{T}_xflag", offset=i * 64), value=1, bcast=True, also_here=True),
@@ -718,8 +703,6 @@ class ABuild(cm.ChipletBuild):
         if self.x_row_tiles:
             # x_row_tiles: one fetch a row tile, each polling its own multicast tiles' flags; the A layout keeps a row
             # tile's bytes together (row tile outermost), so each is one contiguous copy
-            if getattr(self, "x_ahead", False):
-                raise ValueError("params x_row_tiles: not with x_ahead (it orders the fetch as one task)")
             mt = self.R // 16
             rb = self.XB // mt
             if rb % self.XT:
@@ -751,8 +734,6 @@ class ABuild(cm.ChipletBuild):
             return out
         if xx:
             # x_split_frac: one wait, then the iDMA's part and the xDMA's at once; the consumers wait for both
-            if getattr(self, "x_ahead", False):
-                raise ValueError("params x_split_frac: not with x_ahead (it orders the fetch as one task)")
             w = self.nd(cl, "dm", f"x_wait_i{i}", "__snax_bingo_kernel_wait_flags",
                         SnaxBingoKernelWaitFlagsArgs(flag, 1, 1), list(deps))
             self.dfg.bingo_add_order_edge(self.queued_of(put), w)
@@ -804,7 +785,7 @@ class ABuild(cm.ChipletBuild):
         d, b, R, HD = self.d, self.pb(cl, i), self.R, self.HD
         mt, kb = R // 16, HD // 4                     # row tiles; 4-column blocks of a head in the A layout
         self.rope_ld[cl, i] = self.copy(cl, f"rope_ld_i{i}", BingoMemSymbol(f"{self.TAG}_rope", offset=i * self.ROPE_B),
-                                       b["rope"], self.ROPE_B, [] if self.x_ahead else self._rope_war.get(cl, []))
+                                       b["rope"], self.ROPE_B, self._rope_war.get(cl, []))
         cst = self.consts[cl]
         x_readers, d2a = [], {"q": [], "kv": []}           # every projection GEMM reads the pass's x
         vq = []
@@ -1119,7 +1100,7 @@ class ABuild(cm.ChipletBuild):
                 return prev[0]
             # one multicast source at a time: behind the previous pass's o8 multicast
             prev_mc = [self._o_mc_last] if getattr(self, "_o_mc_last", None) is not None else []
-            self._o_mc_last = self.node(R, 0, self.roles["dm"], f"o_bput_i{i}", "__snax_bingo_kernel_idma_put_flagged",
+            self._o_mc_last = self.broadcast_put(R, 0, f"o_bput_i{i}",
                                         SnaxBingoKernelIdmaPutFlaggedArgs(self.xland(base), self.xland(base), NH * OB,
                                                                           BingoMemSymbol(f"{T}_omflag", offset=i * 64),
                                                                           value=1, bcast=True), deps + xl + prev_mc)
@@ -1135,7 +1116,7 @@ class ABuild(cm.ChipletBuild):
         w = nwait()
         # the gather into L1, A layout [R, H]: head h's [R, 128] (row tiles of 16) to columns 128 h .. of every row tile
         def gather(cl, src, deps):
-            deps = list(deps) + ([] if self.o_overlap else self._ofull_war.get(cl, [])) + (list(nxt[cl]) if nxt else [])
+            deps = list(deps) + self._ofull_war.get(cl, []) + (list(nxt[cl]) if nxt else [])
             run = HD // 4 * 64                            # a head's row tile, contiguous on both sides
             if self.o_get_xdma:
                 # o_get_split_frac: the last hd heads by the iDMA, beside the xDMA's
@@ -1305,9 +1286,6 @@ class ABuild(cm.ChipletBuild):
 
     # ---- the attention ------------------------------------------------------------------------------------------------
     def build(self):
-        if self.o_overlap:
-            raise ValueError("params o_overlap: the stage-678 app only. In the block, pass i + 1's o8 waits for that pass's x "
-                             "fetch, which follows pass i's y stores on the DM core: the order would close a cycle")
         R, dm, xdma = self.ROOT, self.roles["dm"], self.roles["xdma"]
         self.slot, self.tile_ready, self.rope_ld, self._rope_war, self._o8_war = {}, {}, {}, {}, {}
         self._first_ld, self._proj_lds, self._x_first, self._x_last, self._last_sm = {}, {}, {}, {}, {}
@@ -1424,7 +1402,7 @@ class ABuild(cm.ChipletBuild):
                     if s == 0 and c == 0 and i + 1 < self.NP:
                         first.append(puts[i + 1])
                     wo_tasks = [xch_reader[("wo", cl)][-1] for cl in range(self.N_CL) if self.local(cl) == c]
-                    red = self.node(R, c, xdma, f"y_chain_i{i}s{s}c{c}", "__snax_bingo_kernel_xdma_chain_gather", ga,
+                    red = self.chain_gather(R, c, f"y_chain_i{i}s{s}c{c}", ga,
                                     wo_tasks + p1_reader.get((c, slot), []) + first)
                     last_red = red
                     for k in self.chips:

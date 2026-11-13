@@ -12,8 +12,8 @@ cache, on the 16 + 4 chiplet platform, every step on the device, the two decode 
 THE BLOCKS are the decode modes of the prefill mappings, built with shared=the layer: the attention is
 llama3_decode_mc.py's (a query head a cluster, a key/value group on a column's chip pair, every projection a one-row
 GEMV, each chip's half of its group's cache from its memory chip's HBM, the new key and value appended there); the FFN is
-ffn/common/ffn_decode_mc.py's (the prefill's single pass on one 16-row tile, the token's row 0; down by output columns,
-ChainGathers into the root).
+ffn/common/ffn_decode_mc's (the prefill's single pass for the token's row, every weight multiply a GEMV; down by output
+columns, ChainGathers into the root).
 
 THE I/O. x, the residual stream entering the layer, is one FP16 row in the HBM of the root's memory chip (0x20); the
 layer's output row goes into that HBM. Weights and the KV cache stream from the memory chips' HBM as in the blocks; the
@@ -28,10 +28,9 @@ attention gathers y in the root's L3, the FFN folds Y into the root):
                  the attention's x fetches wait for it
     attention    the GQA decode block; its y (W_O's raw FP16 row) stays in the root's L3
     glue         y's row into L1 (DM), times W_O's column factors, plus x: h (kept in L1 for the final residual);
-                 RMSNorm, times the post-attention gain, quantised: the FFN's X row (INT8, 4 KiB). The root's DM core
-                 multicasts it from L1 into every chip's L3 behind one flag, where the FFN's x_row fetch scatters it into
-                 row 0 of each cluster's zeroed X tile. params layer.stop attn: h and X into the root memory chip's HBM
-                 instead, and the layer ends there
+                 RMSNorm, times the post-attention gain, quantised: the FFN's X row in a_row (X FOR THE FFN below),
+                 which the root's DM core multicasts from L1 into every chip's L3 behind one flag. params layer.stop
+                 attn: h and X into the root memory chip's HBM instead, and the layer ends there
     FFN          the FFN decode block on that X; its Y_raw row ends in the root's cluster 0 L1
     final        Y_raw times the down projection's column factors, plus h: the output row, written into the HBM
 
@@ -43,7 +42,7 @@ L1 -> own L3, local, so no remote read meets a push into that L3 (the HBM -> own
 layer's collectives are three multicasts from one source (the root's cluster-0 DM core: x, the attention's o rows, X) and
 the FFN's ChainGathers, which run one at a time; each is a dependency descendant of the one before (x -> the sweeps -> o;
 o -> W_O -> y -> the glue -> X; X -> every chip's X wait -> the down GEMMs -> the first gather -> the next gathers), so no
-two of them are ever in flight together. _check_collectives proves it on the graph (every pair ordered by a path).
+two of them are ever in flight together. The compiler proves the multicasts ordered (passes/bingo_dfg_collectives.py).
 
 THE WEIGHT STREAM. The decode is bound by the memory-chip links, and most of their bytes are the FFN's weights. Each
 cluster posts its rings' runs into its memory chip's push engine queue: the attention's first posts follow the start, the
@@ -79,8 +78,8 @@ second ChainGather, o multicast, W_O by output columns; each chip's W_O pushes w
     y            the root's L3 row lk_yrow, behind the block's y wait
     append       made at the layer's end (KsBuild.kv_append): the new key's chip's cluster 1 writes the new K and V^T
                  tiles into its memory chip's HBM behind the FFN's last Y copies (stop attn: behind the y wait)
-The proof (_check_collectives, attn ks) adds to the pairwise order of every multicast and ChainGather (the x, q halves,
-m*, o and X multicasts; the statistics', the reduce's and the FFN's ChainGathers): every ChainGather runs after every
+The proof (_check_collectives, attn ks), beside the compiler's order of the multicasts (the x, q halves, m*, o and X
+multicasts; the statistics', the reduce's and the FFN's ChainGathers): every ChainGather runs after every
 push of a memory chip's push part has landed (the part's ring loads or cache fetches among its ancestors) or before the
 part starts (the part's first post among its descendants), for every part of both blocks (the cache and every run of
 every ring); and every device write into HBM (the appends, the output row, stop attn's h
@@ -88,19 +87,18 @@ and X) follows every multicast, every ChainGather and every chip's last ring loa
 after_reduce and ffn_prefetch after, the FFN's own gathers need ffn.chains_after_stream (every gather behind every
 cluster's last down GEMV).
 
-X FOR THE ALL-GEMV FFN (ffn.gu_gemv, or stop attn's params layer.x_arow): X in a_row, value c at byte (c // 4) * 8 + c % 4
+X FOR THE FFN (every weight multiply a GEMV; or stop attn's params layer.x_arow): X in a_row, value c at byte (c // 4) * 8 + c % 4
 (2 x hidden bytes): the glue spreads the normed FP16 row's 8-byte atoms 16 bytes apart into the input norm's zeroed FP16
 a_row row (xDMA, its gaps still zero) and quantises it (SIMD, the gaps stay zero); the root's DM core multicasts the
 8 KiB into every chip's L3 at the FFN's landing area (fd_xland) behind fd_xtflag, where the FFN's flagged fetch takes it
 into L1. The FFN's Y_raw row ends in the root's cluster 0 L1 as before; the final residual reads it there.
 
 PARAMETERS (params.hjson): the platform and the graph switches both blocks share, then `attn` (llama3_decode_mc.py's
-params, or with layer.attn ks llama3_decode_ks_mc.py's), `ffn` (ffn_decode_mc.py's, ffn_prefill_mc.py's) and `layer`:
+params, or with layer.attn ks llama3_decode_ks_mc.py's), `ffn` (ffn_decode_mc's, ffn_prefill_mc's) and `layer`:
 attn (hp | ks), stop (full | attn), ffn_prefetch (after | early), x_arow (stop attn: X into HBM in a_row; stop full
-takes ffn.gu_gemv), args_phase_bytes (at the top level: each cluster's task args in phases of at most this many bytes).
+takes the FFN's a_row), args_phase_bytes (at the top level: each cluster's task args in phases of at most this many bytes).
 """
 
-import itertools
 import os
 import sys
 
@@ -244,7 +242,7 @@ class LayerBuild(cm.ChipletBuild):
         params layer (stop, ffn_prefetch, attn, x_arow); with one L3 region for both weight rings, the layer's staging
         (AliasStaging); the synthetic FFN registered (llama3_data.register_ffn); then the parts, each a block over the
         layer's graph and staging with its own params: the attention (AttnPart, or AttnPartKs with attn ks) and, stop
-        full, the FFN (FfnPart). X's form follows the FFN's (in a_row with ffn.gu_gemv)."""
+        full, the FFN (FfnPart). X's form follows the FFN's (in a_row)."""
         common = {k: v for k, v in p.items() if k not in ("attn", "ffn", "layer")}
         lp = dict(p.get("layer", {}))
         super().__init__(args, common, plat, hw)
@@ -264,7 +262,7 @@ class LayerBuild(cm.ChipletBuild):
         self.ks = self.attn_kind == "ks"
         Part = AttnPartKs if self.ks else AttnPart
         if self.stop == "full" and "x_arow" in lp:
-            raise ValueError("params layer.x_arow: stop full takes X's form from the FFN (ffn.gu_gemv)")
+            raise ValueError("params layer.x_arow: stop full takes X's form from the FFN (a_row)")
         # after: one L3 region for both blocks' weight rings (no attention chunk is read once a chip's FFN pushes start)
         self.ring_alias = self.stop == "full" and self.ffn_prefetch == "after"
         if self.ring_alias:
@@ -282,8 +280,8 @@ class LayerBuild(cm.ChipletBuild):
             pf = dict(common, **p["ffn"])
             pf["model"] = llama3_data.MODEL
             self.ffn = FfnPart(self, args, pf, plat, hw)
-        # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: ffn.gu_gemv)
-        self.x_arow = bool(self.ffn.gu_gemv) if self.ffn is not None else bool(lp.get("x_arow", False))
+        # X's form: the INT8 row, or (x_arow) a_row, the all-GEMV FFN's X (stop full: the FFN's form)
+        self.x_arow = True if self.ffn is not None else bool(lp.get("x_arow", False))
 
     def mem_handles(self):
         """The data, the golden and the memory; no task is made here. The attention's
@@ -386,8 +384,8 @@ class LayerBuild(cm.ChipletBuild):
 
     def _bcast(self, name, src, dst, nb, flag, deps):
         """The root's DM core multicasts `src` (its L1) into `dst` of every chip's L3, its own included, then `flag`."""
-        return self._r("dm", name, "__snax_bingo_kernel_idma_put_flagged",
-                       SnaxBingoKernelIdmaPutFlaggedArgs(src, dst, nb, flag, value=1, bcast=True, also_here=True), deps)
+        return self.broadcast_put(self.ROOT, 0, name, SnaxBingoKernelIdmaPutFlaggedArgs(
+            src, dst, nb, flag, value=1, bcast=True, also_here=True), list(dict.fromkeys(deps)))
 
     # ---- the window and the input norm --------------------------------------------------------------------------------
     def open_window(self, extra):
@@ -562,9 +560,8 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- proofs and reports -------------------------------------------------------------------------------------------
     def _check_collectives(self):
-        """Every multicast (a device bcast put, a memory chip's HBM multicast) and every ChainGather of the graph is
-        ordered against every other by a path of dependency and order edges, so no two are ever in flight together.
-        No device copy reads HBM into an L3 buffer. attn ks: also every ChainGather against every push part of both
+        """No device copy reads HBM into an L3 buffer (the multicasts and ChainGathers among themselves are the
+        compiler's: passes/bingo_dfg_collectives.py). attn ks: also every ChainGather against every push part of both
         blocks and every device write into HBM after all of them (_check_pushes). Returns (multicasts, gathers)."""
         spans = self.collectives()      # each collective by its first task, descendants of its done one; before the view
         G = self.dfg.bingo_order_view()
@@ -573,10 +570,6 @@ class LayerBuild(cm.ChipletBuild):
         ch = [s for s, _, kind in spans if kind == "chain"]
         items = sorted(mc + ch, key=lambda t: t.node_id)
         desc = {t: nx.descendants(G, done[t]) for t in items}
-        bad = [(a.node_name, b.node_name) for a, b in itertools.combinations(items, 2)
-               if b not in desc[a] and a not in desc[b]]
-        if bad:
-            raise ValueError(f"{len(bad)} unordered collective pairs, e.g. {bad[:4]}")
         hbm_l3 = [t.node_name for t in self.dfg.node_list if t.kernel_name in COPIES
                   and isinstance(t.kernel_args.dst_addr, BingoMemSymbol)
                   and (isinstance(t.kernel_args.src_addr, int)
@@ -585,8 +578,8 @@ class LayerBuild(cm.ChipletBuild):
         if hbm_l3:
             raise ValueError(f"device copies from HBM into L3: {hbm_l3[:4]}")
         more = self._check_pushes(G, mc, ch, desc) if self.ks else ""
-        print(f"[{self.TAG}] collectives: {len(mc)} multicasts and {len(ch)} ChainGathers, every pair ordered by a path; "
-              f"no device copy from HBM into L3{more}")
+        print(f"[{self.TAG}] collectives: {len(mc)} multicasts and {len(ch)} ChainGathers; no device copy from HBM into "
+              f"L3{more}")
         return len(mc), len(ch)
 
     def _push_parts(self):
@@ -648,7 +641,7 @@ class LayerBuild(cm.ChipletBuild):
         full = ("__snax_bingo_kernel_gemm_full", "__snax_bingo_kernel_gemm_minimal")
         bad = [t.node_name for t in arr if t.kernel_name in full
                and (t.node_id < self.ffn_first if self.ffn is not None else True)]
-        if self.ffn is not None and self.ffn.gu_gemv:
+        if self.ffn is not None:
             bad += [t.node_name for t in arr if t.kernel_name in full and t.node_id >= self.ffn_first]
         if bad:
             raise ValueError(f"gemm_full / gemm_minimal tasks where every array task is a GEMV or an FA matmul: {bad[:4]}")

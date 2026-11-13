@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The data of DeepSeek-V2-Lite's layer-1 MLA attention for ONE DECODE STEP over a cache (FaDecodeData), and the D2D
-links a unicast or a broadcast crosses (_route, _bcast_tree): what the key-split decode (fa_decode_ks_mc.py) and the
+links a unicast or a broadcast crosses (_route, _bcast_tree): what the key-split decode (fa_decode_ks_mc) and the
 whole-layer decode (../../dsv2/common/dsv2_decode_mc.py) build on.
 
 The token at position P (params cache, default 1,024) attends to keys 0 .. P: the P cached keys and its own. The
@@ -21,8 +21,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fa_prefill_data  # noqa: E402
-from fa_prefill_mc import BR, D_QK, D_V  # noqa: E402
+from fa_prefill_data import D_QK, D_V  # noqa: E402
 
+BR = 16                        # query rows a tile: the SIMD's FP16 lanes
 PIECE = 16                     # tokens a piece of the keys
 
 

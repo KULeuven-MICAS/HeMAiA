@@ -11,7 +11,7 @@ chiplet platform, in ONE graph, from the two blocks' mappings:
 
 THE BLOCKS. The attention is ../../common/llama3_attn_mc.py's block (params attn): a query head a cluster, passes of `rows`
 tokens, each pass's x multicast from the root memory chip's HBM by its push engine, y scattered row tile by row tile
-into the tiles' owners. The FFN is ../../../ffn/common/ffn_prefill_mc.py's block (params ffn): X of each pass multicast
+into the tiles' owners. The FFN is ../../../ffn/common/ffn_prefill_mc's block (params ffn): X of each pass multicast
 from the root memory chip's HBM by the same engine, the down projection split by output columns, ChainGathers into the
 root, which scatters Y_raw row tile by row tile into the tiles' owners (ffn.y_scatter). params attn.passes and
 layer.ffn_passes build only the first passes of the prompt (a proof of concept): the data, the scales, the causal mask
@@ -62,14 +62,14 @@ chunks land under the attention's last pass.
 
 THE COLLECTIVES. The multicasts in time: x_0, x_1, o8 of pass 0, x_2, o8 of pass 1, ..., o8 of the last pass, then the FFN's
 X multicasts, then the FFN's ChainGathers. Each o8 multicast waits for the next pass's x multicast, each x multicast for the
-o8 multicast two passes back; _check_collectives proves every pair of multicasts and ChainGathers ordered by a path.
+o8 multicast two passes back; the compiler proves the multicasts ordered (passes/bingo_dfg_collectives.py).
 
 CHECKS, byte for byte against the device's arithmetic end to end, sampled: a few 2 KiB windows of x8 and X in HBM, of y and
 Y_raw in their owners' L3, and whole rows of h and of the output in HBM, spread over the passes and chips. After the end
 stamp each sample is copied into one L3 buffer on the root (from HBM behind its flag), where the root's host compares it.
 
 PARAMETERS (params.hjson): the platform and graph switches both blocks share (and args_phase_bytes: each cluster's task
-args in phases of at most this many bytes), then `attn` (llama3_attn_mc.py's params), `ffn` (ffn_prefill_mc.py's) and
+args in phases of at most this many bytes), then `attn` (llama3_attn_mc.py's params), `ffn` (ffn_prefill_mc's) and
 `layer`: cluster (0 | 1, the steps' cluster), ffn_passes (the FFN's built passes, at most attn.passes), norm_lead,
 glue_lag, final_lag, final_slice, inplace_norm (the input norm's RMSNorm in place: half its L1), piece_rows,
 norm_cluster, glue_cluster, final_cluster, final_step, final_root_rows, x_slots, alias_l3, rope_hbm.
@@ -1094,25 +1094,6 @@ class LayerBuild(cm.ChipletBuild):
         return checks
 
     # ---- proofs -------------------------------------------------------------------------------------------------------
-    def _check_collectives(self):
-        """Every multicast (an HBM multicast, a device bcast put) and every ChainGather ordered against every other by a
-        path of dependency and order edges: sorted by a topological order, each one reaches the next."""
-        import networkx as nx
-        spans = self.collectives()      # each collective by its first task and its done one; before the view
-        G = self.dfg.bingo_order_view()
-        done = {s: e for s, e, _ in spans}
-        items = [s for s, _, _ in spans]
-        pos = {t: i for i, t in enumerate(nx.topological_sort(G))}
-        items.sort(key=lambda t: pos[t])
-        # a split ChainGather runs from its start to its wait: the one before it must end before that start
-        bad = [(a.node_name, b.node_name) for a, b in zip(items, items[1:]) if not nx.has_path(G, done[a], b)]
-        if bad:
-            raise ValueError(f"{len(bad)} collective pairs not ordered by a path, e.g. {bad[:4]}")
-        kinds = {}
-        for t in items:
-            kinds[t.kernel_name.split("kernel_")[-1]] = kinds.get(t.kernel_name.split("kernel_")[-1], 0) + 1
-        print(f"[{self.TAG}] collectives: {len(items)} ({kinds}), each ordered before the next by a path")
-
     def _reuse_groups(self):
         """params layer.x_slots / alias_l3: [(earlier users, the task that reuses their slot or region)] of every buffer
         reuse the rings and aliases make. A slot's next multicast and every task of its previous pass that reads or
@@ -1287,13 +1268,12 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- emission -----------------------------------------------------------------------------------------------------
     def finish(self, app_name):
-        A, F = self.attn, self.ffn
+        F = self.ffn
         bad = [b for b in F.check_hazards() if "root fold slot" not in b]
         if bad:
             raise ValueError(f"{len(bad)} FFN buffer hazards, e.g. " + "; ".join(bad[:4]))
         print(f"[{self.TAG}] FFN buffer hazards: none (A16, A16a, A8, X, output slots; every cluster)")
         self._check_fold_slots()
-        self._check_collectives()
         writes = [t for t in self.dfg.node_list if t.kernel_name in COPIES
                   and isinstance(getattr(t.kernel_args, "dst_addr", None), BingoMemFixedAddr)]
         print(f"[{self.TAG}] {len(writes)} device writes into HBM (" + ", ".join(

@@ -9,12 +9,12 @@ the 16 + 4 chiplet platform, every step on the device, in ONE graph built from t
 
     x -> RMSNorm (input_layernorm) -> MLA decode -> + x = h -> RMSNorm (post_attention_layernorm) -> MoE | FFN -> + h
 
-    attention   ../../fa/common/fa_decode_ks_mc.py (FaDecodeKs): the keys split over the chips (one cached tile a chip
+    attention   ../../fa/common/fa_decode_ks_mc (FaDecodeKs): the keys split over the chips (one cached tile a chip
                 on its cluster 0, the token's tile on C00's cluster 1), every weight multiply a one-token GEMV, each
                 chip's cache shard streamed through its own ring; the token's key appended to the cache in HBM
-    MoE         ../../moe/common/moe_decode_mc.py (layer 1): the router on the device, the routed experts' pieces
+    MoE         ../../moe/common/moe_decode_mc (layer 1): the router on the device, the routed experts' pieces
                 streamed once the route is known, every GEMM INT4 but the router's (INT8)
-    dense FFN   ../../ffn/common/ffn_decode_mc.py (layer 0): the prefill's mapping as one 16-row tile, INT4
+    dense FFN   ../../ffn/common/ffn_decode_mc (layer 0): the prefill's mapping for the token's row on the GEMV, INT4
 
 Each block keeps its decode mapping (the prefill's block mapping cut to T = 1); the layer replaces only what the blocks
 did on the host or through HBM at their edges: where x comes from, where the attention's y goes, where the second
@@ -51,10 +51,10 @@ Every exchange buffer is zeroed before the window (the block's query and m* flag
 they are written, as the block alone zeroes them). C00's ring starts once x's multicast is done (the input norm's HBM
 read and x's landing in C00's own L3 run beside no push into that L3). The collectives: x's multicast before every x
 fetch (its flag), so before the block's query, m*, o~ and o8 multicasts and its chains, which the block orders among
-themselves (fa_decode_ks_mc.py, THE COLLECTIVES); from X's multicast on as below. The attention's chains run after
-every one of its pushes has landed (its chains_after_stream) and the second block's pushes start after X's multicast.
+themselves (fa_decode_ks_mc/README.md, THE COLLECTIVES); from X's multicast on as below. The attention's chains run
+after every one of its pushes has landed and the second block's pushes start after X's multicast.
 
-THE GEMV SECOND BLOCK (params moe.gemv, ffn.gu_gemv). X is the token's INT8 row in a_row (2 x 2,048 B, the layout
+THE GEMV SECOND BLOCK (the MoE and the FFN decode always). X is the token's INT8 row in a_row (2 x 2,048 B, the layout
 above): the glue spreads the gained FP16 row into the same zeroed FP16 buffer and quantises it at s_h; C00 multicasts
 the 4,096 B into the block's landing (md_xland or fn_xland) behind its flag. The final residual takes the block's y row
 as above: the MoE's root fold rows are y's two halves in column order, the FFN's Y16 row is on the root's cluster 0. The
@@ -98,8 +98,8 @@ post_attention_layernorm (the FFN data's).
 
 PARAMETERS (params.hjson): the platform and the graph switches every block shares (num_chiplets, num_clusters,
 static_l1, l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, desc_in_image, fast_host_init, d2d_ddr,
-d2d_rx_yield, relay_per_gather), then `attn` (fa_decode_ks_mc.py's), `moe` (moe_decode_mc.py's) or `ffn`
-(ffn_decode_mc.py's, with y_dequant), and `layer`: mlp (moe | ffn: the second block), stop (full | attn), x_arow (stop
+d2d_rx_yield), then `attn` (fa_decode_ks_mc's), `moe` (moe_decode_mc's) or `ffn`
+(ffn_decode_mc's, with y_dequant), and `layer`: mlp (moe | ffn: the second block), stop (full | attn), x_arow (stop
 attn: X in a_row; stop full takes the second block's form), chains_after_stream, x_load_first (the attention rings of
 the other chips the root's memory chip feeds start after the input norm's HBM read of x).
 """
@@ -165,8 +165,6 @@ class AttnKsPart(fdk.FaDecodeKs):
     """The key-split MLA decode in the layer: its window is the layer's, its x the input norm's
     multicast of the a_row, its y row copied from the root's L3 into the glue's L1, its append and checks made by the
     layer."""
-    x_on_host = False                # x is the input norm's (LayerBuild.input_norm_ks)
-    y_to_hbm = False                 # y stays on the root for the glue (stage_store)
 
     def __init__(self, layer, args, p, plat, hw):
         self.layer = layer
@@ -176,7 +174,7 @@ class AttnKsPart(fdk.FaDecodeKs):
         self.go = self.layer.open_window(extra)
         return self.go
 
-    def x_multicast(self, go, bcast):
+    def x_multicast(self, go):
         return self.layer.attn_x_put
 
     def stage_store(self, yw):
@@ -200,9 +198,6 @@ class AttnKsPart(fdk.FaDecodeKs):
 
     def end_window(self, after):
         self.layer.attn_ends = [t for t in after if t is not None]
-
-    def _checks(self):
-        """The layer makes the attention's checks once its end stamp exists (LayerBuild.attn_checks)."""
 
 
 class MoePart(mdm.DBuild):
@@ -236,7 +231,7 @@ class MoePart(mdm.DBuild):
     def _checks(self):
         """The block's checks but y in HBM (the layer checks its output there): the route table's entry on the root,
         the root cluster 1's row lists, the token's row of the root cluster 0's A8 of its shared piece and of its first
-        routed piece (a8_gold: row 0 of the row-major A8, or with gemv the A8 row in a_row)."""
+        routed piece (a8_gold: the A8 row in a_row)."""
         L, R, Tg = self.layer, self.ROOT, self.TAG
         checks = [("route", BingoMemSymbol(f"{Tg}_rland", chip_id=R), self._route_bytes(), mdm.ROUTE_B)]
         lb = self._lists_bytes(R)
@@ -281,8 +276,7 @@ class FfnPart(ffd.DBuild):
         self.end, self.check_copies = self.layer.end, self.layer.check_copies
 
     def _checks(self):
-        """The block's A8 check (a8_root: the first 2 KiB of the root's A8, the token's row 0 and the zero rows, or with
-        gu_gemv the chip's A8 row in a_row); Y_raw is checked as the layer's output."""
+        """The block's A8 check (a8_root: the chip's A8 row in a_row); Y_raw is checked as the layer's output."""
         L, R = self.layer, self.ROOT
         buf, img, n = self.a8_root()
         L.close_checks([("a8_root", L.stash("a8_root", R, 0, buf, n, []), img, n)])
@@ -325,13 +319,13 @@ class LayerBuild(cm.ChipletBuild):
         if self.stop == "full":
             pm = dict(common, **p[self.mlp_kind])
             if self.mlp_kind == "moe":
-                M = self.mlp = MoePart(self, args, pm, plat, hw)
-                self.mlp_gemv = M.gemv
+                self.mlp = MoePart(self, args, pm, plat, hw)
+                self.mlp_gemv = True                # the MoE decode runs every weight multiply on the GEMV
             else:
                 F = self.mlp = FfnPart(self, args, pm, plat, hw)
-                if not F.y_dequant or not F.x_row:
-                    raise ValueError("params ffn: y_dequant and x_row (the final residual adds Y16 to h; X is one row)")
-                self.mlp_gemv = F.gu_gemv
+                if not F.y_dequant:
+                    raise ValueError("params ffn: y_dequant (the final residual adds Y16 to h)")
+                self.mlp_gemv = True                # the FFN decode runs every weight multiply on the GEMV
             # X as the second block reads it: one INT8 row, or with the GEMV the row in a_row
             if "x_arow" in lp and bool(lp["x_arow"]) != self.mlp_gemv:
                 raise ValueError(f"params layer.x_arow={lp['x_arow']}: the second block takes X "
@@ -527,10 +521,8 @@ class LayerBuild(cm.ChipletBuild):
                         SnaxBingoKernelSimdFp16ToInt8Args(b["ar16"], b["xa"], beats=simd_beats(4 * HIDDEN), rows=1,
                                                           inv_scale_f32bits=_f32bits(A.d.s_x.inv)), [ar])
         self.n_ld = ld
-        self.attn_x_put = self._node(gc, "dm", "n_bput", "__snax_bingo_kernel_idma_put_flagged",
-                                     SnaxBingoKernelIdmaPutFlaggedArgs(
-                                         b["xa"], A.l3("xland"), fdk.XB, A.l3("xtflag"), value=1, bcast=True,
-                                         also_here=True), [qz])
+        self.attn_x_put = self.broadcast_put(self.ROOT, gc, "n_bput", SnaxBingoKernelIdmaPutFlaggedArgs(
+            b["xa"], A.l3("xland"), fdk.XB, A.l3("xtflag"), value=1, bcast=True, also_here=True), [qz])
 
     def glue(self):
         """y dequantised, plus x: h; RMSNorm, the post-attention gain, INT8 (with x_arow in a_row: the gained row spread
@@ -559,10 +551,8 @@ class LayerBuild(cm.ChipletBuild):
                                                               inv_scale_f32bits=_f32bits(self.s_h.inv)), [gn])
         self.g_h, self.g_x = ad, qz
         if self.stop == "full":
-            self.mlp_put = self._node(gc, dm, "g_bput", "__snax_bingo_kernel_idma_put_flagged",
-                                      SnaxBingoKernelIdmaPutFlaggedArgs(b["x8"], self.mlp_land, self.xbytes,
-                                                                        self.mlp_flag, value=1, bcast=True,
-                                                                        also_here=True), [qz])
+            self.mlp_put = self.broadcast_put(self.ROOT, gc, "g_bput", SnaxBingoKernelIdmaPutFlaggedArgs(
+                b["x8"], self.mlp_land, self.xbytes, self.mlp_flag, value=1, bcast=True, also_here=True), [qz])
             if self.mlp_kind == "moe":
                 # h's second half into the root's cluster 1, where the final step adds it to that cluster's half of y
                 self.h1_cp = self._node(gc, dm, "g_h1", "__snax_bingo_kernel_idma_1d_copy",
@@ -729,9 +719,9 @@ class LayerBuild(cm.ChipletBuild):
 
     # ---- checks of the graph -------------------------------------------------------------------------------------
     def check_collectives(self):
-        """Every two multicasts, and every multicast and ChainGather, ordered by the graph (dependency and flag edges);
-        every write into HBM after every multicast and chain; the window's one device read of HBM (the input norm's x)
-        before every multicast and chain. Raises otherwise."""
+        """Every write into HBM after every multicast and chain; the window's one device read of HBM (the input norm's
+        x) before every multicast and chain; then the push streams. Raises otherwise. (The multicasts and chains among
+        themselves are the compiler's: passes/bingo_dfg_collectives.py.)"""
         import networkx as nx
         spans = self.collectives()      # each collective by its first task, descendants of its done one; before the copy
         gr = nx.DiGraph(self.dfg)
@@ -741,18 +731,14 @@ class LayerBuild(cm.ChipletBuild):
         ch = [s for s, _, kind in spans if kind == "chain"]
         coll = mc + ch
         desc = {t: nx.descendants(gr, done[t]) for t in coll}
-        bad = [(a.node_name, b.node_name) for i, a in enumerate(coll) for b in coll[i + 1:]
-               if (a in mc or b in mc) and b not in desc[a] and a not in desc[b]]
-        if bad:
-            raise ValueError(f"the layer: {len(bad)} multicast / chain pair(s) may run at once: {bad[:6]}")
         late = [(a.node_name, w.node_name) for a in coll for w in self.hbm_writes if w not in desc[a]]
         if late:
             raise ValueError(f"the layer: {len(late)} HBM write(s) not after a multicast or chain: {late[:6]}")
         early = [a.node_name for a in coll if a not in nx.descendants(gr, self.n_ld)]
         if early:
             raise ValueError(f"the layer: the input norm's HBM read is not before {early[:6]}")
-        print(f"[{self.TAG}] collectives: {len(mc)} multicasts and {len(ch)} chains, each ordered with every "
-              f"multicast; {len(self.hbm_writes)} HBM writes after all of them, the input norm's HBM read before")
+        print(f"[{self.TAG}] collectives: {len(mc)} multicasts and {len(ch)} chains; {len(self.hbm_writes)} HBM writes "
+              f"after all of them, the input norm's HBM read before")
         self.check_streams(gr, ch, desc)
 
     def check_streams(self, gr, ch, desc):
@@ -826,13 +812,12 @@ class LayerBuild(cm.ChipletBuild):
 
         for k in self.chips:
             add("attn", route(self.mem[k], k), A.ring_bytes[k])
-            add("attn", route(k, R), fdk.QROW + fdk.OAR + self.NC * 4 * fdk.QC + 2 * fdk.QC * len(A.kva[k])
-                + (fdk.XFER if A.m_exchange == "gather" else 0))
+            add("attn", route(k, R), fdk.QROW + fdk.OAR + self.NC * 4 * fdk.QC + 2 * fdk.QC * len(A.kva[k]))
         for nb in (fdk.XB, fdk.QB, fdk.XFER, fdk.BR * fdk.LAT, len(self.chips) * fdk.OAR):
             add("attn", tree(R, grid), nb)                # x, the query, m*, o~, the o8 row
         hops = A.order[1:] + [R]
         for a, b in zip(hops, hops[1:]):
-            add("attn", route(a, b), fdk.PB + (fdk.XFER if A.m_exchange == "chain" else 0))
+            add("attn", route(a, b), fdk.PB + fdk.XFER)    # the partial's chain and m*'s
         add("attn", route(self.mem[R], R), 2 * HIDDEN)
         a_ring = sum(A.ring_bytes.values())
         what = f"attention rings {a_ring:,} B (the cache shards streamed in them)"

@@ -18,7 +18,7 @@ calibration samples' absolute maximum mapped onto 127 (util/calib.py): the norme
 the SwiGLU output a8.
 
 THE GOLDEN is the device's own arithmetic (util/sim/common/hwmodel.py and fp.py; its GEMVs on float64 BLAS, gemv_utils.exact_gemv), stage by
-stage, for the tensor-parallel mapping the driver builds (ffn_prefill_mc.py):
+stage, for the tensor-parallel mapping the driver builds (ffn_prefill_mc):
 
     hq        = quant_i8(rmsnorm(x16) (.) gain, s_h)       on the root, staged
     g16[cl]    = d_port(hq @ Wgu[:, cols cl], k_x) (.) s_gu   every cluster cl its columns

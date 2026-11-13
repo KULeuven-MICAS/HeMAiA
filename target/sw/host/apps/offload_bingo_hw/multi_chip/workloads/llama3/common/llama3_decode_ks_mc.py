@@ -84,8 +84,8 @@ params wo_push:
 
 THE COLLECTIVES. Every multicast is the root cluster 0's DM core's (the q halves, m*, o), each a dependency descendant
 of the one before; the host's x multicast comes first; the two ChainGathers sit between them (q -> pass 1 -> stats
-chain -> m* -> pass 2 -> reduce chain -> o). _check_collectives proves every pair ordered by a path of the graph, and
-with wo_push after_reduce or before_chains every push part ordered against every ChainGather.
+chain -> m* -> pass 2 -> reduce chain -> o). The compiler proves the multicasts ordered (passes/bingo_dfg_collectives.py);
+_check_collectives, with wo_push after_reduce or before_chains, every push part ordered against every ChainGather.
 
 THE ORDERS. The compiler orders every device core's program (mini_compiler passes/bingo_dfg_schedule.py). Each DM core,
 in the order the tasks are made: x, the W_q chunks,
@@ -109,7 +109,6 @@ that writes into HBM only after all its collectives and pushes overrides it to r
 its end.
 """
 
-import itertools
 import os
 import sys
 
@@ -998,7 +997,7 @@ class KsBuild(lmd.DBuild):
                 ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
                     cm.remote, R, 0, others, src=self.xch_addr(0, self.OFF_MLOC), dst=self.xch_addr(0, self.OFF_MR),
                     size=XFER, junction=self.jct["Elementwise"], jct_csr0=EW_F16_MAX)
-            self.m_made = self.node(R, 0, xdma, "st_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
+            self.m_made = self.chain_gather(R, 0, "st_chain", ga,
                                     list(dict.fromkeys(before[k] for k in self.chips)))
         self.bcast_puts = []
         marr = self.broadcast("m", self.xch_view(R, 0, self.OFF_MR), XFER, self.OFF_MS, self.OFF_MFLAG,
@@ -1033,7 +1032,7 @@ class KsBuild(lmd.DBuild):
             ga = SnaxBingoKernelXdmaChainGatherArgs.fold_into(
                 cm.remote, R, 0, others, src=self.xch_addr(0, self.OFF_LOC), dst=self.dst_expr(), size=self.PBE,
                 junction=self.jct["Elementwise"], jct_csr0=cm.EW_F16_ADD, holds=[self.dst_buf])
-            self.o_chain = self.node(R, 0, xdma, "o_chain", "__snax_bingo_kernel_xdma_chain_gather", ga,
+            self.o_chain = self.chain_gather(R, 0, "o_chain", ga,
                                      list(dict.fromkeys(before[k] for k in self.chips)))
         # sync barrier: each chip's W_O runs behind its own barrier after the reduce, not the root's reduce itself
         br = self.kernel_barrier({R: [self.o_chain]})
@@ -1210,8 +1209,8 @@ class KsBuild(lmd.DBuild):
               f"({bw / 2**20:.3f} weights, {bc / 2**20:.3f} cache): {(bw + bc) / (gbps * 1e3):.1f} us at {gbps:.1f} GB/s")
 
     def _check_collectives(self):
-        """Every multicast (a device bcast put, a memory chip's HBM multicast) and every ChainGather is ordered against
-        every other by a path of dependency and order edges. wo_push after_reduce: every ring load and cache fetch of
+        """The push parts against the ChainGathers (the multicasts and ChainGathers among themselves are the
+        compiler's: passes/bingo_dfg_collectives.py). wo_push after_reduce: every ring load and cache fetch of
         the W_q and k / v runs precedes the first ChainGather, and every ring's W_O run is posted after the last;
         before_chains: every ring load of every part (W_O's included) and every cache fetch precedes the first.
         Returns (multicasts, gathers)."""
@@ -1232,11 +1231,7 @@ class KsBuild(lmd.DBuild):
         ch = [s for s, _, kind in spans if kind == "chain"]
         items = sorted(mc + ch, key=lambda t: t.node_id)
         desc = {t: nx.descendants(G, done[t]) for t in items}
-        bad = [(a.node_name, b.node_name) for a, b in itertools.combinations(items, 2)
-               if b not in desc[a] and a not in desc[b]]
-        if bad:
-            raise ValueError(f"{len(bad)} unordered collective pairs, e.g. {bad[:4]}")
-        msg = f"{len(mc)} multicasts and {len(ch)} ChainGathers, every pair ordered by a path"
+        msg = f"{len(mc)} multicasts and {len(ch)} ChainGathers"
         if self.wo_push == "after_reduce":
             anc, after = nx.ancestors(G, self.m_made), nx.descendants(G, self.o_chain)
             early = [t for t, j in self.load_chunk.items() if j < self.WO0 and t not in anc]

@@ -801,7 +801,7 @@ class DBuild(ABuild):
             if cl not in rcl:
                 self.dfg.bingo_add_order_edge(puts[cl], ow)
         # one multicast source at a time: x's has ended once every cluster holds x, which every o row follows
-        mc = self.node(R, 0, dm, "o_bput", "__snax_bingo_kernel_idma_put_flagged",
+        mc = self.broadcast_put(R, 0, "o_bput",
                        SnaxBingoKernelIdmaPutFlaggedArgs(self.l3("oland"), self.l3("oland"), d.NH * self.OB,
                                                          self.l3("omflag"), value=1, bcast=True), [ow, self.x_put])
         get = {}

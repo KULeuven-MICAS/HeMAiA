@@ -7,11 +7,12 @@ workload directories under `../` (and the decode FFNs under `../../dsv2` and `..
 
 ```
 ffn/common/
-  ffn_prefill_mc.py   PBuild: the prefill block, T tokens in passes of `rows`. Its docstring explains the mapping;
-                      every parameter is explained where __init__ reads it. run() is the entry point of the
-                      whole-block workloads under ../ (the stage apps' main_bingo.py are standalone)
-  ffn_decode_mc.py    DBuild(PBuild): one token on the prefill's mapping, one 16-row tile (GEMM or GEMV forms).
-                      run() is the entry point of the decode FFN workloads
+  ffn_prefill_mc/     PBuild: the prefill block, T tokens in passes of `rows`, one module a concern (params, memory,
+                      x, gate_up, passes, kernel, checks); its README.md explains the mapping and every parameter.
+                      run() is the entry point of the whole-block workloads under ../ (the stage apps' main_bingo.py
+                      are standalone)
+  ffn_decode_mc/      DBuild(PBuild): one token on the prefill's mapping, every weight multiply on the GEMV (params,
+                      memory, rows, passes, checks); its README.md explains it
   ffn_data.py         FFNData: the weights packed for the device, the static scales and the golden of the device's
                       arithmetic; load_weights and the SYNTHETIC registry of models without a checkpoint
   ffn.mk              the build a DeepSeek FFN variant's Makefile includes (Llama variants: ../../llama3/common/llama3.mk)
@@ -39,19 +40,19 @@ fabric.FabricBase                       util/sim/multichip/fabric.py
     ../<model>_prefill/stage*/          one stage alone (Stage0, Stage123, Stage45 in each main_bingo.py)
 ```
 
-A build runs `__init__` (params, data, golden, staging, rings, buffers), then `build()` (the task graph), then
-`finish(app_name)` (stamps, checks, emission). `PBuild` is grouped in that order:
+A build runs `__init__` (the parameters), `mem_handles()` (data, golden, staging, rings, buffers), then `build()` (the
+task graph), then `finish(app_name)` (stamps, checks, emission). `PBuild` is composed of one mixin a concern, in that
+order:
 
-| section of `ffn_prefill_mc.py` | what it makes |
+| module of `ffn_prefill_mc/` | what it makes |
 |---|---|
-| `__init__` | the params, `FFNData` and its golden, the column split over the clusters (`cols`, `kcols`), the down slices |
-| the plan | the gate\|up chunks of a cluster (`_gu_chunks`, `_gu_cols`) |
-| data | the HBM images of the weights and of X, the scales, every cluster's L1 buffers (`_stage`, `_buffers`) |
-| helpers | per-core program order, one GEMM (blocking or queued), one ChainGather, one weight-chunk load |
-| X | X from HBM: the multicast into every chip's L3 and each cluster's copy into L1 |
-| gate\|up and the A8 | the GEMMs over the weight stream, dequantise and SwiGLU, the D -> A reshape, the quantise and the A8 exchange |
-| the prefill | `build()`: the passes, the down slices, the ChainGathers into the root and the stores; `_passes_kernel` for the ablation's kernel-by-kernel rung |
-| checks | the window, the exchange buffers, the golden checks (`_checks`), the hazard check |
+| `params.py` | every switch, parsed and checked (`__init__`) |
+| `memory.py` | `FFNData` and its golden, the column split over the clusters (`cols`, `kcols`), the gate\|up chunks and down slices, the HBM images of the weights and of X, the scales, every cluster's L1 buffers |
+| `x.py` | X from HBM: the multicast into every chip's L3 and each cluster's copy into L1; Y_raw's places in L3 |
+| `gate_up.py` | the weight-chunk loads, the GEMMs over the weight stream, dequantise and SwiGLU, the D -> A reshape, the quantise and the A8 exchange |
+| `passes.py` | `build()`: the window, the passes, the down slices, the ChainGathers into the root and the stores |
+| `kernel.py` | the ablation's kernel-by-kernel rung (`sync barrier`) and its reduce kernel |
+| `checks.py` | the golden checks (`_checks`), the hazard check, the window and exchange-buffer checks, `finish()` |
 
 ## Who uses it
 
@@ -74,17 +75,18 @@ Each is explained where it is read:
 - `util/sim/multichip/chiplet_mc.py`, `ChipletBuild.__init__`: the platform and the emission (`tokens`, `wbits`, `bcast`,
   `reduce`, `sync`, `barrier_mode`, `chip_rows`, `weight_ring`, `w_chunk_bytes`, `w_buffers`, `gid_lists`,
   `list_phases`, `per_chip_image`, `static_l1`, `l1_capacity`, `async_exec`, ...).
-- `ffn_prefill_mc.py`, `PBuild.__init__`: the mapping and the ablation switches (`rows`, `blocks`, `dn_cols`, `x_cast`,
-  `chain_group`, `out_slots`, `root_cols`, `restream`, ...).
-- `ffn_decode_mc.py`: the decode's own (`x_row`, `dn_gemv`, `gu_gemv`, ...).
+- `ffn_prefill_mc/params.py`: the mapping and the ablation switches (`rows`, `blocks`, `dn_cols`, `x_cast`,
+  `chain_group`, `out_slots`, `root_cols`, `restream`, ...), tabled in `ffn_prefill_mc/README.md`.
+- `ffn_decode_mc/params.py`: the decode's own (`y_dequant`, `chains_after_stream`), tabled in `ffn_decode_mc/README.md`.
 
 ## Generating and building
 
 `make` in a variant runs its `main_bingo.py` (the generator: the data header, `offload_bingo_hw.h`, `final_dfg.csv`,
 `static_l1_layout.*` and the HBM image `build/hbm/`) and compiles the host image. The generator reruns whenever one of
 its sources is newer than its outputs: `mini_compiler`, the kernel-args headers, this directory, `util/sim/multichip/`,
-`util/sim/gemm/gemv_utils.py` and the weight manifest (`ffn.mk`, `BINGO_GEN_DEPS`). The fa, moe, llama3 and dsv2 builds also list `ffn/common/*.py`, so an
-edit here makes their workloads regenerate too. Never run `make` in a workload whose simulation is running: the
+`util/sim/gemm/gemv_utils.py` and the weight manifest (`ffn.mk`, `BINGO_GEN_DEPS`). The fa, moe, llama3 and dsv2 builds
+also list `ffn/common/*.py` and the packages' modules (`ffn/common/*/*.py`), so an edit here makes their workloads
+regenerate too. Never run `make` in a workload whose simulation is running: the
 generator rewrites `build/hbm/` under it.
 
 - The generator alone, outputs in another directory:

@@ -10,10 +10,10 @@ one DeepSeek-V2-Lite decoder layer over a fresh causal prompt (empty cache) on t
     layer 1:  x -> input RMSNorm -> MLA attention -> + x = h -> post-attention RMSNorm -> MoE           -> + h
     layer 0:  x -> input RMSNorm -> MLA attention -> + x = h -> post-attention RMSNorm -> dense SwiGLU FFN -> + h
 
-THE BLOCKS are the tuned block builders, each with its own block's params: the attention is fa_stages_mc.py's stage
-"full" (params attn), the MoE moe_prefill_mc.py's (params moe, layer 1), the dense FFN ffn_prefill_mc.py's (params ffn,
+THE BLOCKS are the tuned block builders, each with its own block's params: the attention is fa_stages_mc's whole
+block (params attn), the MoE moe_prefill_mc's (params moe, layer 1), the dense FFN ffn_prefill_mc's (params ffn,
 layer 0). Each block reads its input from HBM exactly as it does alone: the attention's x (INT8, A layout) from the
-root memory chip's HBM, multicast by that memory chip's push engine into every chip's L3 (x_hbm, x_bcast memchip); the
+root memory chip's HBM, multicast by that memory chip's push engine into every chip's L3; the
 MoE's and the FFN's X (INT8; row major for the MoE, A layout for the FFN) from the root memory chip's HBM, multicast the
 same way (their x_hbm). The layer's steps write those HBM regions, so the blocks meet THROUGH HBM: no activation tensor
 is held whole in one chip's L3.
@@ -36,10 +36,10 @@ THE STEPS, a 16-row tile at a time (tile q on chip chips[q mod 16], cluster (q /
                  output's slice layout, where the residual chip reads it; layer 0: row major, where the final reads it);
                  RMSNorm, times the post-attention gain, quantised (layer 0: reshaped to the A layout first) into the
                  MoE's / FFN's X region in HBM; the block's X multicast (layer 0: each pass's) waits for its tiles
-    MoE          layer 1: moe_prefill_mc.py's block on that X; one chip (params layer.resid_chip) adds h, read from HBM
+    MoE          layer 1: moe_prefill_mc's block on that X; one chip (params layer.resid_chip) adds h, read from HBM
                  a piece at a time, into its partial of every output slice, so the in-transit reduce returns MoE(h) + h,
                  which the root stores slice by slice into HBM: the layer's output
-    FFN, final   layer 0: ffn_prefill_mc.py's block on that X, its Y_raw stored slice by slice into the root memory
+    FFN, final   layer 0: ffn_prefill_mc's block on that X, its Y_raw stored slice by slice into the root memory
                  chip's HBM (params layer.ffn_y); then per tile the final residual: Y_raw's rows (its slices' D layout),
                  D -> row major, times the down scale, plus h from HBM: the layer's output rows into HBM
 The glue and the final run where a block's L1 is free: the blocks' static plans fill every cluster's L1 (the
@@ -52,7 +52,7 @@ glue's h (its scales calibrated on that h), with h in the residual chip's partia
 (layer 0).
 
 A PROOF OF CONCEPT (params attn.chunks): the attention at the full geometry makes every token's keys but only the first
-chunks' queries, as fa_stages_mc.py does; the MoE / FFN then runs on those chunks' rows (params moe.tokens / ffn.tokens).
+chunks' queries, as fa_stages_mc does; the MoE / FFN then runs on those chunks' rows (params moe.tokens / ffn.tokens).
 The keys of the later chunks run after the window (behind its end stamp, last in every core's program).
 
 L1: each block's static plan overlays the blocks' buffers by lifetime (the steps' tiles take the gaps, a tile's buffers
@@ -68,7 +68,7 @@ over them. _check_l3_arena proves the order the overlays rely on.
 
 PARAMETERS (params.hjson): the platform and the graph switches every block shares (num_chiplets, num_clusters,
 static_l1, l1_capacity, l1_order, compact_id_maps, gid_lists, per_chip_image, desc_in_image, fast_host_init, d2d_ddr,
-d2d_rx_yield, relay_per_gather, args_phase_bytes), then `attn` (fa_stages_mc.py's params), `moe` or `ffn` (that block's
+d2d_rx_yield, args_phase_bytes), then `attn` (fa_stages_mc's params), `moe` or `ffn` (that block's
 params) and `layer`: layer (1: the MoE, 0: the dense FFN), resid_chip (layer 1: hex chip id), resid_piece (layer 1: bytes
 the residual comes in at a time), moe_passes (layer 1: the MoE in that many passes over consecutive rows, each its own
 block, moe.tokens rows each), ffn_y (layer 0: hbm | l3, where the FFN's Y_raw is stored), l3_arena (layer 1: the L3
@@ -205,7 +205,7 @@ class LayerStaging(AliasStaging):
 
 # ---- the blocks, over the layer's graph ----------------------------------------------------------------------------
 class AttnPart(fas.FaStages):
-    """The attention block (fa_stages_mc.py, stage full) in the layer: its window the layer's, its x the input norm's
+    """The attention block (fa_stages_mc) in the layer: its window the layer's, its x the input norm's
     (its multicasts wait for their tiles), its end the glue's start; its keys after the window (a proof of concept's
     later chunks) behind the layer's end stamp; its checks the layer's (h stands for y)."""
     stream_name = "zs_fp_stream"
@@ -232,7 +232,7 @@ class AttnPart(fas.FaStages):
         end."""
 
     def _keys_by_chunk_order(self):
-        """fa_stages_mc.py's keys after the window, recorded instead of tied to an end stamp: the layer's end stamp comes
+        """fa_stages_mc's keys after the window, recorded instead of tied to an end stamp: the layer's end stamp comes
         later (relocate_post_keys). The key tasks of the chunks after the last one made, and those of them that no other
         one of them precedes (they follow the end stamp)."""
         runs = sorted(self._key_runs, key=lambda r: r[0])
@@ -259,7 +259,7 @@ class AttnPart(fas.FaStages):
 
 
 class MoePart(mom.MBuild):
-    """The MoE block (moe_prefill_mc.py) in the layer: its data the glue's h, its X multicast behind the glue's X, its
+    """The MoE block (moe_prefill_mc) in the layer: its data the glue's h, its X multicast behind the glue's X, its
     window opened per chip after the glue, the residual read from HBM, its output stored into HBM."""
     stream_name = "zs_mp_stream"
 
@@ -304,7 +304,7 @@ class MoePart(mom.MBuild):
         return BingoMemFixedAddr(self.layer.h_out.address + self.base + off, mem_level="HBM")
 
     def _resid_add(self, cl, jl, y, after):
-        """moe_prefill_mc.py's residual add, h read from its HBM region (the glue's, in the output's slice layout)."""
+        """moe_prefill_mc's residual add, h read from its HBM region (the glue's, in the output's slice layout)."""
         k, c = self.chip(cl), self.local(cl)
         dm, simd = self.roles["dm"], self.roles["simd"]
         pc, hb = self.resid["piece"], self.B[cl]["hres"]
@@ -345,7 +345,7 @@ class MoePart(mom.MBuild):
 
 
 class FfnPart(fpm.PBuild):
-    """The dense FFN block (ffn_prefill_mc.py) in the layer: its data the glue's h, each pass's X multicast behind the
+    """The dense FFN block (ffn_prefill_mc) in the layer: its data the glue's h, each pass's X multicast behind the
     glue's tiles of that pass, its window opened per chip after the glue, then the layer's final residual."""
     stream_name = "zs_pf_stream"
 
@@ -447,10 +447,8 @@ class LayerBuild(cm.ChipletBuild):
         self.attn_ends, self.block_checks, self.deferred = [], [], []
 
         # ---- the attention ------------------------------------------------------------------------------
-        if pa.get("stage") != "full" or not pa.get("x_hbm", True) or pa.get("x_bcast") != "memchip":
-            raise ValueError("params attn: stage full, x from HBM multicast by the memory chip (x_hbm, x_bcast memchip)")
         A = self.attn = AttnPart(self, args, pa, plat, hw)
-        self.NB = int(A.chunks_built) if A.chunks_built is not None else A.NCH      # the chunks made
+        self.NB = A.NCH                                                             # the chunks made
         self.T_mlp = self.NB * A.C
         self.n_cal_act = int(p.get("moe", {}).get("n_cal_act", 32))      # mlp_rows' cal_act: the last that many of h
 
@@ -462,10 +460,8 @@ class LayerBuild(cm.ChipletBuild):
             if int(pm.get("tokens", 0)) * self.n_pass != self.T_mlp:
                 raise ValueError(f"params moe.tokens: a pass's rows, the {self.T_mlp} rows of the attention's chunks made "
                                  f"over {self.n_pass} pass(es)")
-            for k_ in ("x_device", "args_phases"):
-                if pm.get(k_):
-                    raise ValueError(f"params moe.{k_}: the layer reads the MoE's X from HBM and cuts the args phases")
-            pm["x_hbm"] = True
+            if pm.get("args_phases"):
+                raise ValueError("params moe.args_phases: the layer cuts the args phases")
             self.resid_chip = int(str(lp.get("resid_chip", "33")), 16)
             if self.resid_chip not in self.chips or self.resid_chip == self.ROOT:
                 raise ValueError(f"params layer.resid_chip={lp.get('resid_chip')}: a compute chip other than the root")
@@ -507,7 +503,7 @@ class LayerBuild(cm.ChipletBuild):
 
     def mem_handles(self):
         """The data, the golden and the memory; no task is made. The attention's
-        (AttnPart's mem_handles: FaBuild's, with the stage-full inputs), then the golden on its data: x, y of the chunks
+        (AttnPart's mem_handles: FaBuild's, with the block's inputs), then the golden on its data: x, y of the chunks
         made (each W_O block folded in its collector's chain order), h, and the rows the second block's data is made
         on. Layer 1: each MoE pass's (MoePart's mem_handles, on its rows of h), the output's golden (each pass's y with
         h in the residual chip's partial); layer 0: the FFN's (FfnPart's mem_handles, on h), the output's golden (Y_raw
@@ -872,7 +868,7 @@ class LayerBuild(cm.ChipletBuild):
         self.prune_post_edges()
         if A.keys_by_chunk:
             A._order_collectives()
-            A._check_multicasts()
+            A._check_kx_after_chains()
         if self.which == 0:
             bad = M.check_hazards()
             if bad:

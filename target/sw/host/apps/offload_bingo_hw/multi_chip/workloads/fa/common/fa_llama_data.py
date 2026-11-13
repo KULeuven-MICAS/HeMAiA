@@ -30,7 +30,7 @@ key / value groups 4 h .. 4 h + 3; lane i is head 16 h + i of group 4 h + i // 4
 The block-diagonal operands spend four times the multiplies a group needs; at one decode token the array is idle anyway.
 
 THE GOLDEN is the device's arithmetic (util/sim/common/hwmodel.py) for the key split, half by half, as
-fa_data.FaData.golden: every cluster's shard of key tiles; pass 1 the shard's row maximum; m* the lanewise maximum
+fa_decode_ks_mc/golden.py's: every cluster's shard of key tiles; pass 1 the shard's row maximum; m* the lanewise maximum
 (exact in any order); pass 2 the softmax seeded at m* and PV, O^T leaving the D port as FP16 at k_o; a cluster's partial
 [O_0 | O_1 | l_0 | l_1] (the compacted halves, then the two row-sum beats) added in FP16 in the reduce's order; per half
 o~ = O * rsqrt(l a_n)^2; xt [32, 128] one head a row.
