@@ -1,23 +1,14 @@
-// stage5 (the optimal stage 5; was stage5_ogk, run stg_llama3_stage5_ogk_1): stage5_og with the 28 Oct kernel changes (E1-E4, replay-validated); stage5 + + each softmax arena's geometry on the xDMA core
-// stage5: Llama-3-8B's attention, stage 5 alone (the sweep): its inputs in place before the window, its outputs checked
-// (llama3_stages_mc.py stage "5"); otherwise full's mapping.
+// stage5: Llama-3-8B's attention, stage 5 alone (the sweep; main_bingo.py): the prompt and its passes, the weight
+// stream, the platform.
 {
   num_chiplets: 16
   num_clusters: 2
   tokens: 256
   rows: 64
   bc: 64
-  dn_cols: 256
   wbits: 4
-  w4_paired: true
   w_chunk_bytes: 65536
   w_buffers: 2
-  wo_cols: true
-  wo_slice: 128
-  rope_pairs: chunks
-  restream: true
-  l3_overlay: true
-  kv_split: true
   weight_ring: { slots: 8, head: 4, batch_head: 1 }
   bcast: bcast_l1
   reduce: chain
@@ -25,11 +16,4 @@
   per_chip_image: true
   desc_in_image: true
   remote_broadcast: false
-  // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
-  // then every pass's y at its head, middle and tail
-  checks: stages
-  mask_c: true,
-  stage: "5",
-  ot8_fused: true,
-  sm_geom_xdma: true
 }

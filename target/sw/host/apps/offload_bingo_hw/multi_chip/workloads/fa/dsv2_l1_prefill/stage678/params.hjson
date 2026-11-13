@@ -1,58 +1,20 @@
-// stage678, the best of its ladder (measured as run stg_fresh_stage678_q8s): as below without post_root_first, + store_late (chunk 0's y stores after chunk 1's W_O loads on the root's DM
-// core; chunk 0's chains first on its xDMA).
-// stage678_q8c: as below + chain_concurrent (the two clusters' chains at once) + chain_gate_prefetch (every chain behind
-// every chip's last ring chunk: no push in flight) + post_root_first (the root's chunk 1 W_UV ahead of chunk 0's stores).
-// stage678_q8pt: as below + post_tiles (o_h's relayout and quantisation a query tile at a time behind its W_UV GEMM).
-// stage678_q8p: as below + last_pair_chains (the last chunk's two clusters' reduce chains of a W_O block at the same time,
-// once every chip's ring has landed its last chunk; the blocks in series).
-// stage678_q8: as below + ot8_fused (the sweep's normalisation quantises o~ straight into W_UV's A operand:
-// simd_mla_normalise_q8; no transpose, no row-major -> A conversion, no separate quantisation).
-// stage678: W_UV, W_O and the reduce (stages 6, 7, 8), alone (common/fa_stages_mc.py stage "678"): every
-// cluster's o~ tiles (the sweep's output) in its L1 before the window, then FaBuild's chunks from W_UV on.
-// Mapping: t256_m_all_w4_re's.
+// stage678 (main_bingo.py): stages 6 to 8 of the DSv2 MLA fresh prefill alone: W_UV, W_O and the reduce of the heads'
+// partials into y (o~ copied from HBM before the window). The sizes are the whole block's (the block's image: ../full_n).
 {
-  "stage": "678",
-  "x_hbm": false,
+  // the platform: 16 compute chips of two clusters
   "num_chiplets": 16,
   "num_clusters": 2,
+  // the prompt, its 128-token chunks and the sweep's 64-key tiles
   "tokens": 256,
-  "per_chip_image": true,
-  "desc_in_image": true,
-  "model": "dsv2-lite-l1",
   "chunk": 128,
-  "fresh": true,
-  "wo_cols": false,
-  "keys": 256,
   "bc": 64,
+  // INT4 weights; a weight chunk's bytes, the L1 slabs a cluster streams through, the ring's slots
+  "wbits": 4,
   "w_chunk_bytes": 65536,
   "w_buffers": 3,
-  "weight_ring": {
-    "slots": 6,
-  },
-  "bcast": "bcast_l1",
-  "reduce": "chain",
-  "sync": "edge",
-  "l3_overlay": true,
-  "y_store_halves": true,
-  "y_windows": 4,
-  "kv_slabs": "split",
-  "chain_concurrent": true,
-  "checks": "y",
-  "rope_fused": true,
-  "rope_perm": true,
-  "dq_fused": true,
-  "mask_c": true,
-  "x_put_cluster": 1,
-  "x_resident": true,
-  "q_tiles": true,
-  "o_tiles": true,
-  "y_block_chains": true,
-  "l1_order": "search",
-  "kv_cols": true,
-  "wbits": 4,
-  "reduce_early": true,
-  "ot8_fused": true,
-  "last_pair_chains": true,
-  "post_tiles": true,
-  "chain_gate_prefetch": true,
+  "weight_ring": {"slots": 6},
+  // the program image: each chip's own tables, its task descriptors read from the image, the L1 order searched
+  "per_chip_image": true,
+  "desc_in_image": true,
+  "l1_order": "search"
 }

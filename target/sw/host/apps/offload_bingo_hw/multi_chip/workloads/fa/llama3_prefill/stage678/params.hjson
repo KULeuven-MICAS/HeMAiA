@@ -1,23 +1,14 @@
-// stage678 (the optimal stages 6-8; was stage678_oe, run stg_llama3_stage678_oe): stage678_o + the replay-validated W_O levers; stage678 + o~ arrives as o8 (A layout): stage 6 copies it, no relayout or quantise
-// stage678: Llama-3-8B's attention, stages 6-8 alone (o8, its gather and multicast, W_O, y): its inputs in place before the window, its outputs checked
-// (llama3_stages_mc.py stage "678"); otherwise full's mapping.
+// stage678: Llama-3-8B's attention, stages 6-8 alone (o8, its gather and multicast, W_O, y; main_bingo.py): the
+// prompt and its passes, the weight stream, the platform.
 {
   num_chiplets: 16
   num_clusters: 2
   tokens: 256
   rows: 64
   bc: 64
-  dn_cols: 256
   wbits: 4
-  w4_paired: true
   w_chunk_bytes: 65536
   w_buffers: 2
-  wo_cols: true
-  wo_slice: 128
-  rope_pairs: chunks
-  restream: true
-  l3_overlay: true
-  kv_split: true
   weight_ring: { slots: 8, head: 4, batch_head: 1 }
   bcast: bcast_l1
   reduce: chain
@@ -25,16 +16,4 @@
   per_chip_image: true
   desc_in_image: true
   remote_broadcast: false
-  // the root cluster 0's first query tile and the pass's 64 keys (rows 16-63 are what tile 0 of y never reads),
-  // then every pass's y at its head, middle and tail
-  checks: y
-  mask_c: true,
-  stage: "678",
-  ot8_fused: true,
-  // validated on the SNAX cluster replay first: weights loaded ahead, the gather on the xDMA, each pass's
-  // front under the previous pass's last GEMMs
-  y_scatter: true,
-  wo_early: true,
-  o_get_xdma: true,
-  o_overlap: true
 }

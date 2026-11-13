@@ -1,51 +1,20 @@
-// stage5: the stage's optimal mapping (28 Oct), was stage5_gc (measured as run stg_fresh_stage5_gc: 70.65 us, 4/4 PASS).
-// stage5_gc: stage5_g regenerated after prime_fa_softmax (bingo_cfg_reuse.py) also makes a builder-primed softmax
-// (its arena's geometry built by the xDMA's fa_build_shapes) CSR_PRIMED after a same-geometry softmax.
-// stage5_g: stage5 with each softmax arena's geometry built on the xDMA core (sm_geom_xdma) instead of by SIMD
-// prologues: the arena's first softmax runs GEOM_PRIMED behind it.
+// stage5 (main_bingo.py): stage 5 of the DSv2 MLA fresh prefill alone: the sweep over the keys (the keys and the
+// query tiles copied from HBM before the window). The sizes are the whole block's (the block's image: ../full_n).
 {
-  "stage": 5,
-  "x_hbm": false,
+  // the platform: 16 compute chips of two clusters
   "num_chiplets": 16,
   "num_clusters": 2,
+  // the prompt, its 128-token chunks and the sweep's 64-key tiles
   "tokens": 256,
-  "per_chip_image": true,
-  "desc_in_image": true,
-  "model": "dsv2-lite-l1",
   "chunk": 128,
-  "fresh": true,
-  "wo_cols": false,
-  "keys": 256,
   "bc": 64,
+  // INT4 weights; a weight chunk's bytes, the L1 slabs a cluster streams through, the ring's slots
+  "wbits": 4,
   "w_chunk_bytes": 65536,
   "w_buffers": 3,
-  "weight_ring": {
-    "slots": 6,
-  },
-  "bcast": "bcast_l1",
-  "reduce": "chain",
-  "sync": "edge",
-  "l3_overlay": true,
-  "y_store_halves": true,
-  "y_windows": 4,
-  "kv_slabs": "split",
-  "chain_concurrent": false,
-  "checks": "y",
-  "rope_fused": true,
-  "rope_perm": true,
-  "dq_fused": true,
-  "mask_c": true,
-  "x_put_cluster": 1,
-  "x_resident": true,
-  "q_tiles": true,
-  "o_tiles": true,
-  "y_block_chains": true,
-  "l1_order": "search",
-  "kv_cols": true,
-  "wbits": 4,
-  "reduce_early": true,
-  "skip_masked": true,
-  "row_swap": true,
-  "ot8_fused": true,
-  "sm_geom_xdma": true
+  "weight_ring": {"slots": 6},
+  // the program image: each chip's own tables, its task descriptors read from the image, the L1 order searched
+  "per_chip_image": true,
+  "desc_in_image": true,
+  "l1_order": "search"
 }

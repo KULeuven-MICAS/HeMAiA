@@ -4,7 +4,8 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# DeepSeek-V2-Lite's layer-1 MLA attention, 256-token prefill, stage1; the code is ../../common/fa_stages_mc.py.
+# DeepSeek-V2-Lite's layer-1 MLA attention, 256-token prefill, stage 4; the code is main_bingo.py, on
+# ../common/stage_common.py.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = fa/dsv2_l1_prefill/stage4
 include $(MK_DIR)../../common/fa.mk

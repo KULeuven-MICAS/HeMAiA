@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # Llama-3-8B's attention (synthetic weights), fresh 256-token prompt, stage 5 alone (the sweep); the code is
-# ../../../llama3/common/llama3_stages_mc.py.
+# main_bingo.py.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 WORKLOAD  = fa/llama3_prefill/stage5
 include $(MK_DIR)../../../llama3/common/llama3.mk
