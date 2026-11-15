@@ -93,7 +93,9 @@ def with_spin_order(g, order_edges, successors):
     producer, but the consumer itself, which runs while it spins, does not. A copy where there are such edges."""
     if not order_edges:
         return g
-    h = nx.DiGraph(g)
+    h = nx.DiGraph()                # the structure only, in g's order (no edge's attributes copied)
+    h.add_nodes_from(g)
+    h.add_edges_from(g.edges())
     for p, c in order_edges:
         for s_ in list(successors(c)):
             if s_ is not p:
@@ -193,8 +195,9 @@ def _bitset_interference(idxs, items, desc, interference):
             rest.append(i)
     if len(ok) < 2:
         return rest + ok
-    pos = desc[next(iter(items[ok[0]][1]))].pos
-    cols = sorted({pos[u] for i in ok for u in items[i][1]})
+    r0 = desc[next(iter(items[ok[0]][1]))]
+    pos, bit = r0.pos, r0.bit
+    cols = sorted({bit(u) for i in ok for u in items[i][1]})
     col = np.array(cols, dtype=np.int64)
     at = {p: k for k, p in enumerate(cols)}
     nbytes = (len(pos) + 7) // 8
@@ -204,7 +207,7 @@ def _bitset_interference(idxs, items, desc, interference):
         bits = -1
         for u in items[i][1]:
             bits &= desc[u].bits
-            users[r, at[pos[u]]] = 1
+            users[r, at[bit(u)]] = 1
         row = np.unpackbits(np.frombuffer(bits.to_bytes(nbytes, "little"), dtype=np.uint8),
                             bitorder="little")
         reached[r] = row[col]

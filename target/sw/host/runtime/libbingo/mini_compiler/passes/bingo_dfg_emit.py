@@ -1,5 +1,6 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+import bisect
 import os
 import re
 
@@ -499,6 +500,16 @@ class BingoDFGEmitMixin:
         return held
 
     def _dev_task_numbering(self, chiplet_id: int):
+        """_dev_task_numbering_of, once a chiplet for each emission (bingo_emit_offload_c_code starts a new memo, _emit_memo:
+        the graph does not change while it emits). The callers only read what it returns."""
+        memo = getattr(self, "_emit_memo", None)
+        if memo is None:
+            return self._dev_task_numbering_of(chiplet_id)
+        if ("dev", chiplet_id) not in memo:
+            memo[("dev", chiplet_id)] = self._dev_task_numbering_of(chiplet_id)
+        return memo[("dev", chiplet_id)]
+
+    def _dev_task_numbering_of(self, chiplet_id: int):
         """The device task ids of a chiplet: node_id -> (index into the arg/kernel lists, index
         among its own cluster's device tasks), and the per-cluster bases of the lists.
 
@@ -539,15 +550,21 @@ class BingoDFGEmitMixin:
 
     def bingo_emit_task_id_mapping_lists(self, target_chiplet_id: int = None) -> str:
         """Emit the mapping lists from global task id to dev/host task id."""
-        all_nodes = self.node_list
+        memo = getattr(self, "_emit_memo", None)
+        if memo is not None and "nodes" in memo:
+            all_nodes = memo["nodes"]       # sorted and checked by this emission's first call
+        else:
+            all_nodes = self.node_list
+            # Sort the nodes by node id
+            all_nodes.sort(key=lambda x: x.node_id)
+            # a global task id is a node's position here and its node_id in the descriptors: the two must agree
+            bad = next((i for i, n in enumerate(all_nodes) if n.node_id != i), None)
+            if bad is not None:
+                raise ValueError(f"node ids are not their positions from {all_nodes[bad].node_name} on (id "
+                                 f"{all_nodes[bad].node_id}, position {bad}): a pass removed nodes without renumbering")
+            if memo is not None:
+                memo["nodes"] = all_nodes
         num_nodes = len(all_nodes)
-        # Sort the nodes by node id
-        all_nodes.sort(key=lambda x: x.node_id)
-        # a global task id is a node's position here and its node_id in the descriptors: the two must agree
-        bad = next((i for i, n in enumerate(all_nodes) if n.node_id != i), None)
-        if bad is not None:
-            raise ValueError(f"node ids are not their positions from {all_nodes[bad].node_name} on (id "
-                             f"{all_nodes[bad].node_id}, position {bad}): a pass removed nodes without renumbering")
         
         mapping_str = ""
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
@@ -564,12 +581,15 @@ class BingoDFGEmitMixin:
                 # tasks are [base[r], base[r + 1]) and its next one is the entry after its
                 # previous one. Each block a whole number of 8 bytes.
                 ncores = self.num_cores_per_cluster
-                local = sorted((dev_ids[n.node_id][0], n) for n in all_nodes if n.node_id in dev_ids)
+                # the local ids are 0 .. bases[-1] - 1, a cluster's [bases[c], bases[c + 1]); node ids are positions
+                local = [None] * bases[-1]
+                for nid, (k, _j) in dev_ids.items():
+                    local[k] = all_nodes[nid]
                 words = []
                 for c in range(len(bases) - 1):
-                    mine = [n for k, n in local if bases[c] <= k < bases[c + 1]]
-                    core_base = [sum(1 for n in mine if n.assigned_core_id < r)
-                                 for r in range(ncores + 1)]
+                    mine = local[bases[c]:bases[c + 1]]
+                    cores = sorted(n.assigned_core_id for n in mine)
+                    core_base = [bisect.bisect_left(cores, r) for r in range(ncores + 1)]   # tasks on cores below r
                     block = (["BINGO_GID_LIST_MAGIC", ncores] + core_base +
                              [n.node_id for n in mine])
                     words += block + [0] * (len(block) % 2)
@@ -652,9 +672,15 @@ class BingoDFGEmitMixin:
             if getattr(self, "compact_id_maps", False) or getattr(self, "gid_lists", False):
                 # the chiplet's host tasks' global ids, ascending: a host task id is a position
                 # in this list (bingo_hw_scheduler_sparse)
-                gids = [idx for idx, node in enumerate(all_nodes)
-                        if node.assigned_chiplet_id == chiplet_id and node.kernel_name
-                        and node.kernel_name.startswith("__host")]
+                host = memo.get("host") if memo is not None else None
+                if host is None:            # every chiplet's host tasks in one pass
+                    host = {}
+                    for idx, node in enumerate(all_nodes):
+                        if node.kernel_name and node.kernel_name.startswith("__host"):
+                            host.setdefault(node.assigned_chiplet_id, []).append(idx)
+                    if memo is not None:
+                        memo["host"] = host
+                gids = host.get(chiplet_id, [])
                 mapping_str += _c_static_list(f"__bingo_g2h_gids_chip_{chiplet_id:02x}", "uint32_t", gids)
                 mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {len(gids)};\n"
                 continue
@@ -1442,15 +1468,16 @@ class BingoDFGEmitMixin:
         if getattr(self, "_phase_labels", None) is None:
             self._phase_labels = ChainLabels(self)
         labels = self._phase_labels
+        tasks = {}                          # cluster -> its device tasks with args in a phase, and the phase
+        for n in local_nodes:
+            if (n.kernel_name or "").startswith("__snax"):
+                g = _args_group(n, True)
+                if g != "r":
+                    tasks.setdefault(n.assigned_cluster_id, []).append((n, g))
         for (cl, q), ld in sorted(loads.items(), key=lambda kv: kv[0]):
             before = _Reach(lambda n, ld=ld: labels.reaches(n, ld))
             after = _Reach(lambda n, ld=ld: labels.reaches(ld, n))
-            for n in local_nodes:
-                if n.assigned_cluster_id != cl or not (n.kernel_name or "").startswith("__snax"):
-                    continue
-                g = _args_group(n, True)
-                if g == "r":
-                    continue
+            for n, g in tasks.get(cl, ()):
                 if pp and g < q and (q - g) % 2:
                     continue
                 if g < q and n not in before:
@@ -1686,6 +1713,7 @@ class BingoDFGEmitMixin:
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
         self._l1_ledger = {}
         self._phase_labels = None
+        self._emit_memo = {}
         self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
         # Before the file is opened: a check that raises mid-write leaves a truncated

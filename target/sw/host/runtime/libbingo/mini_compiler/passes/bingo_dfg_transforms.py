@@ -8,6 +8,66 @@ from bingo_reach import ChainLabels, reach_sets
 from bingo_node import BingoNode
 
 
+_CELL_JOB = None        # the dep-tag fast path's (each cell's edges, reach, positions), inherited by forked workers
+
+
+def _cell_chains(k):
+    """One cell of the dep-tag fast path (bingo_transform_dfg_allocate_dep_tags): its edges, sorted, covered by the
+    fewest chains, an edge a -> b being "a's consumer is, or reaches, b's producer", by a maximum matching (Dilworth).
+    Returns (chains, each edge's chain, the chains' first edges)."""
+    cell_edges, hb_reach, pos = _CELL_JOB
+    edges = cell_edges[k]
+    n = len(edges)
+    cvs, sus = [cv for _su, cv in edges], [su for su, _cv in edges]
+    M = hb_reach.matrix(cvs, sus)
+    M |= np.array([pos[x] for x in cvs])[:, None] == np.array([pos[x] for x in sus])[None, :]
+    np.fill_diagonal(M, False)
+    # Integer node labels and a sorted walk of the matching, so the result does not depend on any object's address
+    adj = [[n + b for b in np.flatnonzero(M[a]).tolist()] for a in range(n)]
+    match = _hopcroft_karp(n, adj) if any(adj) else {}
+    succ, has_pred = {}, set()
+    for node in sorted(match):
+        if node < n:
+            succ[node] = match[node] - n
+            has_pred.add(match[node] - n)
+    tag_of, heads = [0] * n, []
+    for a in range(n):
+        if a in has_pred:
+            continue                       # not a chain head
+        heads.append(a)
+        cur = a
+        while True:
+            tag_of[cur] = len(heads) - 1
+            if cur in succ:
+                cur = succ[cur]
+            else:
+                break
+    return len(heads), tag_of, heads
+
+
+def _map_cells(n_cells):
+    """[_cell_chains(k) for k in range(n_cells)], over forked workers where there are enough cells (BINGO_JOBS: how
+    many, 1 for none). The parent's objects are frozen out of the garbage collector first, so the workers share its
+    memory instead of copying it."""
+    import os
+    jobs = int(os.environ.get("BINGO_JOBS", min(8, os.cpu_count() or 1)))
+    if jobs <= 1 or n_cells < 2 * jobs:
+        return [_cell_chains(k) for k in range(n_cells)]
+    import gc
+    import multiprocessing as mp
+    order = sorted(range(n_cells), key=lambda k: -len(_CELL_JOB[0][k]))     # the largest first: no long tail
+    gc.freeze()
+    try:
+        with mp.get_context("fork").Pool(jobs) as pool:
+            done = pool.map(_cell_chains, order, chunksize=1)
+    finally:
+        gc.unfreeze()
+    out = [None] * n_cells
+    for k, r in zip(order, done):
+        out[k] = r
+    return out
+
+
 def _close(adj, start, closed: set) -> set:
     """`closed` with `start` and every node `start` reaches through `adj` (a graph's _succ, or _pred for its
     ancestors) added in place, and returned. `closed` must already hold everything its own nodes reach that way: the
@@ -16,11 +76,22 @@ def _close(adj, start, closed: set) -> set:
         closed.add(start)
         stack = [start]
         while stack:
-            for y in adj[stack.pop()]:
-                if y not in closed:
-                    closed.add(y)
-                    stack.append(y)
+            new = adj[stack.pop()].keys() - closed
+            if new:
+                closed |= new
+                stack.extend(new)
     return closed
+
+
+def _close_view(base: set, adj, cross) -> set:
+    """`base` (closed through a graph's adjacency) closed through `adj`, the adjacency of the same graph with the edges
+    `cross` added ((from, to) pairs, in the direction `adj` walks): a copy, grown only from the added edges that leave
+    it -- a node the walk adds is walked through `adj` whole."""
+    out = set(base)
+    for a, b in cross:
+        if a in base:
+            _close(adj, b, out)
+    return out
 
 
 def _dsatur(G) -> dict:
@@ -529,8 +600,11 @@ class BingoDFGTransformsMixin:
             hops = set(self._chain_gather_hops(g.kernel_args)) - {own}
             # each set the node's own ancestors / descendants and the node itself, which no task below is
             before, after = _close(self._pred, g, set()), _close(self._succ, end, set())
-            v_before = _close(view._pred, g, set()) if view is not self else before
-            v_after = _close(view._succ, end, set()) if view is not self else after
+            if view is self:
+                v_before, v_after = before, after
+            else:                       # the view is this graph and its ordering-only edges
+                v_before = _close_view(before, view._pred, [(c, p) for p, c in self.order_edges])
+                v_after = _close_view(after, view._succ, self.order_edges)
             for hop in sorted(hops):
                 # the latest first: an edge from a task orders its ancestors too
                 for t in sorted(on_core.get(hop, []), key=lambda n: -n.node_id):
@@ -1366,38 +1440,20 @@ class BingoDFGTransformsMixin:
         single_edge = all(len(edges_of[g]) == 1 and len(cells_of[g]) == 1
                           for g in range(n_groups))
         if single_edge:
-            for key, edges in cells.items():
+            items = list(cells.items())
+            for _key, edges in items:
                 edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
-                n = len(edges)
-                # edge a -> b: a's consumer is, or reaches, b's producer
-                cvs, sus = [cv for _su, cv in edges], [su for su, _cv in edges]
-                M = hb_reach.matrix(cvs, sus)
-                M |= np.array([pos[x] for x in cvs])[:, None] == np.array([pos[x] for x in sus])[None, :]
-                np.fill_diagonal(M, False)
-                # Integer node labels and a sorted walk of the matching, for
-                # the same reproducibility reason as above.
-                adj = [[n + b for b in np.flatnonzero(M[a]).tolist()] for a in range(n)]
-                match = _hopcroft_karp(n, adj) if any(adj) else {}
-                succ, has_pred = {}, set()
-                for node in sorted(match):
-                    if node < n:
-                        succ[node] = match[node] - n; has_pred.add(match[node] - n)
-                tag_of, n_chains = {}, 0
-                for a in range(n):
-                    if a in has_pred:
-                        continue                       # not a chain head
-                    cur = a
-                    while True:
-                        tag_of[cur] = n_chains
-                        if cur in succ:
-                            cur = succ[cur]
-                        else:
-                            break
-                    n_chains += 1
+            # the cells are independent: each one's chains in a worker (_cell_chains), the tags set here in cell order
+            global _CELL_JOB
+            _CELL_JOB = ([edges for _key, edges in items], hb_reach, pos)
+            try:
+                chains = _map_cells(len(items))
+            finally:
+                _CELL_JOB = None
+            for (key, edges), (n_chains, tag_of, heads) in zip(items, chains):
                 if n_chains > max_tags:
                     import os as _os
                     if _os.environ.get("BINGO_TAG_DEBUG"):
-                        heads = [a for a in range(n) if a not in has_pred]
                         for a in heads:
                             print(f"[tag-debug] chain head {edges[a][0].node_name} -> "
                                   f"{edges[a][1].node_name}")

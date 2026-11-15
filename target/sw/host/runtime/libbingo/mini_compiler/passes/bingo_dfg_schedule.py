@@ -33,6 +33,8 @@ A schedule that overflows by more than the capacity itself is not held back (its
 what runs beside them), and the tries stop where one leaves more than half of what the try before overflowed by;
 where no schedule fits, each core keeps the order its tasks were made in, as an in-order core runs it: a
 task that waits is not passed by the core's later ones (only where that order closes a cycle), under the same budget.
+dfg.schedule_made_order (params schedule_order "made"): that order only, the compiler's own not tried (a graph whose
+compiler order overflows L1 ends there anyway).
 
 ASYNCHRONOUS EXECUTION (dfg.async_exec). An accelerator driven through a CSR manager and a streamer -- VersaCore, the
 SIMD core's, the xDMA -- can take a task as parts: a CONFIGURE (every CSR written, nothing started), a START (the start
@@ -822,7 +824,10 @@ def _l1_over(dfg, model, seqs, opts):
     for seq in seqs.values():
         g.add_edges_from(zip(seq, seq[1:]))
     g = with_spin_order(g, spin, g.successors)
-    desc = reach_sets(g)
+    # the cover by the vertices' cores (a split task's parts are no BingoNodes), so a core's program is one column
+    task = lambda v: v.node if isinstance(v, _Part) else v      # noqa: E731
+    desc = reach_sets(g, core=lambda v: model.place.get(v, (None, None, None)),
+                      real=lambda v: bool(getattr(task(v), "kernel_name", None)))
     for v in model.vertices:
         desc.setdefault(v, frozenset())
     placement, stats = pack(users, desc, "L1", constraints=collect_placement_order(nodes), opts=opts, capacity=cap)
@@ -970,7 +975,8 @@ class BingoDFGScheduleMixin:
 
         # the compiler's own order (where its buffers do not fit L1, its tasks that open buffers held back); where even
         # that does not fit, each core's tasks in the order they were made (held back the same way)
-        picked = best(False)
+        made_only = getattr(self, "schedule_made_order", False)
+        picked = None if made_only else best(False)
         self.kept_order = picked is None
         if picked is None:
             picked = best(True)
@@ -1010,7 +1016,9 @@ class BingoDFGScheduleMixin:
                     self.bingo_add_edge(a, b)
                     added += 1
         line = (f"[schedule] {len(model.vertices)} tasks on {len(seqs)} device cores"
-                + (", each core's tasks in the order made (the compiler's order overflows L1)" if self.kept_order else "")
+                + ((", each core's tasks in the order made (" + ("params schedule_order made" if made_only
+                                                                 else "the compiler's order overflows L1") + ")")
+                   if self.kept_order else "")
                 + (f", L1 fitted (budget {self.l1_budget:,} B a cluster: {len(model.l1_edges)} edges from the last "
                    "users of a space to its next writer, tasks that open buffers held back)"
                    if self.l1_budget is not None else "")

@@ -22,7 +22,9 @@ Leaves are the nodes of a chain of one node or of a short chain of dummy nodes (
 graph has many, and each a column would make the labels N x N again.
 
 A graph whose cover needs too many columns (not the case for a task graph) falls back to one bitset a node over a
-topological order (bit i = its i-th node), the union of its successors' and theirs.
+topological order, the union of its successors' and theirs. The bits count from the end (Reach.bit: the last node is bit
+0): what a node reaches comes after it, so its set holds only as many bits as there are nodes after it, about half of
+what counting from the front would keep.
 """
 import networkx as nx
 import numpy as np
@@ -33,32 +35,39 @@ MIN_DUMMY_COLUMN = 8                # a chain of dummy nodes only is a column fr
 
 
 class Reach:
-    """The nodes reachable from one node (bitset form), as a set to test membership in."""
-    __slots__ = ("bits", "pos")
+    """The nodes reachable from one node (bitset form), as a set to test membership in. pos: each node's topological
+    position; node m is bit top - pos[m] (bit())."""
+    __slots__ = ("bits", "pos", "top")
 
-    def __init__(self, bits: int, pos: dict):
-        self.bits, self.pos = bits, pos
+    def __init__(self, bits: int, pos: dict, top: int):
+        self.bits, self.pos, self.top = bits, pos, top
+
+    def bit(self, n) -> int:
+        return self.top - self.pos[n]
 
     def __contains__(self, n) -> bool:
         i = self.pos.get(n)
-        return i is not None and (self.bits >> i) & 1 == 1
+        return i is not None and (self.bits >> (self.top - i)) & 1 == 1
 
 
-def _cover(G, topo, pos):
+def _cover(G, topo, pos, core=None, real=None):
     """({node: (column, position) or LEAF}, columns): a greedy chain cover in topological order. Each node names the
     successor its chain should go on with: on its own core (BingoNode.assigned_*), the earliest one that is not a dummy
     node left without a later task of that core; with none on its core, its earliest successor. A node joins the chain
     of such a predecessor that is still its chain's end (its own core's first, then a task with a kernel, then the
     longest chain, then the latest). So a core's tasks stay one chain, also where the lowering hung a dummy set node off a task; those dummies
-    are left over. A chain of one node, or of a few dummy nodes only, is leaves; the others are numbered as columns."""
+    are left over. A chain of one node, or of a few dummy nodes only, is leaves; the others are numbered as columns.
+    core / real: a node's core and whether it is a task with a kernel, for nodes that are no BingoNodes."""
     chain, tail_of, length, has_task = {}, [], [], []
 
-    def core(n):
-        return (getattr(n, "assigned_chiplet_id", None), getattr(n, "assigned_cluster_id", None),
-                getattr(n, "assigned_core_id", None))
+    if core is None:
+        def core(n):
+            return (getattr(n, "assigned_chiplet_id", None), getattr(n, "assigned_cluster_id", None),
+                    getattr(n, "assigned_core_id", None))
 
-    def real(n):
-        return bool(getattr(n, "kernel_name", None))
+    if real is None:
+        def real(n):
+            return bool(getattr(n, "kernel_name", None))
     def dead(s):                    # a dummy node no later task of its core follows
         return not real(s) and not any(core(x) == core(s) for x in G.successors(s))
     nxt = {}
@@ -312,12 +321,13 @@ def find_cycle(G):
     raise nx.NetworkXNoCycle("No cycle found.")
 
 
-def reach_sets(G, max_label_bytes: int = 2 << 30, form: str = None) -> dict:
+def reach_sets(G, max_label_bytes: int = 2 << 30, form: str = None, core=None, real=None) -> dict:
     """node -> what the node reaches in the DAG G (a set to test membership in), a ReachMap. form "chains" / "bits"
-    forces one form (the tests); default: the column form when its labels are the smaller."""
+    forces one form (the tests); default: the column form when its labels are the smaller. core / real: as _cover's,
+    for a graph of nodes that are no BingoNodes."""
     topo = list(nx.topological_sort(G))
     pos = {n: i for i, n in enumerate(topo)}
-    where, K = _cover(G, topo, pos)
+    where, K = _cover(G, topo, pos, core, real)
     N = len(topo)
     if form == "chains" or (form is None and N and K * N * 4 <= max_label_bytes and K * 32 < N):
         L = _labels(G, topo, pos, where, K)
@@ -325,12 +335,13 @@ def reach_sets(G, max_label_bytes: int = 2 << 30, form: str = None) -> dict:
         for n in topo:
             m[n] = ChainReach(n, m)
         return m
+    top = N - 1
     bits: dict = {}                 # node -> its descendants and its own bit: one OR an edge
     for n in reversed(topo):
-        b = 1 << pos[n]
+        b = 1 << (top - pos[n])
         for s in G.successors(n):
             b |= bits[s]
         bits[n] = b
     for n, b in bits.items():       # each own bit out, one node at a time (no second copy of every set)
-        bits[n] = b ^ (1 << pos[n])
-    return ReachMap((n, Reach(b, pos)) for n, b in bits.items())
+        bits[n] = b ^ (1 << (top - pos[n]))
+    return ReachMap((n, Reach(b, pos, top)) for n, b in bits.items())

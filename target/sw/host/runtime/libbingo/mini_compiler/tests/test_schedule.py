@@ -83,6 +83,14 @@ d.bingo_schedule_programs()
 check("a ready copy runs before a task that waits for a GEMM, though made after it",
       program(d, DM) == ["early", "late"], program(d, DM))
 check("the graph stays acyclic", nx.is_directed_acyclic_graph(d))
+d = new_dfg()
+g = gemm(d, "g")
+late = task(d, DM, "late", "__snax_bingo_kernel_stamp", None, [g])
+early = copy(d, "early", 4096)
+d.schedule_made_order = True
+d.bingo_schedule_programs()
+check("schedule_made_order: the same graph keeps the order made", program(d, DM) == ["late", "early"] and d.kept_order,
+      (program(d, DM), d.kept_order))
 
 print("\nasync: a wait trails the next start when that start is ready before the array is done")
 d = new_dfg(async_exec="all")

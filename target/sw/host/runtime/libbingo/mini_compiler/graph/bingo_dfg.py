@@ -363,17 +363,7 @@ class BingoDFG(
                 self.bingo_visualize_dfg(os.path.join(output_dir, "final_dfg"))
                 self.bingo_export_dfg_to_csv(os.path.join(output_dir, "final_dfg"))
 
-        # COMPILE-TIME HANG CHECK. Validates the LOWERED graph rather than
-        # trusting the passes that produced it: a stuck dep-check does not
-        # raise, time out or corrupt anything at runtime -- the machine simply
-        # stops -- so it has to be caught here or not at all.
-        _hang = self.bingo_validate_no_hang(tag_width=self.dep_tag_width)
-        print(f"Hang check passed: {_hang['edges']} dep edges over "
-              f"{_hang['cells']} cells, peak {_hang['peak_tags_per_cell']} "
-              f"tags/cell of {_hang['tag_capacity']} available, "
-              f"{_hang['cross_die_gated']} cross-die gated target(s)")
-
-        # CYCLE-MODEL CHECK, ON BY DEFAULT. The static check above cannot see
+        # CYCLE-MODEL CHECK, ON BY DEFAULT. The static check below cannot see
         # anything that depends on TIMING -- queue depths, arbiter order, a
         # cross-die predicate racing its dep-set. This pushes the real descriptor
         # list through the cycle model instead.
@@ -396,8 +386,9 @@ class BingoDFG(
                 print(f"Sim hang check SKIPPED: {_exc}")
             else:
                 try:
-                    # the runs go on beside the static L1 plan and the emission (each in a process of its own, the
-                    # graph as it is now: neither changes an edge); their result is taken before returning
+                    # the runs go on beside the static check below, the static L1 plan and the emission (each in a
+                    # process of its own, the graph as it is now: none of them changes an edge); their result is
+                    # taken before returning
                     _sim_done = simulate_for_hangs(self, wait=False)
                 except ModelUnavailable as _exc:
                     print(f"Sim hang check SKIPPED: {_exc}")
@@ -407,6 +398,16 @@ class BingoDFG(
                     # Any other failure is a problem with the bridge or a model
                     # version skew. Report it; do not break firmware generation.
                     print(f"Sim hang check SKIPPED ({type(_exc).__name__}): {_exc}")
+        # COMPILE-TIME HANG CHECK. Validates the LOWERED graph rather than
+        # trusting the passes that produced it: a stuck dep-check does not
+        # raise, time out or corrupt anything at runtime -- the machine simply
+        # stops -- so it has to be caught here or not at all.
+        _hang = self.bingo_validate_no_hang(tag_width=self.dep_tag_width)
+        print(f"Hang check passed: {_hang['edges']} dep edges over "
+              f"{_hang['cells']} cells, peak {_hang['peak_tags_per_cell']} "
+              f"tags/cell of {_hang['tag_capacity']} available, "
+              f"{_hang['cross_die_gated']} cross-die gated target(s)")
+
         # 2b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
         #
         # Runs AFTER every transform, because the dummy set/check nodes those passes

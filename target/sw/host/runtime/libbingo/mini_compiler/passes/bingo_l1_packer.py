@@ -324,7 +324,7 @@ def _users_bits(users, desc):
         if not hasattr(r, "bits") or u not in r.pos:
             return None
         reached &= r.bits
-        mask |= 1 << r.pos[u]
+        mask |= 1 << r.bit(u)
     return reached, mask
 
 
@@ -531,9 +531,9 @@ def pack_scratchpad_slots(nodes, desc):
             # every scratchpad touched by its own node only: two conflict exactly when neither node reaches the
             # other, read off the bitset form's reach sets as one matrix of this arena's nodes
             import numpy as np
-            topo_pos = desc[order[0]].pos
-            at = np.array([topo_pos[n] for n in order], dtype=np.int64)
-            nbytes = (len(topo_pos) + 7) // 8
+            r0 = desc[order[0]]
+            at = np.array([r0.bit(n) for n in order], dtype=np.int64)
+            nbytes = (len(r0.pos) + 7) // 8
             reach = np.zeros((len(order), len(order)), dtype=bool)
             for i, a in enumerate(order):
                 bits = np.unpackbits(np.frombuffer(desc[a].bits.to_bytes(nbytes, "little"), dtype=np.uint8),
