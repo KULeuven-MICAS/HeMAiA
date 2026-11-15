@@ -214,6 +214,20 @@ del _os.environ["BINGO_HAZARD_CROSSCHECK"]
 ok, msg = raises(d.bingo_check_hazards, "X20")
 check("the same failure without the cross-check", ok and "W21" in msg, msg)
 
+print("\nthe check in a forked process beside the schedule (bingo_compile_dfg): its report and its error come back")
+import contextlib as _ctx                                             # noqa: E402
+import io as _io                                                      # noqa: E402
+from bingo_dfg import _beside                                         # noqa: E402
+d, ts = tile_graph()
+buf = _io.StringIO()
+with _ctx.redirect_stdout(buf):
+    _beside(d.bingo_check_hazards)()
+check("a clean graph: the child's report printed by the parent", "[hazards]" in buf.getvalue() and
+      "0 unordered" in buf.getvalue(), buf.getvalue()[-200:])
+d.remove_edge(ts["W21"], ts["X20"])
+ok, msg = raises(_beside(d.bingo_check_hazards), "X20")
+check("a hazard: the child's ValueError raised by the parent, naming the pair", ok and "W21" in msg, msg)
+
 print("\nthe args classes that declare no accesses() yet (to do: each fails the check once a graph uses it)")
 import bingo_kernel_args as _K                                       # noqa: E402
 

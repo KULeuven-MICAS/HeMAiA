@@ -52,6 +52,50 @@ from bingo_dfg_hazards import BingoDFGHazardsMixin
 from bingo_dfg_collectives import BingoDFGCollectivesMixin
 
 
+def _beside(check):
+    """Run `check()`, which only reads, in a forked child: returns a callable that waits for it, prints what it
+    printed and raises what it raised. BINGO_CHECK_FORK=0 runs it here first. The parent's objects are frozen out of
+    the garbage collector across the fork, so the child shares their memory instead of copying it."""
+    import gc
+    import pickle
+    import sys
+    if os.environ.get("BINGO_CHECK_FORK", "1") == "0" or not hasattr(os, "fork"):
+        check()
+        return lambda: None
+    r, w = os.pipe()
+    sys.stdout.flush()
+    gc.freeze()
+    pid = os.fork()
+    if pid == 0:                                    # the child: the check, its output and its error into the pipe
+        os.close(r)
+        import io
+        out = sys.stdout = io.StringIO()
+        try:
+            check()
+            err = None
+        except BaseException as e:                  # noqa: BLE001 -- handed to the parent as it was raised
+            err = e
+        try:
+            data = pickle.dumps((out.getvalue(), err))
+        except Exception as e:                      # noqa: BLE001 -- an error that does not pickle: its text
+            data = pickle.dumps((out.getvalue(), RuntimeError(f"{type(err).__name__}: {err}")))
+        with os.fdopen(w, "wb") as f:
+            f.write(data)
+        os._exit(0)
+    gc.unfreeze()
+    os.close(w)
+
+    def done():
+        with os.fdopen(r, "rb") as f:
+            text, err = pickle.loads(f.read())
+        os.waitpid(pid, 0)
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        if err is not None:
+            raise err
+    return done
+
+
 class BingoDFG(
     BingoDFGTransformsMixin,
     BingoDFGConditionalMixin,
@@ -290,11 +334,14 @@ class BingoDFG(
         #    Then each device core's program, chosen from the cost model; with async_exec the VersaCore dispatches
         #    split where that gains, numbered; the CSR reuse along each GEMM core's program. Before any pass
         #    that adds tasks: the schedule is of the tasks the application made.
-        self.bingo_check_hazards()
+        #    The check only reads the graph: it runs in a forked process beside the schedule, its report and any
+        #    error taken (printed, raised) once the schedule is done.
+        hazards_done = _beside(self.bingo_check_hazards)
         if self.schedule_cores:
             self.bingo_schedule_programs()
         elif self.async_exec:
             raise ValueError("async_exec: the compiler splits dispatches where it orders the cores (schedule_cores)")
+        hazards_done()
         if self.args_phases:
             from bingo_args_phases import bingo_args_phases
             bingo_args_phases(self, **self.args_phases)
