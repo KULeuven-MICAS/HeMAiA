@@ -449,11 +449,15 @@ class BingoDFG(
         # trusting the passes that produced it: a stuck dep-check does not
         # raise, time out or corrupt anything at runtime -- the machine simply
         # stops -- so it has to be caught here or not at all.
-        _hang = self.bingo_validate_no_hang(tag_width=self.dep_tag_width)
-        print(f"Hang check passed: {_hang['edges']} dep edges over "
-              f"{_hang['cells']} cells, peak {_hang['peak_tags_per_cell']} "
-              f"tags/cell of {_hang['tag_capacity']} available, "
-              f"{_hang['cross_die_gated']} cross-die gated target(s)")
+        # It only reads: in a forked process beside the static L1 plan, its report and any error taken before the
+        # emission opens the header.
+        def _static_hang():
+            _hang = self.bingo_validate_no_hang(tag_width=self.dep_tag_width)
+            print(f"Hang check passed: {_hang['edges']} dep edges over "
+                  f"{_hang['cells']} cells, peak {_hang['peak_tags_per_cell']} "
+                  f"tags/cell of {_hang['tag_capacity']} available, "
+                  f"{_hang['cross_die_gated']} cross-die gated target(s)")
+        _hang_done = _beside(_static_hang)
 
         # 2b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
         #
@@ -461,6 +465,7 @@ class BingoDFG(
         # insert are real nodes with real ordering, and liveness computed before them
         # would see a sparser graph than the hardware actually executes.
         self.bingo_plan_static_l1(static_l1, output_dir=output_dir)
+        _hang_done()
 
         # 4. Emit C Code
         self.bingo_emit_offload_c_code(
