@@ -23,7 +23,7 @@
 //   +ARM=<arm>        chain | two | binomial | pull | swchain | swtree | rt_flag | rt_sched
 //   +TURN_CC=<n>      rt_*: cluster cycles a core takes to act on a dependency (default 4)
 //   +BCAST=<0|1>      rt_flag: chip 00's one-to-all flag as one broadcast store
-//   +BYTES=<n>        payload per chip, FP16 (multiple of 256, <= 256 KiB)
+//   +BYTES=<n>        payload per chip, FP16 (multiple of 256, <= 256 KiB; the chain and two arms up to 512 KiB)
 //   +PLIST=<p,p,..>   participant counts, prefixes of the snake (default 2,4,8,16)
 //   +VERBOSE=<n>      1: per-chip details of every run
 //   +TIMEOUT_US=<n>   simulation-time watchdog (default 20000 us)
@@ -1035,11 +1035,21 @@ module tb_reduce
   function automatic int unsigned buf_stride(input int unsigned bytes);
     return (bytes > 32'h2_0000) ? bytes : 32'h2_0000;
   endfunction
+  // Above 256 KiB (the chain and two arms only): IN at TCDM + 0 and OUT at + bytes, together the whole 1 MiB TCDM;
+  // no flag words (neither arm uses them). The two arm's collector keeps its group sum in OUT (TMP = OUT) and writes
+  // the final result over its own IN, which stage 1 no longer needs (res_off). At or below 256 KiB nothing changes.
+  function automatic int unsigned in_off(input int unsigned bytes);
+    return (bytes > 32'h4_0000) ? 32'h0 : InOff;
+  endfunction
   function automatic int unsigned out_off(input int unsigned bytes);
-    return InOff + buf_stride(bytes);
+    return in_off(bytes) + buf_stride(bytes);
   endfunction
   function automatic int unsigned tmp_off(input int unsigned bytes);
-    return InOff + 2 * buf_stride(bytes);
+    return (bytes > 32'h4_0000) ? out_off(bytes) : in_off(bytes) + 2 * buf_stride(bytes);
+  endfunction
+  // where the two arm's final result lands at the collector
+  function automatic int unsigned res_off(input int unsigned bytes);
+    return (bytes > 32'h4_0000) ? in_off(bytes) : out_off(bytes);
   endfunction
 
   function automatic int unsigned val(input int unsigned s, input int unsigned i);
@@ -1250,11 +1260,11 @@ module tb_reduce
     for (int unsigned s = 0; s < NumCompute; s++) begin
       automatic int unsigned c = ci_of_pos(s);
       for (int unsigned w = 0; w < bytes / 8; w++) begin
-        mem[c][(InOff >> 3) + w]           = op_word_of(s, w);
+        mem[c][(in_off(bytes) >> 3) + w]   = op_word_of(s, w);
         mem[c][(out_off(bytes) >> 3) + w]  = Sentinel;
-        mem[c][(tmp_off(bytes) >> 3) + w]  = Sentinel;
+        if (bytes <= 32'h4_0000) mem[c][(tmp_off(bytes) >> 3) + w] = Sentinel;
       end
-      mem[c][CVal >> 3] = {32'h0, k};
+      if (bytes <= 32'h4_0000) mem[c][CVal >> 3] = {32'h0, k};
     end
   endtask
 
@@ -1568,9 +1578,9 @@ module tb_reduce
     addr_t   chain[16];
     realtime tp, ts, tf, te;
     bit      ok;
-    for (int unsigned k = 0; k + 1 < P; k++) chain[k] = rem(P - 1 - k, InOff);
+    for (int unsigned k = 0; k + 1 < P; k++) chain[k] = rem(P - 1 - k, in_off(bytes));
     chain[P-1] = rem(0, out_off(bytes));
-    xdma_fold(0, InOff, chain, P, out_off(bytes), bytes, tp, ts, tf, te, ok);
+    xdma_fold(0, in_off(bytes), chain, P, out_off(bytes), bytes, tp, ts, tf, te, ok);
     lvl_recs.push_back('{level: 0, pos: 0, t_dep: tp, t_prog: tp, t_start: ts, t_end: te});
     if (!ok) run_ok = 1'b0;
     t_result = te;
@@ -1602,11 +1612,11 @@ module tb_reduce
           bit      ok;
           n = 0;
           for (int d = int'(last - first); d >= 1; d--) begin
-            if (gr + d <= last) chain[n++] = rem(gr + d, InOff);
-            if (int'(gr) >= int'(first) + d) chain[n++] = rem(gr - d, InOff);
+            if (gr + d <= last) chain[n++] = rem(gr + d, in_off(bytes));
+            if (int'(gr) >= int'(first) + d) chain[n++] = rem(gr - d, in_off(bytes));
           end
           chain[n++] = rem(gr, sum);
-          xdma_fold(gr, InOff, chain, n, sum, bytes, tp, ts, tf, te, ok);
+          xdma_fold(gr, in_off(bytes), chain, n, sum, bytes, tp, ts, tf, te, ok);
           if (!ok) run_ok = 1'b0;
           grp_end[gg] = te;
           lvl_recs.push_back('{level: 0, pos: gr, t_dep: tp, t_prog: tp, t_start: ts, t_end: te});
@@ -1632,14 +1642,14 @@ module tb_reduce
       for (int unsigned j = K - 1; j >= 1; j--) begin
         automatic int unsigned f = j * Group;
         automatic int unsigned l = ((f + Group < P) ? f + Group : P) - 1;
-        chain[n++] = rem(group_root(f, l), (l > f) ? out_off(bytes) : InOff);
+        chain[n++] = rem(group_root(f, l), (l > f) ? out_off(bytes) : in_off(bytes));
       end
-      chain[n++] = rem(0, out_off(bytes));
-      xdma_fold(0, tmp_off(bytes), chain, n, out_off(bytes), bytes, tp, ts, tf, te, ok);
+      chain[n++] = rem(0, res_off(bytes));
+      xdma_fold(0, tmp_off(bytes), chain, n, res_off(bytes), bytes, tp, ts, tf, te, ok);
       if (!ok) run_ok = 1'b0;
       lvl_recs.push_back('{level: 1, pos: 0, t_dep: tdep, t_prog: tp, t_start: ts, t_end: te});
       t_result = te;
-      check_buf(0, out_off(bytes), bytes, range_set(0, P), $sformatf("two P=%0d result", P),
+      check_buf(0, res_off(bytes), bytes, range_set(0, P), $sformatf("two P=%0d result", P),
                 bad_words);
     end
     wait fork;
@@ -2141,8 +2151,8 @@ module tb_reduce
     end
     parse_plist(pl);
 
-    if (bytes % 256 != 0 || bytes == 0 || bytes > 262144)
-      $fatal(1, "[tb_reduce] BYTES=%0d: must be a non-zero multiple of 256, at most 256 KiB", bytes);
+    if (bytes % 256 != 0 || bytes == 0 || bytes > ((arm == "chain" || arm == "two") ? 524288 : 262144))
+      $fatal(1, "[tb_reduce] BYTES=%0d: must be a non-zero multiple of 256, at most 256 KiB (512 KiB on the chain and two arms)", bytes);
     foreach (plist[i]) begin
       if (plist[i] < 2 || plist[i] > NumCompute || (plist[i] & (plist[i] - 1)) != 0)
         $fatal(1, "[tb_reduce] P=%0d: must be 2, 4, 8 or 16", plist[i]);
