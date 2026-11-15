@@ -22,7 +22,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from bingo_liveness import build_interference, can_share
+from bingo_liveness import _column_summary, _reach_leaf, build_interference, can_share
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 
 # Alignment reproduces the PHASE the runtime allocator always delivered, not merely the
@@ -341,6 +341,39 @@ def _can_share_bits(a, ua, b, ub, desc, memo):
     return (mb & ~ra) == 0 or (ma & ~rb) == 0
 
 
+# verify in desc's column form: every this many-th pair the column test lets share bytes is asked again of can_share, and
+# BINGO_L1_VERIFY_PAIRWISE=1 asks every pair (the column test is build_interference's; can_share is the oracle's own form)
+VERIFY_SAMPLE = 128
+
+
+def _can_share_cols(a, ua, b, ub, desc, memo, leaf_memo):
+    """can_share(ua, ub, desc) where desc is in the column form (bingo_reach chain cover), by build_interference's
+    column test a pair at a time: x's users all precede y's when x's latest earliest-reach label is at most y's earliest
+    user on each of y's columns, and every user of x reaches each of y's leaves. memo[index] keeps a buffer's summary;
+    None where a user is not on the labels (can_share then)."""
+    import numpy as np
+    for k, us in ((a, ua), (b, ub)):
+        if k not in memo:
+            s = _column_summary(us, desc)
+            if s is None:
+                memo[k] = None
+            else:
+                late, first, leaves = s
+                cols = np.flatnonzero(first != np.iinfo(np.int64).max)
+                ul = list(us)
+                memo[k] = (late, cols, first[cols], leaves, ul, np.array([desc.pos[u] for u in ul], dtype=np.int64))
+    if memo[a] is None or memo[b] is None:
+        return None
+
+    def before(x, y):
+        late, _, _, _, ul, up = memo[x]
+        _, cy, fy, leaves, _, _ = memo[y]
+        if len(cy) and not np.all(late[cy] <= fy):
+            return False
+        return all(_reach_leaf(ul, up, lb, desc, leaf_memo) for lb in leaves)
+    return before(a, b) or before(b, a)
+
+
 def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1",
            opts: Optional["StaticL1Options"] = None) -> List[str]:
     """Re-derive safety from the placement. Returns a list of problems; empty means sound.
@@ -362,6 +395,10 @@ def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1
     for h, u in items:
         if id(h) in placement:
             by_cluster.setdefault((h.chip_id, h.cluster_id), []).append((h, u))
+    import os
+    column_form = getattr(desc, "L", None) is not None
+    pairwise = bool(os.environ.get("BINGO_L1_VERIFY_PAIRWISE"))
+    n_cols = 0
 
     for key, group in sorted(by_cluster.items()):
         spans = []
@@ -378,11 +415,22 @@ def verify(placement, handle_users, desc, capacity: int = None, level: str = "L1
                     f"{ha.name}: ends at {ea:,} B, past the {capacity:,} B capacity "
                     f"of chip {key[0]:#04x} cluster {key[1]}")
 
-        # 3. THE ONE THAT MATTERS: anything sharing bytes must be provably disjoint in time
-        bits = {}
+        # 3. THE ONE THAT MATTERS: anything sharing bytes must be provably disjoint in time. In the column form a pair
+        # is decided by the column test; a pair it rejects, and every VERIFY_SAMPLE-th one it accepts, can_share decides
+        # again, and the two must agree
+        bits, cols, leaf_memo = {}, {}, {}
         for a, b in sorted(_sharing_pairs(spans)):
             (ha, ua), (hb, ub) = group[a], group[b]
-            if not _can_share_bits(a, ua, b, ub, desc, bits):
+            ok = _can_share_cols(a, ua, b, ub, desc, cols, leaf_memo) if column_form else None
+            if ok is None:
+                ok = _can_share_bits(a, ua, b, ub, desc, bits)
+            else:
+                n_cols += 1
+                if not ok or pairwise or n_cols % VERIFY_SAMPLE == 0:
+                    if can_share(ua, ub, desc) != ok:
+                        raise AssertionError(f"verify: the column test and can_share disagree on {ha.name} and "
+                                             f"{hb.name} (chip {key[0]:#04x} cluster {key[1]})")
+            if not ok:
                 (oa, ea), (ob, eb) = spans[a], spans[b]
                 problems.append(
                     f"UNSAFE OVERLAP on chip {key[0]:#04x} cluster {key[1]}: "

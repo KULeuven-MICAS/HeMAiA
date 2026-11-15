@@ -149,6 +149,71 @@ task(d, DM, "L1", SnaxBingoKernelIdma1dCopyArgs(l1("w1", 8192), slab, 8192), [l0
 bad = d.bingo_check_hazards()
 check("no error, the unordered pair returned", len(bad) == 1)
 
+print("\na buffer of many accesses that all share bytes: swept in one pass, the same verdict as every pair")
+
+
+def sweep_graph(rounds=40):
+    """A reader of the slab, then `rounds` times: a write of the whole slab and two reads of it, each round after the
+    last; {name: task}."""
+    d = new_dfg()
+    slab = l1("slab", 4096)
+    ts = {"Rpre": task(d, DM, "Rpre", SnaxBingoKernelIdma1dCopyArgs(slab, l1("opre", 4096), 4096))}
+    prev = [ts["Rpre"]]
+    for r in range(rounds):
+        w = ts[f"W{r}"] = task(d, DM, f"W{r}", SnaxBingoKernelIdma1dCopyArgs(l1(f"s{r}", 4096), slab, 4096), prev)
+        prev = [task(d, DM, f"R{r}{x}", SnaxBingoKernelIdma1dCopyArgs(slab, l1(f"o{r}{x}", 4096), 4096), [w])
+                for x in "ab"]
+        ts[f"R{r}a"], ts[f"R{r}b"] = prev
+    return d, ts
+
+
+d, ts = sweep_graph()
+check("a round-by-round chain of 121 accesses passes", d.bingo_check_hazards() == [])
+_os.environ["BINGO_HAZARD_CROSSCHECK"] = "1"
+check("and the cross-check agrees", d.bingo_check_hazards() == [])
+d.remove_edge(ts["R10b"], ts["W11"])
+ok, msg = raises(d.bingo_check_hazards, "R10b")
+check("without R10b -> W11 it fails, naming R10b and W11, and the cross-check agrees", ok and "W11" in msg, msg)
+del _os.environ["BINGO_HAZARD_CROSSCHECK"]
+ok, msg = raises(d.bingo_check_hazards, "R10b")
+check("the same failure without the cross-check (the pairwise check names the pair)", ok and "W11" in msg, msg)
+d, ts = sweep_graph()
+d.remove_edge(ts["Rpre"], ts["W0"])
+ok, msg = raises(d.bingo_check_hazards, "Rpre")
+check("a reader before the first write, unordered against it, fails", ok and "W0" in msg, msg)
+
+print("\na buffer of tiles, each written then read, and readers across two tiles: swept set by set")
+
+
+def tile_graph(tiles=40):
+    """A 64-tile slab: per tile, a write of it, then a read of it and a read of it with the next tile (the latter after
+    the next tile's write too); {name: task}."""
+    d = new_dfg()
+    slab = l1("tiles", 64 * tiles)
+    view = lambda i, n: slab.view(64 * i)                           # noqa: E731  (n tiles: the copy's bytes)
+    ts = {}
+    for i in range(tiles):
+        ts[f"W{i}"] = task(d, DM, f"W{i}", SnaxBingoKernelIdma1dCopyArgs(l1(f"s{i}", 64), view(i, 1), 64))
+    for i in range(tiles):
+        ts[f"R{i}"] = task(d, DM, f"R{i}", SnaxBingoKernelIdma1dCopyArgs(view(i, 1), l1(f"o{i}", 64), 64), [ts[f"W{i}"]])
+        if i + 1 < tiles:
+            ts[f"X{i}"] = task(d, DM, f"X{i}", SnaxBingoKernelIdma1dCopyArgs(view(i, 2), l1(f"x{i}", 128), 128),
+                               [ts[f"W{i}"], ts[f"W{i + 1}"]])
+    return d, ts
+
+
+d, ts = tile_graph()
+check("tiles with their readers in order pass", d.bingo_check_hazards() == [])
+_os.environ["BINGO_HAZARD_CROSSCHECK"] = "1"
+check("and the cross-check agrees", d.bingo_check_hazards() == [])
+d.remove_edge(ts["W21"], ts["X20"])
+ok, msg = raises(d.bingo_check_hazards, "X20")
+check("without W21 -> X20 (a reader across tiles 20 and 21) it fails, naming W21, and the cross-check agrees",
+      ok and "W21" in msg, msg)
+del _os.environ["BINGO_HAZARD_CROSSCHECK"]
+ok, msg = raises(d.bingo_check_hazards, "X20")
+check("the same failure without the cross-check", ok and "W21" in msg, msg)
+
 print("\nthe args classes that declare no accesses() yet (to do: each fails the check once a graph uses it)")
 import bingo_kernel_args as _K                                       # noqa: E402
 

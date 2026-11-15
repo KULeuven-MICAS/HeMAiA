@@ -287,6 +287,7 @@ class _Model:
             lat = cm.edge_latency(self.place[u], self.place[v], self.host)
         self.preds[v].append((u, lat))
         self.succs[u].append((v, lat))
+        self._ranks = None                  # ranks() again on the grown edges
 
     def on_core(self, v):
         """Whether `v` holds an in-order device core (a host task runs beside the rest of its chip's)."""
@@ -313,7 +314,10 @@ class _Model:
 
     def ranks(self):
         """Each vertex's longest path to the end of the graph, its own time and every edge's latency counted (a
-        start's path to its wait: its work's time)."""
+        start's path to its wait: its work's time). Kept until an edge is added (_edge): a fork shares its parent's
+        until its own edges grow; nobody writes into the dict returned."""
+        if getattr(self, "_ranks", None) is not None:
+            return self._ranks
         g = nx.DiGraph()
         g.add_nodes_from(self.vertices)
         g.add_edges_from((u, v) for u in self.vertices for v, _ in self.succs[u])
@@ -323,6 +327,7 @@ class _Model:
             own = self.dur[v] + (self.eng[v] if whole else 0)
             rank[v] = own + max((lat + (self.eng[v] if self.role[v] == "start" and not whole else 0) + rank[s]
                                  for s, lat in self.succs[v]), default=0)
+        self._ranks = rank
         return rank
 
 
@@ -681,7 +686,12 @@ class _L1Gate:
         cs = [self.clock[p] for p, _ in m.preds[v] if p in self.clock]
         if m.on_core(v) and m.place[v] in self.last:
             cs.append(self.clock[self.last[m.place[v]]])
-        return np.max(cs, axis=0) if cs else self.zero
+        if len(cs) < 2:                            # read only: commit copies it
+            return cs[0] if cs else self.zero
+        out = np.maximum(cs[0], cs[1])             # pairwise: np.max over the list would stack it into a new array first
+        for c in cs[2:]:
+            np.maximum(out, c, out=out)
+        return out
 
     def _free(self, b, clk):
         return not self.left[b] and not self.blind[b] and all(clk[i] >= p for i, p in self.need[b].items())

@@ -24,6 +24,8 @@ graph without schedule_cores (a hand-built one, a test's) is reported on only.
 Every kernel declares its accesses: a task whose args class declares none, or leaves an address field it holds out of
 its declaration, is an error where the check is enforced."""
 
+import os
+
 import networkx as nx
 
 import bingo_kernel_args as K
@@ -34,6 +36,7 @@ INF = 1 << 62
 SHOW = 12
 
 
+SWEEP_MIN = 64                   # a buffer of more accesses than this is swept (bingo_check_hazards), not looped
 RUNS_MAX = 1 << 16               # the runs of a nest enumerated against another one; past it, the bounds decide
 
 
@@ -174,11 +177,114 @@ class BingoDFGHazardsMixin:
         def ordered(a, b):
             return b in reach[end(a)] or a in reach[end(b)]
 
-        bad, seen, pairs = [], set(), 0
+        # A buffer of more than SWEEP_MIN accesses, each of whose tasks reaches the task that ends its hold, is swept,
+        # not looped. Two accesses that share a byte share the first byte of the later one, so they are both in the set
+        # of accesses open there taken just before the next one closes (cover_sets: by first byte and end, a nest by its
+        # bounds). One sweep of such a set in a topological order of the same view -- each writer after the writer
+        # before it and every reader since (from the start, for the first), each reader after the last writer --
+        # orders every pair with a writer exactly when the pairwise loop below would: along a topological order only
+        # the forward direction can hold, and end(W1) -> W2 -> end(W2) -> W3 composes. Linear in each set, where the
+        # loop is quadratic in the buffer. A nest's bounds may join two accesses whose runs share no byte, so a sweep
+        # can ask more than the loop; a set the sweep finds unordered sends its buffer to the loop, which decides and
+        # names the pairs as always. BINGO_HAZARD_CROSSCHECK=1: both; the sweep never passes what the loop fails, and
+        # without nests they agree. The pairs counted for a swept buffer are by bounds.
+        def cover_sets(acc):
+            import heapq
+            out, active, ends, grown = [], set(), [], False
+            for i in sorted(range(len(acc)), key=lambda i: acc[i][0]):
+                if ends and ends[0][0] <= acc[i][0]:
+                    if grown:
+                        out.append(list(active))
+                        grown = False
+                    while ends and ends[0][0] <= acc[i][0]:
+                        active.discard(heapq.heappop(ends)[1])
+                active.add(i)
+                heapq.heappush(ends, (acc[i][1], i))
+                grown = True
+            if grown:
+                out.append(list(active))
+            return out
+
+        def pairs_with_writer(acc):
+            """The pairs of accesses (by bounds) that share a byte, one of them writing."""
+            import bisect
+            def overlapping(rs):
+                rs = sorted(rs)
+                los = [r[0] for r in rs]
+                return sum(bisect.bisect_left(los, hi, i + 1) - (i + 1) for i, (_lo, hi) in enumerate(rs))
+            return overlapping([(r[0], r[1]) for r in acc]) - overlapping([(r[0], r[1]) for r in acc if not r[2]])
+
+        swept, rest = [], []
         for key, acc in bufs.items():
+            if len(acc) > SWEEP_MIN and all(end(r[3]) is r[3] or end(r[3]) in reach[r[3]] for r in acc):
+                sets = []
+                for c in cover_sets(acc):
+                    ts = {}
+                    for i in c:
+                        ts[acc[i][3]] = ts.get(acc[i][3], False) or acc[i][2]
+                    if len(ts) > 1 and any(ts.values()):
+                        sets.append(ts)
+                swept.append((key, sets))
+                continue
+            rest.append(key)
+        pos = {n: i for i, n in enumerate(nx.topological_sort(g))} if swept else {}
+
+        def sweep(ts):
+            """Whether the sweep orders every pair with a writer among the tasks `ts` ({task: writes})."""
+            last, readers = None, []
+            for t in sorted(ts, key=pos.__getitem__):
+                if ts[t]:
+                    if any(t not in reach[end(p)] for p in ([last] if last is not None else []) + readers):
+                        return False
+                    last, readers = t, []
+                else:
+                    if last is not None and t not in reach[end(last)]:
+                        return False
+                    readers.append(t)
+            return True
+
+        def loop_ok(acc):
+            """The pairwise loop's verdict on one buffer."""
+            acc = sorted(acc, key=lambda r: (r[0], r[1]))
+            for i, (lo, hi, w, t, _m, ru) in enumerate(acc):
+                for lo2, hi2, w2, t2, _m2, ru2 in acc[i + 1:]:
+                    if lo2 >= hi:
+                        break
+                    if t2 is t or not (w or w2):
+                        continue
+                    if (ru or ru2) and not _overlap(ru or (lo, hi - lo, ()), ru2 or (lo2, hi2 - lo2, ())):
+                        continue
+                    if not ordered(t, t2):
+                        return False
+            return True
+
+        cross = bool(os.environ.get("BINGO_HAZARD_CROSSCHECK"))
+        looped, sweep_pairs = set(rest), 0
+        for key, sets in swept:
+            ok = all(sweep(ts) for ts in sets)
+            if cross:
+                acc = bufs[key]
+                lok = loop_ok(acc)
+                nests = any(r[5] is not None for r in acc)
+                if (ok and not lok) or (not nests and ok != lok):
+                    raise AssertionError(f"hazard sweep on {names[key]}: the sweep says {'ordered' if ok else 'unordered'}, "
+                                         f"the pairwise check {'ordered' if lok else 'unordered'}")
+            if ok:
+                sweep_pairs += pairs_with_writer(bufs[key])
+            else:
+                looped.add(key)                 # the loop decides, and names the pairs
+        if cross and swept:
+            print(f"[hazards] cross-check: the sweep and the pairwise check agree on {len(swept)} swept buffers")
+        loop_keys = [k for k in bufs if k in looped]
+
+        bad, seen, pairs = [], set(), 0
+        for key in loop_keys:
+            acc = bufs[key]
             acc.sort(key=lambda r: (r[0], r[1]))
+            n_acc = len(acc)
             for i, (lo, hi, w, t, m, ru) in enumerate(acc):
-                for lo2, hi2, w2, t2, m2, ru2 in acc[i + 1:]:
+                for j in range(i + 1, n_acc):           # by index: a slice would copy the rest of the list each time
+                    lo2, hi2, w2, t2, m2, ru2 = acc[j]
                     if lo2 >= hi:
                         break
                     if t2 is t or not (w or w2):
@@ -194,6 +300,7 @@ class BingoDFGHazardsMixin:
                         first = (t, m, lo, hi) if t.node_id < t2.node_id else (t2, m2, lo2, hi2)
                         then = (t2, m2, lo2, hi2) if first[0] is t else (t, m, lo, hi)
                         bad.append((names[key], first, then))
+        pairs += sweep_pairs
         problems = []
         for cls, ts in sorted(undeclared.items()):
             problems.append(f"{cls} declares no accesses() ({len(ts)} tasks, e.g. {ts[0].node_name})")

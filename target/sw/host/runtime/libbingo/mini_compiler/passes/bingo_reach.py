@@ -325,10 +325,12 @@ def reach_sets(G, max_label_bytes: int = 2 << 30, form: str = None) -> dict:
         for n in topo:
             m[n] = ChainReach(n, m)
         return m
-    bits: dict = {}
+    bits: dict = {}                 # node -> its descendants and its own bit: one OR an edge
     for n in reversed(topo):
-        b = 0
+        b = 1 << pos[n]
         for s in G.successors(n):
-            b |= bits[s] | (1 << pos[s])
+            b |= bits[s]
         bits[n] = b
+    for n, b in bits.items():       # each own bit out, one node at a time (no second copy of every set)
+        bits[n] = b ^ (1 << pos[n])
     return ReachMap((n, Reach(b, pos)) for n, b in bits.items())

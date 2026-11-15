@@ -95,7 +95,7 @@ class BingoDFGStaticL1Mixin:
         # final graph orders at least what the schedule's did, so it holds; where the checker finds it does not, a
         # fresh packing
         hint = getattr(self, "l1_plan_hint", None) if want_pack else None
-        placement = None
+        placement = verified = None
         if hint is not None:
             placement, stats = _place_around(handle_users, hint, opts)
             if cap and any(st["peak"] > cap for st in stats.values()):     # no room above: into the gaps
@@ -108,6 +108,7 @@ class BingoDFGStaticL1Mixin:
                       f"problem(s), e.g. {problems[0]}): packed again")
                 placement = None
             else:
+                verified = placement            # the checker below would ask the same of the same placement
                 print("[static-l1] the schedule's placement, every buffer made since placed above it")
         if placement is None:
             placement, stats = pack(handle_users, desc, "L1",
@@ -168,7 +169,7 @@ class BingoDFGStaticL1Mixin:
                             print(f"[static-l1 dbg]    {hb.name} users: "
                                   + ", ".join(sorted(n.node_name for n in ub))[:220])
 
-        issues = verify(placement, handle_users, desc, cap, "L1")
+        issues = [] if placement is verified else verify(placement, handle_users, desc, cap, "L1")
         if issues:
             print(f"[static-l1] CHECKER FOUND {len(issues)} PROBLEM(S):")
             for i in issues[:20]:
