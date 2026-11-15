@@ -17,6 +17,8 @@
   remote_broadcast: false
   // each cluster's per-task list entries paged with its args phases (two L1 windows); runs on snax-bingo-offload-paged
   list_phases: true
+  // each core's tasks in the order they were made: the compiler's own order overflows L1 in this layer
+  schedule_order: made
   attn:
   {
     rows: 64

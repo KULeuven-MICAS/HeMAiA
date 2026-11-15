@@ -334,6 +334,12 @@ class ChipletBuild(FabricBase):
         # async_exec false keeps every task whole (the synchronous arm of an A/B)
         dfg.schedule_cores = True
         dfg.async_exec = bool(p.get("async_exec", True))
+        # params schedule_order: "best" (the compiler's own order where it fits L1, else the order made) or "made" (the
+        # order made only, the compiler's not tried)
+        order = str(p.get("schedule_order", "best"))
+        if order not in ("best", "made"):
+            raise ValueError(f"params schedule_order: {order!r} (best or made)")
+        dfg.schedule_made_order = order == "made"
         self.roles = core_roles(plat)
         self.ctx = Ctx(dfg=dfg, mesh=MESH, roles=self.roles, hw=hw, chiplet=self.ROOT)
         self.pipe = Pipeline(self.ctx, verbose=False, gate_sources=True)

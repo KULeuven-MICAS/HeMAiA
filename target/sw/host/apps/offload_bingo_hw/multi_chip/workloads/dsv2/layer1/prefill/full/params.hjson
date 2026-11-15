@@ -16,6 +16,8 @@
   fast_host_init: true
   // the scheduler's per-task lists follow the args phases, two L1 windows a cluster (bingo_dfg_emit.py, PAGED TASK LISTS)
   list_phases: true
+  // each core's tasks in the order they were made: the compiler's own order overflows L1 in this layer
+  schedule_order: made
   layer:
   {
     layer: 1
