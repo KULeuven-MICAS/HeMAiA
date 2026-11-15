@@ -8,6 +8,21 @@ from bingo_reach import ChainLabels, reach_sets
 from bingo_node import BingoNode
 
 
+def _close(adj, start, closed: set) -> set:
+    """`closed` with `start` and every node `start` reaches through `adj` (a graph's _succ, or _pred for its
+    ancestors) added in place, and returned. `closed` must already hold everything its own nodes reach that way: the
+    walk stops where it meets it, so growing one such set node by node walks each node once."""
+    if start not in closed:
+        closed.add(start)
+        stack = [start]
+        while stack:
+            for y in adj[stack.pop()]:
+                if y not in closed:
+                    closed.add(y)
+                    stack.append(y)
+    return closed
+
+
 def _dsatur(G) -> dict:
     """networkx greedy_color(G, strategy="DSATUR"), the same colouring: the next node is the uncoloured
     one with the most distinct colours among its neighbours, then the highest degree, then the first in
@@ -512,9 +527,10 @@ class BingoDFGTransformsMixin:
             end = getattr(g, "operands_held_by", g)
             own = (g.assigned_chiplet_id, g.assigned_cluster_id)
             hops = set(self._chain_gather_hops(g.kernel_args)) - {own}
-            before, after = nx.ancestors(self, g), nx.descendants(self, end)
-            v_before = nx.ancestors(view, g) if view is not self else before
-            v_after = nx.descendants(view, end) if view is not self else after
+            # each set the node's own ancestors / descendants and the node itself, which no task below is
+            before, after = _close(self._pred, g, set()), _close(self._succ, end, set())
+            v_before = _close(view._pred, g, set()) if view is not self else before
+            v_after = _close(view._succ, end, set()) if view is not self else after
             for hop in sorted(hops):
                 # the latest first: an edge from a task orders its ancestors too
                 for t in sorted(on_core.get(hop, []), key=lambda n: -n.node_id):
@@ -526,9 +542,9 @@ class BingoDFGTransformsMixin:
                     if view is not self:
                         view.add_edge(a, b)
                     if first:
-                        before |= nx.ancestors(self, t) | {t}
+                        _close(self._pred, t, before)
                     else:
-                        after |= nx.descendants(self, t) | {t}
+                        _close(self._succ, t, after)
                     added.append((a.node_name, b.node_name))
         if added:
             print(f"[bingo] ChainGather hop check: {len(gathers)} gathers, {len(added)} task(s) on their hops' xDMA "
@@ -810,14 +826,27 @@ class BingoDFGTransformsMixin:
             topo = list(nx.topological_sort(self))
             pos = {n: i for i, n in enumerate(topo)}
             reach = ChainLabels(self, topo)
+            # Whether a new order edge closes a cycle is asked of the ORDER view (bingo_order_view: the dependencies
+            # and the ordering-only spin edges), which the dispatch stream follows: an edge acyclic in the
+            # dependencies alone can close one through a spin. Which edges may share a tag stays the dependencies'
+            # happens-before, as the allocator counts it. Every edge added here goes into both.
+            H = self.bingo_order_view()
+            reach_h = reach if H is self else ChainLabels(H)
 
             def before(a, b):
                 """a is b, or a happens-before b."""
                 return a is b or reach.reaches(a, b)
 
+            def reaches_h(a, b):
+                """a is b, or a reaches b in the order view."""
+                return a is b or reach_h.reaches(a, b)
+
             def add_order(a, b):
                 self.add_edge(a, b, order_only=True)
                 reach.add_edge(a, b)
+                if H is not self:
+                    H.add_edge(a, b)
+                    reach_h.add_edge(a, b)
 
             def chain_cover(es):
                 """The fewest chains (= tags) the cell needs as it stands."""
@@ -853,7 +882,7 @@ class BingoDFGTransformsMixin:
                         ends.append(c)
                         continue
                     else:
-                        legal = [i for i, last in enumerate(ends) if not before(p, last)]
+                        legal = [i for i, last in enumerate(ends) if not reaches_h(p, last)]
                         # The DFG's optional `relay_not_order_cores` [consumer cores]: a cell of
                         # those cores relays the edge instead of ordering it, so no producer (a
                         # long GEMM, say) waits for an unrelated consumer to finish.
@@ -931,6 +960,15 @@ class BingoDFGTransformsMixin:
         passes after this one rely on."""
         from bingo_kernel_args import SnaxBingoKernelStampArgs
         host = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
+        # Placed over the ORDER view (the dependencies and the ordering-only spin edges, which the dispatch stream
+        # follows): a relay acyclic in the dependencies alone can close a cycle through a spin. Every edge changed
+        # here is mirrored into the view while it is a copy; a removed dependency stays there if it is also a spin.
+        H = self.bingo_order_view()
+        spin = set(self.order_edges) if H is not self else set()
+
+        def mirror_add(a, b):
+            if H is not self:
+                H.add_edge(a, b)
         topo = list(nx.topological_sort(self))
         pos = {n: i for i, n in enumerate(topo)}
         chain: dict = {}
@@ -963,7 +1001,7 @@ class BingoDFGTransformsMixin:
                     groups.append((first, cur))
                     cur = []
                 if not cur:
-                    first, below = c, nx.descendants(self, c)
+                    first, below = c, nx.descendants(H, c)
                 cur.append((p, c))
             if cur:
                 groups.append((first, cur))
@@ -976,12 +1014,19 @@ class BingoDFGTransformsMixin:
                               kernel_name="__snax_bingo_kernel_stamp",
                               kernel_args=SnaxBingoKernelStampArgs())
                 self.bingo_add_node(r)
+                if H is not self:
+                    H.add_node(r)
                 for p, c in grp:
                     data = dict(self.get_edge_data(p, c) or {})
                     self.remove_edge(p, c)
                     self.add_edge(p, r, **data)
+                    if H is not self:
+                        if (p, c) not in spin:
+                            H.remove_edge(p, c)
+                        H.add_edge(p, r)
                 self.add_edge(r, first, order_only=True)
-                below = nx.descendants(self, first)
+                mirror_add(r, first)
+                below = nx.descendants(H, first)
                 seq = chain.setdefault((chip, c2, r2), [])
                 at = next((i for i, x in enumerate(seq) if x in below), len(seq))
                 if one:
@@ -990,7 +1035,7 @@ class BingoDFGTransformsMixin:
                     # core runs in order). Not when a task from there on feeds this group.
                     anc = set()
                     for p, _ in grp:
-                        anc |= nx.ancestors(self, p) | {p}
+                        anc |= nx.ancestors(H, p) | {p}
                     early = next((i for i, x in enumerate(seq[:at])
                                   if relay_for.get(x) in below), at)
                     if not any(x in anc for x in seq[early:]):
@@ -998,15 +1043,17 @@ class BingoDFGTransformsMixin:
                 relay_for[r] = first
                 if at < len(seq):
                     self.add_edge(r, seq[at], order_only=True)
+                    mirror_add(r, seq[at])
                 if at > 0:
                     self.add_edge(seq[at - 1], r, order_only=True)
+                    mirror_add(seq[at - 1], r)
                 seq.insert(at, r)
                 load[(chip, c2, r2, C)] = load.get((chip, c2, r2, C), 0) + len(grp)
                 made += 1
                 if debug:
                     print(f"[tag-fit]   cell {key}: relay {r.node_name} on cluster {c2} core "
                           f"{r2} takes {len(grp)} edges")
-        if not nx.is_directed_acyclic_graph(self):
+        if not nx.is_directed_acyclic_graph(H):
             raise ValueError("dep-tag budget: a relay closed a cycle (a bug in "
                              "_relay_dep_edges).")
         return made
