@@ -13,9 +13,8 @@ THE BLOCKS. The attention is ../../common/llama3_attn_mc.py's block (params attn
 tokens, each pass's x multicast from the root memory chip's HBM by its push engine, y scattered row tile by row tile
 into the tiles' owners. The FFN is ../../../ffn/common/ffn_prefill_mc's block (params ffn): X of each pass multicast
 from the root memory chip's HBM by the same engine, the down projection split by output columns, ChainGathers into the
-root, which scatters Y_raw row tile by row tile into the tiles' owners (ffn.y_scatter). params attn.passes and
-layer.ffn_passes build only the first passes of the prompt (a proof of concept): the data, the scales, the causal mask
-and the key/value buffers stay the whole prompt's.
+root, which scatters Y_raw row tile by row tile into the tiles' owners (ffn.y_scatter). The FFN runs the attention's
+passes.
 
 THE BOUNDARIES GO THROUGH HBM. The layer's input x (FP16) sits in the memory chips' HBM. The input norm writes the
 attention's x8 into the HBM region the attention's x multicast reads; the glue writes h (FP16) into its chip's memory chip
@@ -55,8 +54,8 @@ THE WEIGHT RINGS AND THE MULTICASTS share each memory chip's push engine queue: 
 multicast after the one before has landed, among the root rings' runs. The FFN's X multicasts follow the attention's
 last o8 multicast, each behind its pass's glue; the root's FFN rings start once the first min(layer.x_slots, passes) of
 them have landed (every one with no X ring). With an X ring (layer.x_slots below the FFN's passes) X_i (i >= x_slots) is
-multicast after pass i - 2's last gather and before pass i - 1's first (_ffn_ring). After the compile,
-_check_ring_waits proves that no core's program and the dependencies wait for each other in a cycle. On every other chip
+multicast after pass i - 2's last gather and before pass i - 1's first (_ffn_ring). Every ring wait is a dependency, so
+the compiler's hang checks see the rings with every core's program. On every other chip
 the FFN's first posts follow the attention rings' last posts (their rings are separate L3 regions), so the FFN's first
 chunks land under the attention's last pass.
 
@@ -70,8 +69,7 @@ stamp each sample is copied into one L3 buffer on the root (from HBM behind its 
 
 PARAMETERS (params.hjson): the platform and graph switches both blocks share (and args_phase_bytes: each cluster's task
 args in phases of at most this many bytes), then `attn` (llama3_attn_mc.py's params), `ffn` (ffn_prefill_mc's) and
-`layer`: cluster (0 | 1, the steps' cluster), ffn_passes (the FFN's built passes, at most attn.passes), norm_lead,
-glue_lag, final_lag, final_slice, inplace_norm (the input norm's RMSNorm in place: half its L1), piece_rows,
+`layer`: cluster (0 | 1, the steps' cluster), norm_lead, glue_lag, final_lag, final_slice, inplace_norm (the input norm's RMSNorm in place: half its L1), piece_rows,
 norm_cluster, glue_cluster, final_cluster, final_step, final_root_rows, x_slots, alias_l3, rope_hbm.
 """
 
@@ -371,8 +369,8 @@ class LayerBuild(cm.ChipletBuild):
 
     def mem_handles(self):
         """The data, the golden and the memory; no task is made here. The attention's
-        (AttnPart's mem_handles), then the golden on its data: x and h. The FFN part (FfnPart), on params
-        layer.ffn_passes of the attention's built passes (default all of them), then its data, golden and memory (its
+        (AttnPart's mem_handles), then the golden on its data: x and h. The FFN part (FfnPart), on the attention's built
+        passes, then its data, golden and memory (its
         mem_handles, on h), its gain checked against the layer's, the output's golden. The layer's own data: per memory
         chip, in its HBM, x of the tiles its chips own, the regions the steps write (h, the output) and their flags, the
         constants (the gains, W_O's and the down projection's factors); in the root memory chip's HBM the flags of the
@@ -386,12 +384,9 @@ class LayerBuild(cm.ChipletBuild):
         self.h16 = fp.add16(d.y16(A.gold_y), self.x16)           # the residual stream after the attention
 
         # ---- the FFN ----------------------------------------------------------------------------------------------
-        nf = int(self.lp.get("ffn_passes", A.NP))
-        if not 0 < nf <= A.NP:
-            raise ValueError(f"params layer.ffn_passes={nf}: 1 .. attn.passes ({A.NP}), the passes the glue makes")
         pf = dict(self.ffn_p)
         pf["model"] = llama3_data.MODEL
-        pf["tokens"] = nf * int(pf.get("rows", A.R))
+        pf["tokens"] = A.NP * int(pf.get("rows", A.R))
         F = self.ffn = FfnPart(self, args, pf, self.plat, self.hw)
         if F.ROWS != A.R:
             raise ValueError("params ffn.rows: the attention's rows (a pass's tiles are the same in both blocks)")
@@ -1154,7 +1149,8 @@ class LayerBuild(cm.ChipletBuild):
             prev.update((b, a) for a, b in zip(ts, ts[1:]) if pos[a] < pos[b])
         n_order = n_dep = 0
         for users, reuse in self._reuse_groups():
-            anc = nx.ancestors(H, reuse)
+            # every edge added below follows pos, so it stays a topological order of H
+            anc = cm.users_before(H._pred, reuse, users, pos)
             left = {t for t in users if t not in anc and t is not reuse}
             if not left:
                 continue
@@ -1169,7 +1165,7 @@ class LayerBuild(cm.ChipletBuild):
                         step[p] = v
                         left.discard(p)
                         q.append(p)
-            for u in miss:
+            for u in sorted(miss, key=lambda t: t.node_id):     # a set's order is the objects' addresses
                 if u not in step:
                     if pos[u] > pos[reuse]:
                         raise ValueError(f"{reuse.node_name} reuses a slot or region {u.node_name} still uses after it")
@@ -1193,46 +1189,15 @@ class LayerBuild(cm.ChipletBuild):
         path."""
         import networkx as nx
         G = self.dfg.bingo_order_view()
+        pos = {t: i for i, t in enumerate(nx.topological_sort(G))}
         bad, n = [], 0
         for users, reuse in self._reuse_groups():
-            anc = nx.ancestors(G, reuse)
+            anc = cm.users_before(G._pred, reuse, users, pos)
             n += len(users)
             bad += [(t.node_name, reuse.node_name) for t in users if t not in anc]
         if bad:
             raise ValueError(f"{len(bad)} ring or alias reuses not ordered, e.g. {bad[:4]}")
         print(f"[{self.TAG}] rings and aliases: {n} earlier users each before the reuse of their slot or region")
-
-    def _check_ring_waits(self, header):
-        """No cycle among what the hardware waits for, in the emitted header: every dependency edge (each ring load
-        follows its run's post, each post the loads of the slots it overwrites) and each core's program, the descriptor
-        list's order (a core runs its tasks one after the other). A cycle here is a deadlock."""
-        import networkx as nx
-        G = nx.DiGraph()
-        G.add_nodes_from(self.dfg.nodes())
-        G.add_edges_from(self.dfg.edges())
-        by_id = {str(n.node_id): n for n in self.dfg.node_list}
-        prev, n_prog = {}, 0
-        for chip, nid, ty, cl, core in cm.desc_rows(open(header).read()):
-            n = by_id.get(nid)
-            if n is None:
-                continue
-            key = (chip, cl, core)
-            if key in prev:
-                G.add_edge(prev[key], n)
-                n_prog += 1
-            prev[key] = n
-        n_loads = sum(1 for n in self.dfg.node_list if (n.kernel_name or "").endswith("idma_ring_load")
-                      and getattr(n, "exec_chunk", None) is not None)
-        if nx.is_directed_acyclic_graph(G):
-            print(f"[{self.TAG}] ring waits: no cycle over {G.number_of_nodes()} nodes ({n_prog} program-order edges, "
-                  f"{n_loads} ring loads)")
-            return
-        from bingo_reach import find_cycle          # linear, where networkx's walks again from every start
-        cyc = find_cycle(G)
-
-        def nm(x):
-            return x.node_name if hasattr(x, "node_name") else str(x)
-        raise ValueError(f"a cycle of waits (a deadlock), {len(cyc)} edges: " + " -> ".join(nm(u) for u, _ in cyc[:24]))
 
     def _check_fold_slots(self):
         """ffn.y_scatter: the puts of a root fold slot (the root's Y_raw scatter after a gather) all precede the next
@@ -1293,16 +1258,9 @@ class LayerBuild(cm.ChipletBuild):
 
         self.dfg.bingo_add_node = add_resident
         cm.ChipletBuild.finish(self, app_name)
-        self._check_ring_waits(os.path.join(self.args.output_dir, self.args.output_offload_file_name))
-        self._check_step_l1()
 
     def data_h_extra(self):
         return self.st.lines()
-
-    def _check_step_l1(self):
-        """The static plan's peak per cluster, and where the steps' buffers sit."""
-        pl = getattr(self.dfg, "static_l1_placement", None) or {}
-        print(f"[{self.TAG}] static L1 placement: {len(pl)} buffers placed")
 
 
 def _app_name(S):

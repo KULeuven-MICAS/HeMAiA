@@ -5,8 +5,7 @@
 // their 1,024-token workloads: attn = ../../../fa/llama3_prefill/t1024 (args phases at the layer's level), ffn =
 // ../../../ffn/llama3_prefill/full with y_scatter (Y_raw row tile by row tile into the tiles' owners, where the final
 // residual runs) and without l3_overlay. The layer's input x, every weight and every boundary tensor (x8, h, X, the output)
-// are in the memory chips' HBM. ../common/llama3_layer_mc.py explains each `layer` parameter; ../poc and ../poc64 are this
-// layer's first passes.
+// are in the memory chips' HBM. ../common/llama3_layer_mc.py explains each `layer` parameter.
 {
   num_chiplets: 16
   num_clusters: 2
@@ -16,9 +15,6 @@
   desc_in_image: true
   fast_host_init: true
   remote_broadcast: false
-  bcast: bcast_l1
-  reduce: chain
-  sync: edge
   // each cluster's per-task list entries paged with its args phases (two L1 windows); runs on snax-bingo-offload-paged
   list_phases: true
   attn:
@@ -26,19 +22,15 @@
     rows: 64
     bc: 64
     dn_cols: 256
-    w4_paired: true
     w_chunk_bytes: 65536
     w_buffers: 2
     wo_cols: true
     wo_slice: 128
     rope_pairs: chunks
     restream: true
-    l3_overlay: false
     kv_split: true
     weight_ring: { slots: 8, head: 4, batch_head: 1 }
-    checks: y
     mask_c: true
-    x_bcast: "memchip"
     ot8_fused: true
     sm_geom_xdma: true
     y_scatter: true
@@ -63,7 +55,6 @@
     w_buffers: 2
     restream: true
     weight_ring: { slots: 8, head: 4, batch_head: 1 }
-    l3_overlay: false
     y_scatter: true
     deq_per_row: true
     x_blocks: 4
@@ -78,8 +69,6 @@
   }
   layer:
   {
-    cluster: 1
-    ffn_passes: 16
     // the steps in pieces of four rows: the norm on cluster 0, the glue and the final on cluster 1
     piece_rows: 4
     norm_cluster: 0

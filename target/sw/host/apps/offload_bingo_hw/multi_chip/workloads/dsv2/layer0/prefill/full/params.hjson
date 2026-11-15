@@ -20,9 +20,6 @@
   layer:
   {
     layer: 0
-    // the FFN's Y_raw slice by slice into the root memory chip's HBM (each pass's X landing back to back in L3), where
-    // the final reads it: no activation of the prompt whole in the root's L3
-    ffn_y: hbm
   }
   attn:
   {
@@ -35,14 +32,12 @@
     kv_balance_ways: 4
     kv_balance: true
     w_chunk_bytes: 65536
-    w_buffers: 3
     weight_ring:
     {
       slots: 6
     }
     kv_slabs: split_kb
     chain_concurrent: false
-    checks: y
     x_pf_split: true
     chains_after_sweep: true
     keys_by_chunk: true
@@ -63,12 +58,9 @@
   }
   ffn:
   {
-    model: dsv2-lite-l0
-    seed: 1
     tokens: 1024
     rows: 128
     wbits: 4
-    blocks: 3
     dn_cols: 128
     w_chunk_bytes: 98304
     w_buffers: 2
@@ -78,9 +70,6 @@
       head: 4
       batch_head: 1
     }
-    bcast: bcast_l1
-    reduce: chain
-    sync: edge
     l3_overlay: true
     deq_per_row: true
     x_blocks: 4

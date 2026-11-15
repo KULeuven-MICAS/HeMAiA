@@ -38,13 +38,12 @@ class FaStagesOrder:
         if not self.kx_after_chains:
             return
         import networkx as nx
+        import chiplet_mc as cm
         g = nx.DiGraph(self.dfg)
         g.add_edges_from(self.dfg.order_edges)
         ch = [c[0] for c in self.collectives() if c[2] == "chain"]
-        dch = {t: nx.descendants(g, t) for t in ch}
         kt = [t for t in self.dfg.node_list if re.match(self.KX_TRANSFER, t.node_name)]
-        anc = {t: nx.ancestors(g, t) for t in ch}
-        bad = [(a.node_name, b.node_name) for b in ch for a in kt if a not in dch[b] and a not in anc[b]]
+        bad = [(a.node_name, b.node_name) for a, b in cm.unordered_pairs(g, kt, ch)]
         if bad:
             raise ValueError(f"params kx_after_chains: {len(bad)} key transfer / chain pair(s) may run at once: "
                              f"{bad[:6]}")

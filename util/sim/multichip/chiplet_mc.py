@@ -83,6 +83,57 @@ class ClusterNodes:
 RING_KEYS = ("slots", "batch", "head", "batch_head", "queue")
 
 
+def users_before(pred, task, users, pos):
+    """The users among `task`'s ancestors: a backward walk from it over `pred` (a graph's _pred) that leaves out every
+    node before the earliest user in `pos`, a topological order of the graph (a path from a user to `task` passes
+    none), and stops once it has found every user."""
+    want = set(users) - {task}
+    if not want:
+        return set()
+    lo = min(pos[u] for u in want)
+    found, seen, stack = set(), {task}, [task]
+    while stack and len(found) < len(want):
+        for p in pred[stack.pop()]:
+            if p not in seen and pos[p] >= lo:
+                seen.add(p)
+                stack.append(p)
+                if p in want:
+                    found.add(p)
+    return found
+
+
+def reach_bits(g, ys, topo=None, upward=False):
+    """({node: the ys it reaches, as a bitset}, {y: its bits}) over the DAG `g` (a node does not reach itself), by one
+    pass in reverse topological order; upward: the ys that reach each node instead."""
+    import networkx as nx
+    bit = {}
+    for i, y in enumerate(ys):
+        bit[y] = bit.get(y, 0) | 1 << i
+    topo = list(nx.topological_sort(g)) if topo is None else topo
+    nbr, order = (g._pred, topo) if upward else (g._succ, reversed(topo))
+    out = {}
+    for n in order:
+        b = 0
+        for s in nbr[n]:
+            b |= out[s] | bit.get(s, 0)
+        out[n] = b
+    return out, bit
+
+
+def unordered_pairs(g, xs, ys):
+    """[(x, y)] of xs and ys, ys outer and in order, that no path of the DAG `g` joins either way: one pass over `g` in
+    each direction, every node keeping which ys it reaches and which reach it as a bitset over ys."""
+    import networkx as nx
+    topo = list(nx.topological_sort(g))
+    down, _bit = reach_bits(g, ys, topo)
+    up, _bit = reach_bits(g, ys, topo, upward=True)
+    full = (1 << len(ys)) - 1
+    miss = {x: full & ~(down[x] | up[x]) for x in xs}
+    if not any(miss.values()):
+        return []
+    return [(x, y) for i, y in enumerate(ys) for x in xs if miss[x] >> i & 1]
+
+
 def check_keys(d, allowed, what):
     """Refuse a params block's keys outside `allowed` (a switch of a removed mechanism does nothing, so it is an
     error, not a silent no-op)."""

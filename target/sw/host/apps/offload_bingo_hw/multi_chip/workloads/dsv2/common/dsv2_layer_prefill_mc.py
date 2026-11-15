@@ -51,9 +51,8 @@ chain order), the steps' operators (hwmodel rmsnorm, mul16, add16, quant_i8), th
 glue's h (its scales calibrated on that h), with h in the residual chip's partial (layer 1) or the final's add
 (layer 0).
 
-A PROOF OF CONCEPT (params attn.chunks): the attention at the full geometry makes every token's keys but only the first
-chunks' queries, as fa_stages_mc does; the MoE / FFN then runs on those chunks' rows (params moe.tokens / ffn.tokens).
-The keys of the later chunks run after the window (behind its end stamp, last in every core's program).
+EVERY CHUNK: the attention makes every chunk of the prompt (fa_stages_mc's params chunks, the first chunks only, is
+refused: a key task of a chunk past the last one is an error, AttnPart._keys_by_chunk_order).
 
 L1: each block's static plan overlays the blocks' buffers by lifetime (the steps' tiles take the gaps, a tile's buffers
 its own); every device task's args come in phases of at most params args_phase_bytes, two alternating L1 regions
@@ -206,13 +205,11 @@ class LayerStaging(AliasStaging):
 # ---- the blocks, over the layer's graph ----------------------------------------------------------------------------
 class AttnPart(fas.FaStages):
     """The attention block (fa_stages_mc) in the layer: its window the layer's, its x the input norm's
-    (its multicasts wait for their tiles), its end the glue's start; its keys after the window (a proof of concept's
-    later chunks) behind the layer's end stamp; its checks the layer's (h stands for y)."""
+    (its multicasts wait for their tiles), its end the glue's start; its checks the layer's (h stands for y)."""
     stream_name = "zs_fp_stream"
 
     def __init__(self, layer, args, p, plat, hw):
         self.layer = layer
-        self.post_heads, self.post_tasks = [], []
         super().__init__(args, p, plat, hw, shared=layer)
 
     def setup(self, extra=None):
@@ -232,30 +229,12 @@ class AttnPart(fas.FaStages):
         end."""
 
     def _keys_by_chunk_order(self):
-        """fa_stages_mc's keys after the window, recorded instead of tied to an end stamp: the layer's end stamp comes
-        later (relocate_post_keys). The key tasks of the chunks after the last one made, and those of them that no other
-        one of them precedes (they follow the end stamp)."""
-        runs = sorted(self._key_runs, key=lambda r: r[0])
-        for (a, h), (b, _) in zip(runs, runs[1:]):
-            if h is None:
-                continue
-            for t in self.dfg.node_list:
-                if a <= t.node_id < b:
-                    t._key_chunk = h
-        post = {t for t in self.dfg.node_list if getattr(t, "_key_chunk", 0) >= self.NCH}
-        preds = {t: set(self.dfg.predecessors(t)) for t in post}
-        for x, y in self.dfg.order_edges:
-            if y in preds:
-                preds[y].add(x)
-        self.post_tasks = sorted(post, key=lambda t: t.node_id)
-        self.post_heads = [t for t in self.post_tasks if not preds[t] & post]
-        print(f"[{self.TAG}] keys_by_chunk: {len(self.post_tasks)} key tasks of the chunks from {self.NCH} on after the "
-              f"layer's window, {len(self.post_heads)} behind its end stamp")
-
-    def relocate_post_keys(self, end):
-        """The keys after the window behind the layer's end stamp."""
-        for t in self.post_heads:
-            self.dfg.bingo_add_edge(end, t)
+        """fa_stages_mc's keys after the window: the layer makes every chunk, so no key task belongs to a chunk past the
+        last one (fa_stages_mc would tie such tasks to its own end stamp)."""
+        late = {h for _, h in self._key_runs if h is not None and h >= self.NCH}
+        late |= {t._key_chunk for t in self.dfg.node_list if getattr(t, "_key_chunk", 0) >= self.NCH}
+        if late:
+            raise ValueError(f"key tasks of chunks {sorted(late)}, past the layer's last chunk {self.NCH - 1}")
 
 
 class MoePart(mom.MBuild):
@@ -864,8 +843,6 @@ class LayerBuild(cm.ChipletBuild):
 
     def finish(self, app_name):
         A, M = self.attn, self.mlp
-        A.relocate_post_keys(self.end)
-        self.prune_post_edges()
         if A.keys_by_chunk:
             A._order_collectives()
             A._check_kx_after_chains()
@@ -910,7 +887,6 @@ class LayerBuild(cm.ChipletBuild):
         path of dependency and order edges, before every write of the MoE into an overlapping part: the host tasks that
         fill the MoE's ring, X and router weights. Each writer is checked against each attention task on any chip, by
         address span. The attention's own pushes end before its last read of them: each ring chunk has a load."""
-        import networkx as nx
         G = self.dfg.bingo_order_view()
         st, A = self.st, self.attn
         span = {n: (o, o + st.asked[n]) for n, (r, o) in st.aliases.items() if r == "dl_act" and n in st.asked}
@@ -930,14 +906,14 @@ class LayerBuild(cm.ChipletBuild):
         for t in writers:
             kinds[t.kernel_name] = kinds.get(t.kernel_name, 0) + 1
         over = lambda a, b: span[a][0] < span[b][1] and span[b][0] < span[a][1]
+        reaches, bit = cm.reach_bits(G, writers)      # each task: the writers it reaches
         pairs, bad = 0, []
         for w in writers:
-            anc = nx.ancestors(G, w)
             hit = {a for a in span if a.startswith("fp_") and any(over(a, b) for b in users[w] if b.startswith(mlp))}
             for t, v in attn.items():
                 if v & hit:
                     pairs += 1
-                    if t not in anc:
+                    if not reaches[t] & bit[w]:
                         bad.append((t.node_name, w.node_name))
         if bad:
             raise ValueError(f"l3_arena: {len(bad)} attention tasks not ordered before a MoE write over their L3, "
@@ -950,21 +926,6 @@ class LayerBuild(cm.ChipletBuild):
                 raise ValueError(f"l3_arena: chip 0x{k:02x}: {len(need - have)} attention ring chunks without a load")
         print(f"[{self.TAG}] l3_arena: {len(attn)} attention tasks before {len(writers)} MoE writers ({pairs} ordered pairs "
               f"over overlapping L3), every ring chunk loaded; the writers: {kinds}")
-
-    def prune_post_edges(self):
-        """The keys after the window (a proof of concept's later chunks) follow the layer's end stamp: a dependency on
-        them from another core's task that the stamp already follows is implied (every one of them is behind the stamp,
-        directly or through another of them), and it would hold a dep tag across the whole MoE / FFN. Such edges go."""
-        post = set(self.attn.post_tasks)
-        if not post:
-            return
-        import networkx as nx
-        before = nx.ancestors(self.dfg, self.end)
-        core = lambda t: (t.assigned_chiplet_id, t.assigned_cluster_id, t.assigned_core_id)
-        rm = [(u, v) for v in post for u in list(self.dfg.predecessors(v))
-              if u not in post and u in before and core(u) != core(v)]
-        self.dfg.remove_edges_from(rm)
-        print(f"[{self.TAG}] keys after the window: {len(rm)} dependencies the end stamp implies removed")
 
 
 class _LayerBuild(LayerBuild):
