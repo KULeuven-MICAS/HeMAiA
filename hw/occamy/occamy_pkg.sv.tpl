@@ -20,10 +20,12 @@ package ${name}_pkg;
   localparam int unsigned NarrowUserWidth = ${narrow_user_width};
   localparam int unsigned WideUserWidth = ${wide_user_width};
 
+% if nr_clusters_per_quadrant:
   localparam int unsigned NrClustersPerQuad = ${nr_clusters_per_quadrant};
   localparam int unsigned NrCoresPerCluster [NrClustersPerQuad] = '${core_per_cluster};
   localparam int unsigned NrCoresPerClusterOffset [NrClustersPerQuad] = '${nr_cores_cluster_offset};
   localparam int unsigned NrCoresPerQuad = ${nr_cores_quadrant};
+% endif
 
   // Memory cut configurations: one per memory parameterization
   // SRAM configurations
@@ -33,6 +35,7 @@ package ${name}_pkg;
 % endfor
   } sram_cfg_t;
 
+% if nr_clusters_per_quadrant:
   typedef struct packed {
     sram_cfg_t icache_tag;
     sram_cfg_t icache_data;
@@ -44,6 +47,7 @@ package ${name}_pkg;
     sram_cfg_t rocache_data;
     cluster_sram_cfgs_t cluster;
   } sram_cfg_quadrant_t;
+% endif
 
   typedef struct packed {
     sram_cfg_t dcache_valid_dirty;
@@ -57,7 +61,9 @@ package ${name}_pkg;
     sram_cfg_t spm_narrow;
     sram_cfg_t spm_wide;
     sram_cfg_cva6_t cva6;
+% if nr_clusters_per_quadrant:
     sram_cfg_quadrant_t quadrant;
+% endif
   } sram_cfgs_t;
 
   localparam int unsigned SramCfgWidth = $bits(sram_cfg_t);
@@ -110,6 +116,7 @@ package ${name}_pkg;
 
   typedef xbar_rule_48_t xbar_rule_t;
 
+% if nr_clusters_per_quadrant:
   /// We reserve hartid `0` for CVA6.
   localparam logic [9:0] HartIdOffset = 1;
   /// The base offset for each cluster.
@@ -128,8 +135,9 @@ package ${name}_pkg;
   localparam addr_t QuadAXILiteBaseAddr = ${quad_axi_lite_base_addr};
   /// The address space for quad axi lite 
   localparam addr_t QuadAXILiteAddressSpace = ${quad_axi_lite_base_offset};
+% endif
 
-
+% if nr_clusters_per_quadrant or has_scheduler:
   typedef struct packed {
     addr_t         addr;
     logic [31:0]   data;
@@ -139,7 +147,7 @@ package ${name}_pkg;
   typedef struct packed {
     logic [31:0]   data;
   } csr_rsp_t;
-
+% endif
 
   ${package}
 

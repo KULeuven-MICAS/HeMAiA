@@ -14,8 +14,9 @@
       type: "int",
       default: "31"
     },
+% if nr_clusters:
     { name: "NumMailboxRegs",
-      desc: "Number of Mailbox scartch registers",
+      desc: "Number of mailbox scratch registers",
       type: "int",
       default: "${nr_clusters}"
     },
@@ -24,6 +25,7 @@
       type: "int",
       default: "4"
     }
+% endif
   ],
   name: "${name}_SoC",
   clock_primary: "clk_i",
@@ -148,6 +150,7 @@
         ]
       }
     },
+% if nr_clusters:
     { multireg:
       { name: "MAILBOX_SCRATCH",
         desc: "Scratch register holding the mailbox pointers.",
@@ -184,6 +187,10 @@
         ]
       }
     },
+% else:
+    // Keep the two-cluster register-map offset for IO drive strength.
+    { skipto: "0xb4" },
+% endif
 
     { name: "IO_DRIVE_STRENGTH",
       desc: '''

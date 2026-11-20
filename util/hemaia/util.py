@@ -15,6 +15,10 @@ import argparse
 import os
 import subprocess
 import pathlib
+import sys
+
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+from resolve_cluster_cfg import bingo_scheduler_enabled  # noqa: E402
 
 
 # Extract json file
@@ -70,20 +74,12 @@ def hemaia_util():
 
     # Parse the occamy_cfg file
     occamy_cfg = get_config(parsed_args.cfg_path)
-    if 'clusters' in occamy_cfg:
-        clusters = occamy_cfg['clusters']
-        cluster_cfgs = []
-        cluster_cfg_paths = []
-        for cluster in clusters:
-            cluster_cfg_path = os.path.dirname(parsed_args.cfg_path) + \
-                "/../../../deps/snitch_cluster/target/snitch_cluster/cfg/" + cluster + ".hjson"
-            cluster_cfg_paths.append(cluster_cfg_path)
-            cluster_cfgs.append(get_config(cluster_cfg_path))
-    else:
-        raise Exception("No clusters found in the hemaia json file")
-    if cluster_cfgs.__len__() == 0:
-        raise Exception("The number of cluster is 0")
-    
+    snax_path = parsed_args.snax_path or pathlib.Path(__file__).resolve().parents[2] / "deps/snitch_cluster"
+    cluster_cfg_paths = [
+        snax_path / "target/snitch_cluster/cfg" / f"{cluster}.hjson"
+        for cluster in occamy_cfg.get("clusters", [])
+    ]
+    cluster_cfgs = [get_config(path) for path in cluster_cfg_paths]
     occamy_cfg['clusters'] = cluster_cfgs
 
     # The remaining part is the region for the util functions
@@ -114,7 +110,7 @@ def hemaia_util():
         print("Generate filelist for each cluster only.")
         for cluster_cfg_path in cluster_cfg_paths:
             generate_cluster_syn_flist(cluster_cfg_path,
-                                    parsed_args.snax_path,
+                                    snax_path,
                                     parsed_args.outdir)
         return
     
@@ -133,10 +129,19 @@ def hemaia_util():
             elif isinstance(cfg, list):
                 for item in cfg:
                     targets.extend(get_bender_targets(item))
-            # Return the list of targets with removing duplicates
-            return list(set(targets))
+            return list(dict.fromkeys(targets))
         
         bender_targets = get_bender_targets(occamy_cfg)
+        if cluster_cfgs:
+            if "hemaia_clusters" not in bender_targets:
+                bender_targets.append("hemaia_clusters")
+        else:
+            bender_targets = [target for target in bender_targets
+                              if target not in ("hemaia_clusters", "occamy_noc")]
+        if cluster_cfgs or bingo_scheduler_enabled(occamy_cfg):
+            bender_targets.append("hemaia_bingo_regs")
+        if bingo_scheduler_enabled(occamy_cfg):
+            bender_targets.append("hemaia_bingo_scheduler")
         for i in bender_targets:
             print(" -t "+ i,end="")
         print()

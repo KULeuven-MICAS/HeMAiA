@@ -65,6 +65,7 @@ CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 
 include $(ROOT)/util/cluster_cfg.mk
 CLUSTER_CFG_STAMP_HWCFG :=
+OCCAMYGEN_INPUTS = $(CLUSTER_CFG_INPUTS) $(OCCAMYGEN) $(ROOT)/util/occamygen/occamy.py $(ROOT)/docs/schema/occamy.schema.json
 .SECONDEXPANSION:
 
 .PHONY: all clean
@@ -80,7 +81,9 @@ clean: clean-rtl-src
 
 
 
-rtl: clint plic socctrl quadperiph soc snax-cluster idma src/bender_targets.tmp
+rtl: clint plic socctrl soc idma src/bender_targets.tmp \
+	$$(if $$(CLUSTER_CFG_FILES),snax-cluster) \
+	$$(if $$(or $$(CLUSTER_CFG_FILES),$$(BINGO_SCHEDULER_ENABLED)),quadperiph)
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadperiph clean-soc clean-snax-cluster clean-idma
 clean-rtl-src:
 	rm -rf $(TARGET_SRC_DIR)
@@ -158,7 +161,7 @@ clean-soc:
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
-.misc_occamygen_targets_group: $$(CLUSTER_CFG_INPUTS) $(MISC_OCCAMYGEN_SV_TEMPLATES)
+.misc_occamygen_targets_group: $$(OCCAMYGEN_INPUTS) $(MISC_OCCAMYGEN_SV_TEMPLATES) $(abspath Makefile)
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -172,6 +175,15 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
 		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
+
+	@if [ -z "$(CLUSTER_CFG_FILES)" ]; then \
+		rm -f $(TARGET_SRC_DIR)/occamy_quad.sv $(TARGET_SRC_DIR)/occamy_quad_ctrl.sv \
+			$(TARGET_SRC_DIR)/occamy_quad_noc.yml $(TARGET_SRC_DIR)/floo_quad_mesh_xy_noc*.sv; \
+	fi
+	@if [ -z "$(or $(CLUSTER_CFG_FILES),$(BINGO_SCHEDULER_ENABLED))" ]; then \
+		rm -f .quadperiph_reggen_targets_group; \
+		rm -rf $(TARGET_QUADPERIPH_DIR); \
+	fi
 
 	@touch $@
 
@@ -221,11 +233,11 @@ $(SOCCTRL_REGGEN_TARGETS): .socctrl_reggen_targets_group
 # SOCCTRL RTL needs the hjson file
 # Normally if you generate the SW first, the hjson file is already generated
 # But if you generate the RTL first, we need to generate the hjson from the template
-$(SOCCTRL_HJSON_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $(CFG)
+$(SOCCTRL_HJSON_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(SOCCTRL_HJSON_DIR) --ctrl $<
 # Generate the RTL file from the template
-$(SOCCTRL_RTL_TARGET): $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl | $(TARGET_SOCCTRL_DIR)
+$(SOCCTRL_RTL_TARGET): $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl $$(OCCAMYGEN_INPUTS) | $(TARGET_SOCCTRL_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 
@@ -247,13 +259,17 @@ $(TARGET_QUADPERIPH_DIR):
 QUADPERIPH_REGGEN_TARGETS = $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_pkg.sv
 QUADPERIPH_REGGEN_TARGETS += $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_top.sv
 
+$(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $$(OCCAMYGEN_INPUTS)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(QUADPERIPH_HJSON_DIR) --ctrl $<
+
 $(QUADPERIPH_REGGEN_TARGETS): .quadperiph_reggen_targets_group
 
 quadperiph: $(QUADPERIPH_REGGEN_TARGETS)
 clean-quadperiph:
 	rm -rf $(QUADPERIPH_REGGEN_TARGETS) .quadperiph_reggen_targets_group
 # Generate the reggen targets from the hjson file
-.quadperiph_reggen_targets_group: $(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson | $(TARGET_QUADPERIPH_DIR)
+.quadperiph_reggen_targets_group: $(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph.sv | $(TARGET_QUADPERIPH_DIR)
 	@$(REGGEN) -r -t $(TARGET_QUADPERIPH_DIR) $<
 	@cp $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph.sv $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph.sv
 	@touch $@
@@ -314,11 +330,11 @@ $(CLINT_REGGEN_TARGETS): .clint_reggen_targets_group
 # CLINT RTL needs the hjson file
 # Normally if you generate the SW first, the hjson file is already generated
 # But if you generate the RTL first, we need to generate the hjson from the template
-$(CLINT_HJSON_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
+$(CLINT_HJSON_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(CLINT_HJSON_DIR) --chip $<
 # Generate the RTL file from the template
-$(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl | $(TARGET_CLINT_DIR)
+$(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl $$(OCCAMYGEN_INPUTS) | $(TARGET_CLINT_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 
@@ -330,5 +346,6 @@ clean-clint:
 	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
 	@touch $@
 
-src/bender_targets.tmp: $$(CLUSTER_CFG_INPUTS) # Generate bender_targets.tmp file
-	$(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets > $@
+src/bender_targets.tmp: $$(CLUSTER_CFG_INPUTS) $(HEMAIA_UTIL) $(ROOT)/Bender.yml
+	@mkdir -p $(dir $@)
+	$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNITCH_ROOT) --get_bender_targets > $@

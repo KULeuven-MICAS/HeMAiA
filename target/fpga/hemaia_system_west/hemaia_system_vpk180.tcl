@@ -31,6 +31,12 @@ source hemaia_system_vpk180_bd.tcl
 add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl.xdc
 import_files -fileset constrs_1 hemaia_system_vpk180_impl.xdc
 set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc]
+set clock_constraints [file normalize ../hemaia_d2d_clock_constraints.tcl]
+add_files -fileset constrs_1 -norecurse $clock_constraints
+set clock_constraints_file [get_files -of_objects [get_filesets constrs_1] $clock_constraints]
+set_property FILE_TYPE Tcl $clock_constraints_file
+set_property USED_IN_SYNTHESIS false $clock_constraints_file
+set_property PROCESSING_ORDER LATE $clock_constraints_file
 if { $EXT_JTAG } {
     add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl_ext_jtag.xdc
     import_files -fileset constrs_1 hemaia_system_vpk180_impl_ext_jtag.xdc

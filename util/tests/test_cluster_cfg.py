@@ -48,6 +48,38 @@ class ClusterConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             cluster_config_paths(self.cfg, self.snitch)
 
+    def test_omitted_or_empty_clusters(self):
+        for cfg in ({}, {"clusters": []}):
+            with self.subTest(cfg=cfg):
+                self.cfg.write_text(json.dumps(cfg))
+                self.assertEqual(cluster_config_paths(self.cfg), [])
+                with self.assertRaisesRegex(ValueError, "requires|is required"):
+                    gemm_config_path(self.cfg)
+
+    def test_scheduler_enable_is_independent_of_physical_clusters(self):
+        makefile = self.directory / "Makefile"
+        makefile.write_text(
+            f"include {ROOT}/util/cluster_cfg.mk\n"
+            "status:\n"
+            "\t@echo $(or $(BINGO_SCHEDULER_ENABLED),disabled)\n"
+        )
+        for clusters, override, expected in (
+            ([], None, "disabled"),
+            ([], True, "1"),
+            (["small"], None, "1"),
+            (["small"], False, "disabled"),
+        ):
+            cfg = {"clusters": clusters}
+            if override is not None:
+                cfg["bingo_scheduler"] = {"enabled": override}
+            with self.subTest(cfg=cfg):
+                self.cfg.write_text(json.dumps(cfg))
+                result = subprocess.run(
+                    ["make", "--no-print-directory", f"CFG={self.cfg}"],
+                    cwd=self.directory, check=True, capture_output=True, text=True,
+                )
+                self.assertEqual(result.stdout.strip(), expected)
+
     def test_stamp_preserves_mtime_until_selection_or_content_changes(self):
         stamp = self.directory / "stamp"
         self.assertTrue(update_stamp(stamp, [self.cfg, self.a]))

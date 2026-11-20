@@ -15,6 +15,9 @@ from typing import Tuple
 from dataclasses import dataclass
 from jsonref import JsonRef
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from resolve_cluster_cfg import bingo_scheduler_enabled  # noqa: E402
+
 sys.path.append(str(Path(__file__).parent /
                 '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
@@ -27,6 +30,55 @@ from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
 NR_HW_MANAGER_IPI = 1
 
 
+def configure_bingo_scheduler(occamy_cfg, cluster_generators):
+    """Keep the scheduler's protocol geometry separate from physical cores."""
+    quadrant = occamy_cfg.get("s1_quadrant", {})
+    scheduler = occamy_cfg.setdefault("bingo_scheduler", {})
+    scheduler.setdefault("enabled", bingo_scheduler_enabled(occamy_cfg))
+    scheduler.setdefault("enable_dvfs", scheduler["enabled"])
+    scheduler["enable_dvfs"] &= scheduler["enabled"]
+    # The Brugge two-cluster protocol has two Snitch slots and a host slot in
+    # each logical row. The host is wired only in row zero.
+    physical_clusters = len(cluster_generators)
+    physical_cores = cluster_generators[0].cfg["nr_cores"] if physical_clusters else 0
+    scheduler.setdefault("num_clusters", physical_clusters or 2)
+    scheduler.setdefault("num_cores_per_cluster", physical_cores + 1 if physical_clusters else 3)
+    scheduler.setdefault("dep_tag_width", quadrant.get("dep_tag_width", 4))
+
+    if scheduler["enabled"]:
+        num_clusters = scheduler["num_clusters"]
+        num_cores = scheduler["num_cores_per_cluster"]
+        if num_clusters < physical_clusters or num_cores <= physical_cores:
+            raise ValueError("Bingo logical topology must accommodate all physical clusters and the CVA6 slot")
+        chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
+        # Conditional execution, type, task ID and the two dependency control fields.
+        control_width = 7 + 2 + 12 + 3
+        desc_width = (control_width + 2 * chip_id_width
+                      + 2 * max(1, clog2(num_clusters)) + max(1, clog2(num_cores))
+                      + 2 * num_cores + 2 * scheduler["dep_tag_width"])
+        if desc_width > 64:
+            raise ValueError(f"Bingo task descriptor has {desc_width} bits, exceeding the 64-bit wire format")
+
+
+def get_bingo_kwargs(occamy_cfg, cluster_generators):
+    scheduler = occamy_cfg["bingo_scheduler"]
+    has_clusters = bool(cluster_generators)
+    quadrant = occamy_cfg.get("s1_quadrant", {})
+    return {
+        "has_scheduler": scheduler["enabled"],
+        "bingo_enabled": scheduler["enabled"],
+        "has_bingo_cfg": has_clusters or scheduler["enabled"],
+        "bingo_has_cfg": has_clusters or scheduler["enabled"],
+        "bingo_enable_dvfs": scheduler["enable_dvfs"],
+        "bingo_num_clusters": scheduler["num_clusters"],
+        "bingo_num_cores_per_cluster": scheduler["num_cores_per_cluster"],
+        "bingo_dep_tag_width": scheduler["dep_tag_width"],
+        "bingo_chip_id_width": occamy_cfg["hemaia_multichip"]["chip_id_width"],
+        "bingo_done_queue_base": quadrant.get("quad_axi_lite_base_addr", 0x0A000000),
+        "bingo_cfg_base": quadrant.get("quad_axi_lite_narrow_base_addr", 0x0B000000),
+    }
+
+
 def nr_harts_per_chiplet(occamy_cfg, cluster_generators):
     """Number of RISC-V harts on one chiplet: host CVA6 (+1) plus the snitch cores.
     This is the honest core count; the HW-manager DVFS doorbell(s) are extra MSIP
@@ -34,6 +86,11 @@ def nr_harts_per_chiplet(occamy_cfg, cluster_generators):
     doorbell therefore sits at MSIP bit index == this hart count."""
     nr_cores_quadrant = sum(cg.cfg["nr_cores"] for cg in cluster_generators)
     return occamy_cfg["nr_s1_quadrant"] * nr_cores_quadrant + 1
+
+
+def nr_clint_targets(occamy_cfg, cluster_generators):
+    nr_harts = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
+    return nr_harts + (NR_HW_MANAGER_IPI if occamy_cfg["bingo_scheduler"]["enable_dvfs"] else 0)
 
 
 def read_json_file(file):
@@ -190,6 +247,8 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
 
 
 def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
+    if not occamy_cfg["clusters"]:
+        return []
     cluster_generators = list()
     pma_cfg = generate_pma_cfg(occamy_cfg)
     cluster_name_list = occamy_cfg["clusters"]
@@ -210,6 +269,8 @@ def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
 
 
 def check_and_fix_occamy_xbar_id_width(occamy_cfg, cluster_generators):
+    if not cluster_generators:
+        return
     # We take the cluster axi parameters from the first cluster
     cluster_cfg = cluster_generators[0].cfg
     # This is from line 78 of snitch_cluster/hw/snitch_cluster/src/snitch_cluster_wrapper.sv.tpl
@@ -519,63 +580,17 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
         occamy_cfg["peripherals"]["clint"]["address"]).attach_to(am_soc_axi_lite_narrow_periph_xbar)
     return am_soc_axi_lite_narrow_peripherals, am_bootrom, am_clint
 
-def am_connect_quad_axi_lite_xbar(am, am_quad_axi_lite_xbar, occamy_cfg):
-    ##############################
-    # AM: Quadrant AXI Lite XBar #
-    ##############################
-    # Mainly holds the bingo hw scheduler
-    addrs_quad_axi_lite_peripherals = []
-    am_quad_axi_lite_peripherals = []
-    am_quad_chiplet_done_queue = am.new_leaf("quad_chiplet_done_queue",
-                                                4096,
-                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"]
-    ).attach_to(am_quad_axi_lite_xbar)
-    addrs_quad_axi_lite_peripherals.append(
-        (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"], occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096)
-    )
-    am_quad_axi_lite_peripherals.append(am_quad_chiplet_done_queue)
-    
-    am_quad_host_ready_done_intf = am.new_leaf("quad_host_ready_done_queue",
-                                                4096,
-                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 1 * 4096
-    ).attach_to(am_quad_axi_lite_xbar)
-    addrs_quad_axi_lite_peripherals.append(
-        (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096, occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 2 * 4096)
-    )
-    am_quad_axi_lite_peripherals.append(am_quad_host_ready_done_intf)
-    return am_quad_axi_lite_peripherals, addrs_quad_axi_lite_peripherals
-
-
 def am_connect_quad_axi_lite_narrow_xbar(am, am_quad_axi_lite_narrow_xbar, occamy_cfg):
-    ##################################
-    # AM: Quadrant AXI Lite CFG XBar #
-    ##################################
-
-    addrs_quad_axi_lite_narrow_peripherals = []
-    am_quad_axi_lite_narrow_peripheral=am.new_leaf("quad_axi_lite_narrow_peripherals",
-            4096,
-            occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"]
-        ).attach_to(am_quad_axi_lite_narrow_xbar)
-    addrs_quad_axi_lite_narrow_peripherals.append(
-        (occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"], occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"] + 4096)
-    )
-    # Then the mailboxes for each cluster
-    am_quad_axi_lite_narrow_h2c_mailboxs = []
-    nr_s1_clusters = len(occamy_cfg["clusters"])
+    # The first page is decoded in the SoC, followed by the existing H2C pages.
     mailboxes_start_addr = occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"] + 4096
-    for i in range(nr_s1_clusters):
-        am_quad_axi_lite_narrow_h2c_mailboxs.append(
-            am.new_leaf(
-                f"h2c_mailbox_{i}",
-                4096,
-                mailboxes_start_addr + i * 4096
-            ).attach_to(am_quad_axi_lite_narrow_xbar)
-        )
-        addrs_quad_axi_lite_narrow_peripherals.append(
-            (mailboxes_start_addr + i * 4096, mailboxes_start_addr + (i + 1) * 4096)
-        )
-
-    return am_quad_axi_lite_narrow_peripheral, am_quad_axi_lite_narrow_h2c_mailboxs, addrs_quad_axi_lite_narrow_peripherals
+    mailboxes = []
+    ranges = []
+    for i in range(len(occamy_cfg["clusters"])):
+        address = mailboxes_start_addr + i * 4096
+        mailboxes.append(am.new_leaf(f"h2c_mailbox_{i}", 4096, address)
+                         .attach_to(am_quad_axi_lite_narrow_xbar))
+        ranges.append((address, address + 4096))
+    return mailboxes, ranges
 
 
 
@@ -822,9 +837,6 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
         if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "h2h_mailbox":
             h2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
             
-    for p in range(len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])):
-        if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "c2h_mailbox":
-            c2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["address"]
     top_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
@@ -837,12 +849,14 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
         # Honest hart count: host CVA6 + the snitch cores.
         "cores": nr_harts,
         # CLINT / mtip / msip interrupt targets = harts + HW-manager doorbell(s).
-        "nr_ipi_targets": nr_harts + NR_HW_MANAGER_IPI,
-        # MSIP bit index of the HW-manager DVFS doorbell (first target after the harts).
-        "hw_manager_ipi_idx": nr_harts,
+        "nr_ipi_targets": nr_clint_targets(occamy_cfg, cluster_generators),
         "h2h_mailbox_base_addr": util.to_sv_hex(h2h_mailbox_base_addr),
-        "c2h_mailbox_base_addr": util.to_sv_hex(c2h_mailbox_base_addr)
     }
+    if cluster_generators:
+        c2h_mailbox = next(peripheral for peripheral in
+                           occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"]
+                           if peripheral["name"] == "c2h_mailbox")
+        top_kwargs["c2h_mailbox_base_addr"] = util.to_sv_hex(c2h_mailbox["address"])
     return top_kwargs
 
 
@@ -863,16 +877,17 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
         # Honest hart count: host CVA6 + the snitch cores.
         "cores": nr_harts,
         # CLINT / mtip / msip interrupt targets = harts + HW-manager doorbell(s).
-        "nr_ipi_targets": nr_harts + NR_HW_MANAGER_IPI,
+        "nr_ipi_targets": nr_clint_targets(occamy_cfg, cluster_generators),
         # MSIP bit index of the HW-manager DVFS doorbell (first target after the harts).
-        "hw_manager_ipi_idx": nr_harts,
+        "hw_manager_ipi_idx": nr_harts if occamy_cfg["bingo_scheduler"]["enable_dvfs"] else None,
         "nr_s1_quadrants": nr_s1_quadrants,
-        "nr_cores_quadrant": nr_cores_quadrant
+        "nr_cores_quadrant": nr_cores_quadrant,
+        **get_bingo_kwargs(occamy_cfg, cluster_generators),
     }
     return soc_kwargs
 
 
-def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_soc_to_quad_xbar, quad_ctrl_quad_to_soc_xbar, quad_ctrl_axi_lite_narrow_mux, quad_ctrl_axi_lite_xbar, cluster_generators, name):
+def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_soc_to_quad_xbar, quad_ctrl_quad_to_soc_xbar, quad_ctrl_axi_lite_narrow_mux, cluster_generators, name):
     
 
     num_clusters = len(occamy_cfg["clusters"])
@@ -884,19 +899,11 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         "chip_id_width": chip_id_width,
         "num_clusters": num_clusters,
         "num_cores_per_cluster": nr_cores_per_cluster,
-        # MSIP bit index of the HW-manager DVFS doorbell (first CLINT target after the
-        # harts). Passed to bingo_hw_manager_top so the PM's doorbell bit is not hardcoded;
-        # same source as HW_MANAGER_DVFS_MSIP_BIT / hw_manager_ipi_idx (occamy_soc.sv).
-        "hw_manager_ipi_idx": nr_harts_per_chiplet(occamy_cfg, cluster_generators),
-        # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
-        # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
-        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
         "quad_ctrl_quad_to_soc_xbar": quad_ctrl_quad_to_soc_xbar,
         "quad_ctrl_axi_lite_narrow_mux": quad_ctrl_axi_lite_narrow_mux,
-        "quad_ctrl_axi_lite_xbar": quad_ctrl_axi_lite_xbar
     }
     return quadrant_ctrl_kwargs
 
@@ -1004,6 +1011,20 @@ def get_cores_cluster_offset(core_per_cluster):
 
 
 def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
+    pkg_kwargs = {
+        "name": name,
+        "util": util,
+        "addr_width": occamy_cfg["addr_width"],
+        "narrow_user_width": occamy_cfg["narrow_xbar_slv_user_width"],
+        "wide_user_width": occamy_cfg["wide_xbar_slv_user_width"],
+        "nr_clusters_per_quadrant": len(cluster_generators),
+        "hemaia_multichip": occamy_cfg["hemaia_multichip"],
+        "sram_cfg_fields": occamy_cfg["sram_cfg_fields"],
+        "has_scheduler": occamy_cfg["bingo_scheduler"]["enabled"],
+    }
+    if not cluster_generators:
+        return pkg_kwargs
+
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     cluster_cfg = cluster_generators[0].cfg
@@ -1014,13 +1035,7 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
     nr_cores_cluster_offset = "{" + \
         ",".join(map(str, nr_cores_cluster_offset)) + "}"
 
-    pkg_kwargs = {
-        "name": name,
-        "util": util,
-        "addr_width": occamy_cfg["addr_width"],
-        "narrow_user_width": cluster_cfg["user_width"],
-        "wide_user_width": cluster_cfg["dma_user_width"],
-        "nr_clusters_per_quadrant": len(occamy_cfg["clusters"]),
+    pkg_kwargs.update({
         "core_per_cluster": core_per_cluster,
         "nr_cores_cluster_offset": nr_cores_cluster_offset,
         "nr_cores_quadrant": nr_cores_quadrant,
@@ -1029,25 +1044,38 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
         "cluster_base_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"]),
         "quad_axi_lite_narrow_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"]),
         "quad_axi_lite_narrow_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_offset"]),
-        "hemaia_multichip": occamy_cfg["hemaia_multichip"],
         "h2c_mailbox_length": util.to_sv_hex(4096),
         "quad_axi_lite_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"]),
         "quad_axi_lite_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_base_offset"])
-    }
+    })
     return pkg_kwargs
 
 
 def get_cva6_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, util, name):
-    cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
-    cluster_base_offset = cluster_generators[0].cfg["cluster_base_offset"] * len(occamy_cfg["clusters"])
     cva6_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
         "util": util,
-        "cluster_base_addr": cluster_base_addr,
-        "cluster_base_offset": cluster_base_offset,
         "soc_narrow_xbar": soc_narrow_xbar
     }
+    if cluster_generators:
+        cluster_cfg = cluster_generators[0].cfg
+        cva6_kwargs.update(
+            soc_periph_length=cluster_cfg["cluster_base_addr"],
+            cluster_base_addr=cluster_cfg["cluster_base_addr"],
+            cluster_base_offset=cluster_cfg["cluster_base_offset"] * len(cluster_generators),
+        )
+    else:
+        peripherals = occamy_cfg["peripherals"]
+        mmio_regions = [
+            peripherals["rom"], peripherals["clint"], occamy_cfg["sys_idma_cfg"],
+            *peripherals["axi_lite_peripherals"],
+            *peripherals["axi_lite_narrow_peripherals"],
+        ]
+        cva6_kwargs["soc_periph_length"] = max(
+            region["address"] + region["length"] for region in mmio_regions
+            if "address" in region
+        )
     return cva6_kwargs
 
 
@@ -1077,17 +1105,17 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     nr_clusters = len(occamy_cfg["clusters"]) * nr_chiplets
     
     nr_clusters_per_chiplet = len(occamy_cfg["clusters"])
-    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
+    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"] if cluster_generators else 0
     nr_cores = nr_clusters * nr_cores_per_cluster
     cluster_offset_list = [cluster_generator.cfg["cluster_base_offset"]
                            for cluster_generator in cluster_generators]
     if not all(cluster_offset == cluster_offset_list[0] for cluster_offset in cluster_offset_list):
         raise ValueError(
             "Not all cluster base offset in the cluster cfg are equal.")
-    cluster_offset = cluster_offset_list[0]
-    cluster_addr_width = int(math.log2(cluster_offset))
-    cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
-    cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
+    cluster_offset = cluster_offset_list[0] if cluster_generators else 0
+    cluster_addr_width = int(math.log2(cluster_offset)) if cluster_generators else 0
+    cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"] if cluster_generators else 0
+    cluster_tcdm_size = cluster_generators[0].cfg["tcdm"]["size"] * 1024 if cluster_generators else 0
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
     # Address space the boot ROM is given on the narrow lite periph xbar, the same
@@ -1101,7 +1129,9 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
     # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
-    hw_manager_dvfs_msip_bit = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
+    bingo_kwargs = get_bingo_kwargs(occamy_cfg, cluster_generators)
+    hw_manager_dvfs_msip_bit = (nr_harts_per_chiplet(occamy_cfg, cluster_generators)
+                               if bingo_kwargs["bingo_enable_dvfs"] else 0)
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -1111,10 +1141,10 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
-        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
+        "dep_tag_width": bingo_kwargs["bingo_dep_tag_width"],
         "clog2_nr_chiplets": clog2(nr_chiplets),
-        "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
-        "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),
+        "clog2_nr_clusters_per_chiplet": clog2(max(1, nr_clusters_per_chiplet)),
+        "clog2_nr_cores_per_cluster": clog2(max(1, nr_cores_per_cluster)),
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
@@ -1124,6 +1154,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "mempool_total_size": hex(mempool_total_size),
         "rom_size": hex(rom_size),
         "same_memchip_speed": 1 if same_memchip_speed else 0,
+        **bingo_kwargs,
     }
     return cheader_kwargs
 
@@ -1138,7 +1169,7 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
 
-    cluster_cfg = cluster_generators[0].cfg
+    cluster_cfg = cluster_generators[0].cfg if cluster_generators else {}
 
     bootdata_kwargs = {
         "name": name,
@@ -1148,10 +1179,10 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
         "addr_width": occamy_cfg["addr_width"],
         "chip_id_width": occamy_cfg["hemaia_multichip"]["chip_id_width"],
         "single_chip": occamy_cfg["hemaia_multichip"]["single_chip"],
-        "single_chip_id": occamy_cfg["hemaia_multichip"]["single_chip_id"],
-        "tcdm_start": cluster_cfg["cluster_base_addr"],
-        "tcdm_size": cluster_cfg["tcdm"]["size"]*1024,
-        "tcdm_offset": cluster_cfg["cluster_base_offset"],
+        "single_chip_id": occamy_cfg["hemaia_multichip"].get("single_chip_id", 0),
+        "tcdm_start": cluster_cfg.get("cluster_base_addr", 0),
+        "tcdm_size": cluster_cfg["tcdm"]["size"] * 1024 if cluster_generators else 0,
+        "tcdm_offset": cluster_cfg.get("cluster_base_offset", 0),
         "global_mem_start": occamy_cfg["spm_wide"]["address"],
         "global_mem_end": occamy_cfg["spm_wide"]["address"] + occamy_cfg["spm_wide"]["length"],
         "cluster_count": len(occamy_cfg["clusters"]),
@@ -1222,12 +1253,13 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
     return testharness_kwargs
 
 def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
-    nr_harts = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
+    cluster_address_space = (cluster_generators[0].cfg["cluster_base_offset"]
+                             if cluster_generators else occamy_cfg["xdma_cluster_address_space"])
     chip_kwargs = {
         "name": name,
         "util": util,
         "occamy_cfg": occamy_cfg,
-        "cluster_address_space": cluster_generators[0].cfg["cluster_base_offset"],
+        "cluster_address_space": cluster_address_space,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
@@ -1237,7 +1269,7 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
         # NumCores); occamy_chip.sv.tpl does not use it. The CLINT allocates one MSIP+timer
         # target per interrupt source -- the harts PLUS the HW-manager DVFS doorbell(s) --
         # so this is the interrupt-target count, not the hart count.
-        "cores": nr_harts + NR_HW_MANAGER_IPI
+        "cores": nr_clint_targets(occamy_cfg, cluster_generators)
     }
     return chip_kwargs
 
@@ -1258,7 +1290,7 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     #                          for cluster_generator in cluster_generators]
     # nr_cores_quadrant = sum(core_per_cluster_list)
     nr_clusters = len(occamy_cfg["clusters"])
-    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
+    bingo_kwargs = get_bingo_kwargs(occamy_cfg, cluster_generators)
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
@@ -1273,6 +1305,8 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
         "backup_boot_addr": hex_backup_boot_addr,
         "occamy_cfg": occamy_cfg,
         "addr_width": addr_width,
-        "bingo_hw_manager_nr_cores_per_chiplet":  nr_clusters * (nr_cores_per_cluster + 1) # +1 for the host core as acc
+        "bingo_hw_manager_nr_cores_per_chiplet": (bingo_kwargs["bingo_num_clusters"]
+                                                * bingo_kwargs["bingo_num_cores_per_cluster"]),
+        **bingo_kwargs,
     }
     return ctrl_kwargs

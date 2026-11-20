@@ -2,6 +2,8 @@
 # Solderpad Hardware License, Version 0.51, see LICENSE for details.
 # SPDX-License-Identifier: SHL-0.51
 
+#include "occamy.h"
+
 #define MSTATUS_MIE 8
 
 .global _start
@@ -39,6 +41,7 @@ _start:
     li x29, 0
     li x30, 0
     li x31, 0
+#if N_CLUSTERS_PER_CHIPLET > 0
     # Park non-64-bit cores: inspect MISA MSB
     csrr    t0, misa
     bltz    t0, _cva6_init
@@ -68,6 +71,7 @@ _snitch_resume:
     j       _snitch_park
 
 .option pop
+#endif
 
 # You may use rv64 instuctions in this block.
 _cva6_init:

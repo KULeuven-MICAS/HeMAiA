@@ -188,20 +188,12 @@ import ${name}_pkg::*;
   // Control Clock / clk_periph_i: Peripheral Slow Speed Clock
   // Master Clock / clk_i: Oscillator Clock
   // Clock Channel 0 / clk_o[0]: Host Clock
-  // Clock Channel 1 / clk_o[1]: Accelerator Cluster Clock
-  // Clock Channel 2 / clk_o[2]: East D2D TX Clock
-  // Clock Channel 3 / clk_o[3]: West D2D TX Clock
-  // Clock Channel 4 / clk_o[4]: North D2D TX Clock
-  // Clock Channel 5 / clk_o[5]: South D2D TX Clock
-
-  // Control Clock: 100 MHz
-  // Master Clock: 3.2GHz
-  // Clock Channel 0: 3.2GHz / 6 = 533MHz
-  // Clock Channel 1: 3.2GHz / 6 = 533MHz
-  // Clock Channel 2: 3.2GHz / 1 = 3.2GHz
-  // Clock Channel 3: 3.2GHz / 1 = 3.2GHz
-  // Clock Channel 4: 3.2GHz / 1 = 3.2GHz
-  // Clock Channel 5: 3.2GHz / 1 = 3.2GHz
+% if num_acc_clk_domain:
+  // Clock Channels 1 through ${num_acc_clk_domain}: Accelerator Cluster Clocks
+% endif
+% if num_d2d_clk_domain:
+  // Clock Channels ${1+num_acc_clk_domain} through ${4+num_acc_clk_domain}: East, West, North, South D2D TX Clocks
+% endif
   
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()} hemaia_clk_rst_controller_req;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp;
@@ -229,8 +221,10 @@ import ${name}_pkg::*;
       clk_d2d_phy_north,
       clk_d2d_phy_south;
 % endif
+% if num_acc_clk_domain:
   (* syn_keep = 1, syn_preserve = 1 *)
   logic [${num_acc_clk_domain-1}:0] clk_acc;
+% endif
 
   (* syn_keep = 1, syn_preserve = 1 *)
   logic rst_host_n;
@@ -242,11 +236,15 @@ import ${name}_pkg::*;
       rst_d2d_phy_north_n,
       rst_d2d_phy_south_n;
 % endif
+% if num_acc_clk_domain:
   (* syn_keep = 1, syn_preserve = 1 *)
   logic [${num_acc_clk_domain-1}:0] rst_acc_n;
+% endif
 
   assign clk_host = clk_vec[0];
+% if num_acc_clk_domain:
   assign clk_acc = clk_vec[1 +: ${num_acc_clk_domain}];
+% endif
 % if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
   assign clk_d2d_phy_east = clk_vec[${1+num_acc_clk_domain}];
   assign clk_d2d_phy_west = clk_vec[${2+num_acc_clk_domain}];
@@ -255,7 +253,9 @@ import ${name}_pkg::*;
 % endif
 
   assign rst_host_n = rst_n_vec[0];
+% if num_acc_clk_domain:
   assign rst_acc_n = rst_n_vec[1 +: ${num_acc_clk_domain}];
+% endif
 % if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
   assign rst_d2d_phy_east_n = rst_n_vec[${1+num_acc_clk_domain}];
   assign rst_d2d_phy_west_n = rst_n_vec[${2+num_acc_clk_domain}];
@@ -370,8 +370,10 @@ import ${name}_pkg::*;
   ${name}_top i_${name} (
     .clk_i              (clk_host),
     .rst_ni             (rst_host_n),
+% if num_acc_clk_domain:
     .clk_acc_i          (clk_acc),
     .rst_acc_ni         (rst_acc_n),
+% endif
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),

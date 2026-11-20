@@ -17,6 +17,7 @@ define cluster_cfg_query
 $(strip $(eval _cluster_cfg_result := $(shell python3 "$(CLUSTER_CFG_RESOLVER)" $(CLUSTER_CFG_ARGS) --format $(1) || echo CLUSTER_CFG_ERROR))$(if $(filter CLUSTER_CFG_ERROR,$(_cluster_cfg_result)),$(error Failed to resolve cluster configuration from $(CFG)),$(_cluster_cfg_result)))
 endef
 CLUSTER_CFG_FILES = $(eval CLUSTER_CFG_FILES := $(call cluster_cfg_query,paths))$(CLUSTER_CFG_FILES)
+BINGO_SCHEDULER_ENABLED = $(eval BINGO_SCHEDULER_ENABLED := $(call cluster_cfg_query,bingo-enabled))$(BINGO_SCHEDULER_ENABLED)
 GEMM_HWCFG ?= $(eval GEMM_HWCFG := $(call cluster_cfg_query,gemm))$(GEMM_HWCFG)
 CLUSTER_CFG_INPUTS = $(CFG) $(CLUSTER_CFG_FILES) $(CLUSTER_CFG_STAMP) $(CLUSTER_CFG_RESOLVER) $(CLUSTER_CFG_MK)
 CLUSTER_CFG_DEPS = $(CLUSTER_CFG_INPUTS) $(GEMM_HWCFG)

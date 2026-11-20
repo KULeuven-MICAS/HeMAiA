@@ -89,6 +89,7 @@ SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 # resolves from any working directory.
 BENDER_TARGETS_FILE := $(ROOT)/target/rtl/src/bender_targets.tmp
 BENDER_TARGETS      := $(shell cat $(BENDER_TARGETS_FILE) 2>/dev/null)
+SIM_COMPILE_SCRIPT_INPUTS := $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock $(SIM_CFG)
 
 VSIM_BENDER += $(BENDER_TARGETS)
 VLT_BENDER  += $(BENDER_TARGETS)
@@ -447,7 +448,7 @@ $(VSIM_BUILDDIR)/compile.vsim.tcl:
 	@echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred Questa input: $@" >&2
 	@exit 1
 else
-$(VSIM_BUILDDIR)/compile.vsim.tcl: | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: $(SIM_COMPILE_SCRIPT_INPUTS) | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
@@ -504,7 +505,7 @@ $(VCS_BUILDDIR)/compile.sh:
 	@exit 1
 VCS_TESTHARNESS_PREREQUISITES :=
 else
-$(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock | $(VCS_BUILDDIR)
+$(VCS_BUILDDIR)/compile.sh: $(SIM_COMPILE_SCRIPT_INPUTS) | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@

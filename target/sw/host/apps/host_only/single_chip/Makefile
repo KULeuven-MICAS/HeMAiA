@@ -12,7 +12,9 @@ SUBDIRS += ci_ara
 # New decomposed Ara FP32 op-cost tests: one self-contained app per kernel
 # (ara_add, ara_exp, ...); each has its own src/main.c.
 SUBDIRS += $(wildcard ara_*)
+ifneq ($(SW_HOST_ONLY),1)
 SUBDIRS += test_bingo_alloc
+endif
 TARGET ?= all
 
 .PHONY: all clean partial-build finalize-build $(SUBDIRS)

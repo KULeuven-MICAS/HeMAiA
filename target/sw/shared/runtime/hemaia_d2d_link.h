@@ -779,7 +779,7 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
 void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
         enable_clk_domain(0, 7);   // host CPU
-        for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        for (int i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
             enable_clk_domain(1 + i, 7); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
@@ -835,7 +835,7 @@ void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
 void hemaia_d2d_link_initialize_1c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
         enable_clk_domain(0, 7);   // host CPU
-        for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        for (int i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
             enable_clk_domain(1 + i, 7); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 0);  // West  D2D PHY

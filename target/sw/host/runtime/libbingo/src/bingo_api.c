@@ -72,13 +72,14 @@ int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
     return 0;
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 uint64_t bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
     // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
     // The L1 heap is initialized by the device at the start of each cluster's TCDM.
     // Both 32-bit (Snitch) and 64-bit (CVA6) cores share the same BingoHeapInstance.
     return chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
 }
-
+#endif
 
 uint64_t bingo_get_l2_comm_buffer(uint8_t chip_id){
     return chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
@@ -102,6 +103,7 @@ uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_l
                                       ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_BASE_OFFSET);
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
     uint64_t results = bingoHeapMalloc(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
     if (results==0UL) {
@@ -118,6 +120,7 @@ uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
            size);
     return results;
 }
+#endif
 
 uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
     uint64_t results = bingoHeapMalloc(bingo_get_l2_heap_manager(chip_id), size);
@@ -151,9 +154,11 @@ uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
     return results;
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr){
     bingoHeapFree(bingo_get_l1_heap_manager(chip_id, cluster_id), ptr);
 }
+#endif
 
 void bingo_l2_free(uint8_t chip_id, uint64_t ptr){
     bingoHeapFree(bingo_get_l2_heap_manager(chip_id), ptr);
@@ -255,6 +260,7 @@ int bingo_read_h2h_mailbox(uint64_t *buffer,
     }
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 int bingo_try_write_h2c_mailbox(uint8_t cluster_id, uint32_t word){
     volatile uint64_t h2c_mailbox_write_addr = chiplet_addr_transform(h2c_mailbox_write_address(cluster_id));
     volatile uint64_t h2c_mailbox_status_addr = chiplet_addr_transform(h2c_mailbox_status_flag_address(cluster_id));
@@ -699,11 +705,13 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
         }
     }
 }
+#endif
 
+#if BINGO_SCHEDULER_ENABLED
 /////////////////////////
 // For the HW scheduler
 /////////////////////////
-uint32_t bingo_hw_scheduler_get_global_task_id(){
+uint32_t bingo_hw_scheduler_get_global_task_id(void){
     return readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
 }
 void bingo_hw_scheduler_write_done_queue(uint32_t global_task_id){
@@ -723,7 +731,8 @@ int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint
     return &host_kernel_list_base[host_task_id];
 }
 
-void bingo_hw_scheduler_init_pm(){
+void bingo_hw_scheduler_init_pm(void){
+#if N_CLUSTERS_PER_CHIPLET > 0
     BINGO_PRINTF(1, "Chip(%x, %x): [Host] Initializing HW Scheduler Power Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Init the power manager
     // We need to prepare the following registers:
@@ -749,31 +758,32 @@ void bingo_hw_scheduler_init_pm(){
     // Domain 2: Cluster 1
     // ...
     // At most we have 32 domains (0-31)
-    // However, we put the host core to the core 2 of cluster 0
-    // and we not want to change the host core domain
-    // So we need to special case the host core here
-    uint32_t core_power_domain;
-    uint32_t idx;
-    for (uint32_t cluster = 0; cluster < N_CLUSTERS_PER_CHIPLET; cluster++){
-        for (uint32_t core = 0; core < N_CORES_PER_CLUSTER + 1; core++){ // +1 for the host core
-            idx = cluster * (N_CORES_PER_CLUSTER + 1) + core;
-            if (cluster == 0 && core == 2){
-                // Host core, do not change its power domain
-                // In Bingo HW scheduler, it will read this value and compare it with the 32
-                // to decide whether this is a valid domain or not
-                // We set to 99 to indicate it is invalid
-                core_power_domain = 99; 
-            } else {
-                core_power_domain = cluster + 1; // Cluster i
-            }
+    // Only real cluster lanes may change an accelerator clock domain.
+    for (uint32_t cluster = 0; cluster < BINGO_PROTOCOL_NUM_CLUSTERS; cluster++) {
+        for (uint32_t core = 0; core < BINGO_PROTOCOL_NUM_CORES; core++) {
+            uint32_t idx = cluster * BINGO_PROTOCOL_NUM_CORES + core;
+            uint32_t core_power_domain =
+                (cluster < N_CLUSTERS_PER_CHIPLET && core < N_CORES_PER_CLUSTER)
+                    ? cluster + 1 : 99;
             writew(core_power_domain, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_core_power_domain_addr(idx)));
         }
     }
     // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable idle power management
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
     asm volatile("fence" ::: "memory");
+#endif
 }
 
+void bingo_hw_scheduler_init_host(uint64_t task_desc_list_base, uint32_t num_task_desc){
+    // Publish descriptor data before handing ownership to the hardware.
+    asm volatile("fence" ::: "memory");
+    writew(task_desc_list_base >> 32, chiplet_addr_transform(quad_ctrl_task_desc_base_hi_addr()));
+    writew((uint32_t)task_desc_list_base, chiplet_addr_transform(quad_ctrl_task_desc_base_lo_addr()));
+    writew(num_task_desc, chiplet_addr_transform(quad_ctrl_num_task_addr()));
+    writew(1, chiplet_addr_transform(quad_ctrl_start_bingo_hw_manager_addr()));
+    writew(1, chiplet_addr_transform(quad_ctrl_host_init_done_addr()));
+    asm volatile("fence" ::: "memory");
+}
 
 // The task will be initized directly on a .h file generated from the mini compiler
 // So the whole scheduling process will be handled by the hardware scheduler
@@ -782,6 +792,7 @@ void bingo_hw_scheduler_init_pm(){
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
+#if N_CLUSTERS_PER_CHIPLET > 0
     // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 2 to indicate we are using the HW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
@@ -818,17 +829,16 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
         writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
         writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
     }
-    // Init the power manager
     bingo_hw_scheduler_init_pm();
-    // Init the task desc list base and num tasks
-    writew(bingo_hw_scheduler_task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
-    writew((uint32_t)bingo_hw_scheduler_task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
-    writew(bingo_hw_scheduler_num_task_desc,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
-    // Start the HW scheduler to load the task list
-    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
-    // Tell the device that the host init is done
-    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
-    asm volatile("fence" ::: "memory");
+#else
+    (void)dev_arg_base_addr;
+    (void)dev_kernel_base_addr;
+    (void)num_dev_tasks;
+    (void)global_task_id_to_dev_task_id_base_addr;
+    (void)num_total_tasks;
+#endif
+    bingo_hw_scheduler_init_host(bingo_hw_scheduler_task_desc_list_base,
+                                 bingo_hw_scheduler_num_task_desc);
 }
 
 uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
@@ -934,3 +944,4 @@ void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask) {
 void bingo_cerf_clear_all(void) {
     bingo_cerf_write_mask(0);
 }
+#endif

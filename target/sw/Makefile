@@ -65,6 +65,7 @@ endif
 
 include $(ROOT)/util/cluster_cfg.mk
 CLUSTER_CFG_STAMP_HWCFG :=
+OCCAMYGEN_INPUTS = $(CLUSTER_CFG_INPUTS) $(OCCAMYGEN) $(ROOT)/util/occamygen/occamy.py
 .SECONDEXPANSION:
 ###################
 # Software Headers#
@@ -81,8 +82,6 @@ endef
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/rv_plic.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h
@@ -90,7 +89,10 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
-PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
+
+BINGO_PLATFORM_HEADERS = $(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h
+CLUSTER_PLATFORM_HEADERS = $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
+CLUSTER_PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
 
 $(PLATFORM_HEADERS_DIR):
 	mkdir -p $@
@@ -101,7 +103,7 @@ $(PLATFORM_HEADERS_DIR):
 $(TARGET_CLINT_DIR):
 	mkdir -p $@
 # CLINT needs the hjson tmp first to generate the hjson
-$(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
+$(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 # Then the hjson can be used to generate the header file
@@ -130,7 +132,7 @@ $(TARGET_SOCCTRL_DIR):
 	mkdir -p $@
 # SoC Ctrl needs the hjson tmp first to generate the hjson
 SOURCE_SOCCTRL_DIR = $(ROOT)/hw/occamy/soc_ctrl
-$(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $(CFG)
+$(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
@@ -144,7 +146,7 @@ $(TARGET_QUADPERIPH_DIR):
 	mkdir -p $@
 # SoC Ctrl needs the hjson tmp first to generate the hjson
 SOURCE_QUADPERIPH_DIR = $(ROOT)/hw/occamy/quad_periph
-$(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $(CFG)
+$(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADPERIPH_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
@@ -189,33 +191,37 @@ $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h: $(IDMA_REG64_1D_HJSON) | $(PLATFORM_HEA
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $$(OCCAMYGEN_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $$(OCCAMYGEN_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $$(OCCAMYGEN_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
 	
 # OCCAMYGEN Device runtime
-$(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $$(CLUSTER_CFG_INPUTS)
+$(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
 # host.ld encodes the memory map of the active $(CFG) -- it places __return_pointer$
 # inside that config's SPM -- so the config is a prerequisite: a cfg switch must
 # regenerate the script.
-host/runtime/host.ld: host/runtime/host.ld.tpl $$(CLUSTER_CFG_INPUTS)
+host/runtime/host.ld: host/runtime/host.ld.tpl $$(OCCAMYGEN_INPUTS)
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
 
-debug-platform-headers: $(PLATFORM_HEADERS)
+ACTIVE_PLATFORM_HEADERS = $(PLATFORM_HEADERS) $(if $(or $(CLUSTER_CFG_FILES),$(BINGO_SCHEDULER_ENABLED)),$(BINGO_PLATFORM_HEADERS)) $(if $(CLUSTER_CFG_FILES),$(CLUSTER_PLATFORM_HEADERS))
+.PHONY: platform-headers debug-platform-headers
+platform-headers: $$(ACTIVE_PLATFORM_HEADERS)
+
+debug-platform-headers: platform-headers
 	@echo "Generated Platform Headers:"
-	@ls -lh $(PLATFORM_HEADERS)
+	@ls -lh $(ACTIVE_PLATFORM_HEADERS)
 
 
 # SW-only snax codegen: emits streamer_csr_addr_map.h (and any future SW-side
@@ -278,14 +284,16 @@ SW_STATUS_DIR = $(abspath tmp/status)
 SW_SUMMARY    = $(abspath tmp/sw_build_summary.txt)
 SW_STRICT    ?= 0
 
-.PHONY: sw sw-summary
+.PHONY: sw sw-summary cluster-sw-support
 
-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
+cluster-sw-support: snax-sw-gen $(CLUSTER_PLATFORM_HEADERS) check-snax-versacore-sync
+
+sw: platform-headers host/runtime/host.ld $$(if $$(CLUSTER_CFG_FILES),cluster-sw-support)
 	@rm -rf $(SW_STATUS_DIR) && mkdir -p $(SW_STATUS_DIR)
 	$(MAKE) -C host libs
-	$(MAKE) -C host TARGET=partial-build SW_NONFATAL=1
-	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
-	$(MAKE) -C host TARGET=finalize-build SW_NONFATAL=1
+	$(MAKE) -C host TARGET=partial-build SW_NONFATAL=1 SW_HOST_ONLY=$(if $(CLUSTER_CFG_FILES),0,1)
+	$(if $(CLUSTER_CFG_FILES),$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE))
+	$(MAKE) -C host TARGET=finalize-build SW_NONFATAL=1 SW_HOST_ONLY=$(if $(CLUSTER_CFG_FILES),0,1)
 	@$(MAKE) --no-print-directory sw-summary
 
 # One status shard per app (written by host/apps/common.mk) -> one summary.
@@ -329,15 +337,18 @@ else
 SINGLE_HOST_APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
 endif
 
-single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
+single-sw: platform-headers host/runtime/host.ld $$(if $$(CLUSTER_CFG_FILES),cluster-sw-support)
+	@if [ -z "$(CLUSTER_CFG_FILES)" ] && [ "$(HOST_APP_TYPE)" != "host_only" ]; then \
+		echo "HOST_APP_TYPE=$(HOST_APP_TYPE) requires clusters in $(CFG)"; exit 1; \
+	fi
 	$(MAKE) -C host libs
 	$(MAKE) -C host single_sw TARGET=partial-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
 		DEV_APP=$(DEV_APP)
-	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP) HOST_APP_TYPE=$(HOST_APP_TYPE) \
-		HOST_APPS=$(SINGLE_HOST_APP)
+	$(if $(CLUSTER_CFG_FILES),$(MAKE) -C device all DEVICE_APPS=$(DEV_APP) \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) HOST_APPS=$(SINGLE_HOST_APP))
 	$(MAKE) -C host single_sw TARGET=finalize-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
@@ -354,7 +365,7 @@ clean:
 # clean generated tmp files
 	rm -rf $(SW_DIR)/device/*.tmp
 # clean generated headers
-	rm -f $(PLATFORM_HEADERS)
+	rm -f $(PLATFORM_HEADERS) $(BINGO_PLATFORM_HEADERS) $(CLUSTER_PLATFORM_HEADERS)
 # clean generated hjson files
 	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADPERIPH_DIR) $(TARGET_PLIC_DIR)
 	rm -rf host/runtime/host.ld

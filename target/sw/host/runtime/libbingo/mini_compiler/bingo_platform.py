@@ -38,13 +38,18 @@ def parse_platform_cfg(occamy_h_path):
             f"Expected {num_chiplets} chiplet IDs in {occamy_h_path}, "
             f"got {len(chiplet_ids)}.")
 
+    num_clusters = _require_define(defines, "N_CLUSTERS_PER_CHIPLET", occamy_h_path)
+    num_cores = _require_define(defines, "N_CORES_PER_CLUSTER", occamy_h_path)
     return {
         "num_chiplets": num_chiplets,
-        "num_clusters_per_chiplet": _require_define(
-            defines, "N_CLUSTERS_PER_CHIPLET", occamy_h_path),
-        "num_cores_per_cluster": _require_define(
-            defines, "N_CORES_PER_CLUSTER", occamy_h_path),
+        "num_clusters_per_chiplet": num_clusters,
+        "num_cores_per_cluster": num_cores,
         "chiplet_ids": chiplet_ids,
+        "bingo_enabled": bool(defines.get("BINGO_SCHEDULER_ENABLED", num_clusters)),
+        "bingo_num_clusters": defines.get("BINGO_PROTOCOL_NUM_CLUSTERS", num_clusters),
+        "bingo_num_cores": defines.get("BINGO_PROTOCOL_NUM_CORES", num_cores + 1),
+        "bingo_chip_id_width": defines.get("BINGO_PROTOCOL_CHIP_ID_WIDTH", 8),
+        "bingo_dep_tag_width": defines.get("BINGO_DEP_TAG_WIDTH", 4),
     }
 
 

@@ -15,7 +15,10 @@ OFFLOAD_BINGO_HW_SUBDIRS = apps/offload_bingo_hw/multi_chip apps/offload_bingo_h
 OFFLOAD_BINGO_SW_SUBDIRS = apps/offload_bingo_sw/multi_chip apps/offload_bingo_sw/single_chip
 OFFLOAD_LEGACY_SUBDIRS = apps/offload_legacy/multi_chip apps/offload_legacy/single_chip
 
-SUBDIRS = $(HOST_ONLY_SUBDIRS) $(OFFLOAD_BINGO_HW_SUBDIRS) $(OFFLOAD_BINGO_SW_SUBDIRS) $(OFFLOAD_LEGACY_SUBDIRS)
+SUBDIRS = $(HOST_ONLY_SUBDIRS)
+ifneq ($(SW_HOST_ONLY),1)
+SUBDIRS += $(OFFLOAD_BINGO_HW_SUBDIRS) $(OFFLOAD_BINGO_SW_SUBDIRS) $(OFFLOAD_LEGACY_SUBDIRS)
+endif
 
 .DEFAULT_GOAL := all
 TARGET ?= all

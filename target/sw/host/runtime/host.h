@@ -38,6 +38,7 @@ extern uint64_t __wide_spm_end;
 // SNAX LIB Symbol Tab
 //===============================================================
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 // symtab data structure
 #define SNAX_LIB_NAME_MAX_LEN 64
 typedef struct __attribute__((packed)){
@@ -87,6 +88,7 @@ uint32_t get_device_function(const char *name) {
     // printf("Symbol \"%s\" not found.\n", name);
     return (uint32_t)(0xBAADF00D);
 }
+#endif
 
 //===============================================================
 // RISC-V
@@ -203,6 +205,7 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
     asm volatile("fence" ::: "memory");
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 void initialize_cluster(uint32_t cluster_idx) {
     // Initialize the cluster tcdm
     sys_dma_blk_memcpy(
@@ -218,8 +221,7 @@ void initialize_all_clusters() {
         initialize_cluster(i);
     }
 }
-
-
+#endif
 
 void enable_fpu() {
     uint64_t mstatus;
@@ -330,6 +332,7 @@ static inline void fence() { asm volatile("fence" : : : "memory"); }
 // Device programming
 //===============================================================
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 extern void snitch_main();
 
 static inline void wakeup_snitch(uint8_t chip_id,
@@ -457,8 +460,7 @@ static inline int wait_snitches_done(uint8_t chip_id) {
     else
         return -1;
 }
-
-
+#endif
 
 //===============================================================
 // Interrupts
@@ -606,11 +608,13 @@ static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
     *ptr |= mask;
 }
 
+#if N_CLUSTERS_PER_CHIPLET > 0
 void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id,
                            uint32_t core_id) {
     writew((1 << core_id),
            (uintptr_t)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_clint_set_addr(cluster_id)));
 }
+#endif
 
 static inline uint32_t timer_interrupt_pending() {
     uint64_t mip;

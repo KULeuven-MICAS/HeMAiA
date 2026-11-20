@@ -59,6 +59,13 @@ module ${name}_quad
   input  ${soc_wide_xbar.in_quad.rsp_type()} quadrant_wide_out_rsp_i,
   input  ${soc_wide_xbar.out_quad.req_type()} quadrant_wide_in_req_i,
   output ${soc_wide_xbar.out_quad.rsp_type()} quadrant_wide_in_rsp_o,
+  // Scheduler CSR ports in the host domain, after the cluster CDC FIFOs.
+  output csr_req_t [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_req_o,
+  output logic     [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_req_valid_o,
+  input  logic     [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_req_ready_i,
+  input  csr_rsp_t [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_rsp_i,
+  input  logic     [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_rsp_valid_i,
+  output logic     [NrClustersPerQuad-1:0][NrCoresPerCluster[0]-1:0] csr_rsp_ready_o,
   // SRAM configuration
   input  sram_cfg_quadrant_t sram_cfg_i
 );
@@ -87,15 +94,6 @@ module ${name}_quad
   tlb_entry_t [${wide_tlb_entries-1}:0] wide_tlb_entries;
   % endif
 
-  // Signals for CSR Req/Rsp to the QuadCtrl
-  // Num_cluster * Num_core
-  csr_req_t [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req;
-  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req_valid;
-  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req_ready;
-  csr_rsp_t [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp;
-  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp_valid;
-  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp_ready;
-
   %for i in range(nr_clusters):
   // CSR Req/Rsp for Cluster ${i}
   csr_req_t [${nr_cores_per_cluster-1}:0] csr_req_${i};
@@ -111,15 +109,15 @@ module ${name}_quad
   csr_rsp_t [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_${i};
   logic     [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_valid_${i};
   logic     [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_ready_${i};
-  // Assignment From Cluster to QuadCtrl
+  // Connect the host side of each cluster's CDC FIFOs to the scheduler.
   %for j in range(nr_cores_per_cluster):
   // CSR Req/Rsp for Core ${j}
-  assign csr_req[${i}][${j}] = csr_req_cdc_${i}[${j}];
-  assign csr_req_valid[${i}][${j}] = csr_req_cdc_valid_${i}[${j}];
-  assign csr_req_cdc_ready_${i}[${j}] = csr_req_ready[${i}][${j}];
-  assign csr_rsp_${i}[${j}] = csr_rsp[${i}][${j}];
-  assign csr_rsp_valid_${i}[${j}] = csr_rsp_valid[${i}][${j}];
-  assign csr_rsp_ready[${i}][${j}] = csr_rsp_ready_${i}[${j}];
+  assign csr_req_o[${i}][${j}] = csr_req_cdc_${i}[${j}];
+  assign csr_req_valid_o[${i}][${j}] = csr_req_cdc_valid_${i}[${j}];
+  assign csr_req_cdc_ready_${i}[${j}] = csr_req_ready_i[${i}][${j}];
+  assign csr_rsp_${i}[${j}] = csr_rsp_i[${i}][${j}];
+  assign csr_rsp_valid_${i}[${j}] = csr_rsp_valid_i[${i}][${j}];
+  assign csr_rsp_ready_o[${i}][${j}] = csr_rsp_ready_${i}[${j}];
   %endfor
   %endfor
 
@@ -671,12 +669,6 @@ module ${name}_quad
     .rst_ni,
     .test_mode_i,
     .chip_id_i,
-    .csr_req_i          (csr_req                    ),
-    .csr_req_valid_i    (csr_req_valid              ),
-    .csr_req_ready_o    (csr_req_ready              ),
-    .csr_rsp_o          (csr_rsp                    ),
-    .csr_rsp_valid_o    (csr_rsp_valid              ),
-    .csr_rsp_ready_i    (csr_rsp_ready              ),
     .soc_out_req_o      (quadrant_narrow_out_req_o  ),
     .soc_out_rsp_i      (quadrant_narrow_out_rsp_i  ),
     .soc_in_req_i       (quadrant_narrow_in_req_i   ),

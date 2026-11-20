@@ -1,4 +1,5 @@
 */bootrom.o
+*/bootrom.d
 */bootrom.bin
 */bootrom.dump
 */bootrom.elf

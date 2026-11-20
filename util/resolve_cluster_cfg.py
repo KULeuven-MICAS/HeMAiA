@@ -19,6 +19,11 @@ import hjson
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def bingo_scheduler_enabled(cfg: dict) -> bool:
+    """Resolve the scheduler enable independently of the number of clusters."""
+    return cfg.get("bingo_scheduler", {}).get("enabled", bool(cfg.get("clusters")))
+
+
 def find_snitch_root(repo_root: Path = REPO_ROOT) -> Path:
     """Use Bender's selected checkout; deps is a fallback when Bender is absent."""
     if shutil.which("bender"):
@@ -36,13 +41,16 @@ def find_snitch_root(repo_root: Path = REPO_ROOT) -> Path:
     return path.resolve()
 
 
-def cluster_config_paths(cfg_path: Path, snitch_root: Path) -> list[Path]:
+def cluster_config_paths(cfg_path: Path, snitch_root: Path | None = None) -> list[Path]:
     """Return cluster HJSON paths in SoC order, including repeated clusters."""
     with cfg_path.open() as stream:
         cfg = hjson.load(stream)
-    names = cfg.get("clusters")
-    if not isinstance(names, list) or not names:
-        raise ValueError(f"{cfg_path}: expected a nonempty 'clusters' list")
+    names = cfg.get("clusters", [])
+    if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
+        raise ValueError(f"{cfg_path}: expected 'clusters' to be a list of names")
+    if not names:
+        return []
+    snitch_root = snitch_root or find_snitch_root()
     paths = []
     for name in names:
         path = snitch_root / "target/snitch_cluster/cfg" / f"{name}.hjson"
@@ -52,9 +60,11 @@ def cluster_config_paths(cfg_path: Path, snitch_root: Path) -> list[Path]:
     return paths
 
 
-def gemm_config_path(cfg_path: Path, snitch_root: Path) -> Path:
+def gemm_config_path(cfg_path: Path, snitch_root: Path | None = None) -> Path:
     """Resolve one GEMM config, rejecting incompatible cluster geometries."""
     paths = list(dict.fromkeys(cluster_config_paths(cfg_path, snitch_root)))
+    if not paths:
+        raise ValueError(f"{cfg_path}: a cluster is required for VersaCore GEMM")
     signature = None
     for path in paths:
         with path.open() as stream:
@@ -100,24 +110,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cfg", type=Path, default=REPO_ROOT / "target/rtl/cfg/lru.hjson")
     parser.add_argument("--snitch-root", type=Path)
-    parser.add_argument("--format", choices=("paths", "gemm"), default="gemm")
+    parser.add_argument("--format", choices=("paths", "gemm", "bingo-enabled"), default="gemm")
     parser.add_argument("--stamp", type=Path,
                         help="update a Make dependency stamp only when config selection/content changes")
     parser.add_argument("--hwcfg", type=Path,
                         help="include an explicit workload GEMM_HWCFG override in the stamp")
     args = parser.parse_args()
     try:
-        snitch_root = args.snitch_root or find_snitch_root()
-        paths = cluster_config_paths(args.cfg, snitch_root)
         if args.stamp:
+            paths = cluster_config_paths(args.cfg, args.snitch_root)
             inputs = [args.cfg, *paths]
             if args.hwcfg:
                 inputs.append(args.hwcfg)
             update_stamp(args.stamp, inputs)
         elif args.format == "paths":
+            paths = cluster_config_paths(args.cfg, args.snitch_root)
             print(" ".join(str(path) for path in dict.fromkeys(paths)))
+        elif args.format == "bingo-enabled":
+            with args.cfg.open() as stream:
+                if bingo_scheduler_enabled(hjson.load(stream)):
+                    print("1")
         else:
-            print(gemm_config_path(args.cfg, snitch_root))
+            print(gemm_config_path(args.cfg, args.snitch_root))
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Cluster configuration error: {exc}", file=sys.stderr)
         return 1

@@ -17,6 +17,7 @@
 %>
 <% 
   i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+  num_clusters = len(occamy_cfg["clusters"])
 %>
 
 module ${name}_top
@@ -24,9 +25,11 @@ module ${name}_top
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+% if num_clusters:
   /// Accelerator clock
-  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
-  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
+  input  logic [${num_clusters-1}:0] clk_acc_i,
+  input  logic [${num_clusters-1}:0] rst_acc_ni,
+% endif
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
@@ -166,8 +169,7 @@ module ${name}_top
     // The original chip_id is disabled, and replaced by chip_id of HeMAiA
   end
 
-  // Machine timer and machine software interrupt pending, one bit per CLINT interrupt
-  // target: the harts plus the HW-manager DVFS doorbell(s) (see nr_ipi_targets).
+  // Machine timer and machine software interrupt pending, one bit per CLINT target.
   logic [${nr_ipi_targets-1}:0] mtip, msip;
   // Supervisor and machine-mode external interrupt pending.
   logic [1:0] eip;
@@ -196,8 +198,10 @@ module ${name}_top
   ${name}_soc i_${name}_soc (
     .clk_i,
     .rst_ni,
+% if num_clusters:
     .clk_acc_i,
     .rst_acc_ni,
+% endif
     .test_mode_i,
     .chip_id_i                    ( chip_id_i                   ),
     .boot_addr_i                  ( boot_addr                   ),
@@ -704,6 +708,7 @@ module ${name}_top
     .irq_o (irq.timer)
   );
 
+% if num_clusters:
   ////////////////////////////
   //  Cluster2Host Mailbox  //
   ////////////////////////////
@@ -730,4 +735,5 @@ module ${name}_top
     .irq_o (),
     .base_addr_i(c2h_mailbox_base_addr)
   );
+% endif
 endmodule

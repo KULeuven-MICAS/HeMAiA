@@ -18,11 +18,11 @@ INCLUDES += -I$(ROOT)/target/sw/shared/runtime
 
 bootrom: bootrom.sv
 
-%.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+%.o: %.c $(PLATFORM_GEN)/occamy.h
+	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 	@echo "CC    <= $<"
 
-bootrom.elf bootrom.dump bootrom.bin: bootrom.S bootrom.o $(BOOTROM_LD)
+bootrom.elf bootrom.dump bootrom.bin: bootrom.S bootrom.o $(BOOTROM_LD) $(PLATFORM_GEN)/occamy.h
 	$(CC) $(CFLAGS) $(INCLUDES) -T$(BOOTROM_LD) $< bootrom.o -o bootrom.elf
 	$(OBJDUMP) -d bootrom.elf > bootrom.dump
 	$(OBJCOPY) -j .text -j .rodata -j .srodata -O binary bootrom.elf bootrom.bin
@@ -31,4 +31,6 @@ bootrom.sv: bootrom.bin
 	$(BIN2SV) $< -m bootrom > $@
 
 clean:
-	rm -rf *.bin *.dump *.elf *.o bootrom.sv
+	rm -rf *.bin *.dump *.elf *.o *.d bootrom.sv
+
+-include bootrom.d

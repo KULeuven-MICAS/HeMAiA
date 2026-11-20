@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include "occamy_base_addr.h"
 #include "occamy_memory_map.h"
-#define H2C_MAILBOX_BASE_ADDR H2C_MAILBOX_0_BASE_ADDR
 
 #define MAILBOX_WRITE_DATA_ADDR_OFFSET           0
 #define MAILBOX_READ_DATA_ADDR_OFFSET            1
@@ -22,14 +21,6 @@
 
 inline uint64_t h2h_mailbox_base_address(){
     return (uint64_t)H2H_MAILBOX_BASE_ADDR;
-}
-
-inline uint32_t c2h_mailbox_base_address(){
-    return (uint32_t)C2H_MAILBOX_BASE_ADDR;
-}
-
-inline uint64_t h2c_mailbox_base_address(uint8_t cluster_idx){
-    return (uint64_t)(H2C_MAILBOX_BASE_ADDR + cluster_idx * MAILBOX_ADDR_SPACE);
 }
 
 inline uint64_t h2h_mailbox_write_address(){
@@ -53,6 +44,17 @@ inline uint64_t h2h_mailbox_status_flag_address(){
     // Bit 2: Write FIFO level is higher than the threshold set in WIRQT
     // Bit 3: Read FIFO level is higher than the threshold set in RIRQT
     return h2h_mailbox_base_address() + MAILBOX_STATUS_FLAG_OFFSET * 8;
+}
+
+#if N_CLUSTERS_PER_CHIPLET > 0
+#define H2C_MAILBOX_BASE_ADDR H2C_MAILBOX_0_BASE_ADDR
+
+inline uint32_t c2h_mailbox_base_address(){
+    return (uint32_t)C2H_MAILBOX_BASE_ADDR;
+}
+
+inline uint64_t h2c_mailbox_base_address(uint8_t cluster_idx){
+    return (uint64_t)(H2C_MAILBOX_BASE_ADDR + cluster_idx * MAILBOX_ADDR_SPACE);
 }
 
 inline uint64_t h2c_mailbox_write_address(uint8_t cluster_idx){
@@ -103,3 +105,4 @@ inline uint64_t c2h_mailbox_status_flag_address(){
     // Bit 3: Read FIFO level is higher than the threshold set in RIRQT
     return c2h_mailbox_base_address() + MAILBOX_STATUS_FLAG_OFFSET * 4;
 }
+#endif

@@ -140,10 +140,11 @@ bingo-vis-traces:
 # Bootrom Generation #
 ######################
 
-bootrom: # In SNAX Docker
+bootrom: $(CFG) # In SNAX Docker
 # Here will generate two bootroms:
 # 1. The bootrom used for simulation (light-weight bootrom)
 # 2. The bootrom used for tapeout / FPGA prototyping (embedded real rom, full-functional bootrom with different frequency settings)
+	$(MAKE) -C ./target/sw platform-headers CFG=$(CFG)
 	$(MAKE) -C ./target/rtl/bootrom all
 
 # Hardware Generation

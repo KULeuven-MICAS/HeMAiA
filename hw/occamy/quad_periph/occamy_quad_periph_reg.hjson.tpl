@@ -5,9 +5,9 @@
 {
    param_list: [
     { name: "NumClusters",
-      desc: "Number of clusters in the chip.",
+      desc: "Number of logical cluster slots in the Bingo control page.",
       type: "int",
-      default: "${nr_clusters}"
+      default: "${bingo_num_clusters}"
     },
     { name: "NumTotalCores",
       desc: "Number of cores in the chip",

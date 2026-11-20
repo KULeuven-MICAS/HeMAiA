@@ -4,10 +4,60 @@
     "title": "Occamy System Schema",
     "description": "Description of an Occamy-based system.",
     "type": "object",
-    "required": [
-        "clusters"
-    ],
     "properties": {
+        "clusters": {
+            "type": "array",
+            "description": "Cluster configuration names in quadrant order. An empty or omitted list disables the quadrant.",
+            "items": {
+                "type": "string",
+                "minLength": 1
+            },
+            "default": []
+        },
+        "bingo_scheduler": {
+            "type": "object",
+            "description": "Chiplet-level Bingo scheduler and its logical descriptor geometry.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable the scheduler. Defaults to whether physical clusters are present."
+                },
+                "num_clusters": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Logical cluster slots in the descriptor ABI. Defaults to the physical count or the two-cluster tapeout ABI."
+                },
+                "num_cores_per_cluster": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Logical cores per slot, including the CVA6 slot in cluster 0. Defaults to the physical count plus one or the two-cluster tapeout ABI."
+                },
+                "dep_tag_width": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Dependency tag width in the descriptor ABI. Defaults to the existing quadrant configuration or four bits."
+                },
+                "enable_dvfs": {
+                    "type": "boolean",
+                    "description": "Enable the scheduler's dedicated host MSIP doorbell. Defaults to the scheduler enable."
+                }
+            },
+            "additionalProperties": false
+        },
+        "xdma_cluster_address_space": {
+            "type": "integer",
+            "description": "Cluster address stride for system XDMA targeting a remote cluster when there are no local clusters.",
+            "minimum": 1,
+            "default": 4194304
+        },
+        "sram_cfg_fields": {
+            "type": "object",
+            "description": "SoC SRAM configuration field widths when there are no local clusters.",
+            "minProperties": 1,
+            "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "additionalProperties": { "type": "integer", "minimum": 1 },
+            "default": { "ema": 3, "emaw": 2, "emas": 1 }
+        },
         "quadrant_pre_xbar": {
             "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
         },

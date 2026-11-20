@@ -19,13 +19,18 @@
 // Whether the testharness memchip clock runs at the same speed as the host clock.
 #define HEMAIA_SAME_MEMCHIP_SPEED      ${same_memchip_speed}
 
-// CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell (a
-// dedicated interrupt target appended after this chiplet's harts). Keep in sync with
-// occamy.py hw_manager_ipi_idx / occamy_soc.sv.tpl.
+#define BINGO_SCHEDULER_ENABLED        ${int(bingo_enabled)}
+#define BINGO_PROTOCOL_NUM_CLUSTERS    ${bingo_num_clusters}
+#define BINGO_PROTOCOL_NUM_CORES       ${bingo_num_cores_per_cluster}
+#define BINGO_PROTOCOL_CHIP_ID_WIDTH   ${bingo_chip_id_width}
+#define BINGO_PROTOCOL_CLUSTER_ID_WIDTH ${max(1, (bingo_num_clusters - 1).bit_length())}
+#define BINGO_PROTOCOL_CORE_ID_WIDTH   ${max(1, (bingo_num_cores_per_cluster - 1).bit_length())}
+#define BINGO_HOST_CORE_ID             (BINGO_PROTOCOL_NUM_CORES - 1)
+#define BINGO_DVFS_ENABLED             ${int(bingo_enable_dvfs)}
+% if bingo_enable_dvfs:
+// CLINT MSIP bit the Bingo HW manager uses to notify the host about DVFS.
 #define HW_MANAGER_DVFS_MSIP_BIT       ${hw_manager_dvfs_msip_bit}
+% endif
 
-// Per-edge dependency tag width of the bingo HW manager (s1_quadrant.dep_tag_width ->
-// bingo_hw_manager_top DepTagWidth). The task descriptor packs one tag at the MSB of
-// each dep_*_info field, so SW must use the same width as the RTL: bingo_utils.h derives
-// DEP_TAG_WIDTH from this, and the mini-compiler passes it to BingoDFG(dep_tag_width=).
+// Per-edge tag width of the Bingo wire descriptor.
 #define BINGO_DEP_TAG_WIDTH            ${dep_tag_width}

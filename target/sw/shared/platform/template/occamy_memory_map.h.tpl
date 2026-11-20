@@ -14,8 +14,12 @@
 // Auto-generated headers
 #include "clint.h"
 #include "occamy_soc_ctrl.h"
+% if bingo_has_cfg:
 #include "occamy_quad_periph.h"
+% endif
+% if nr_clusters_per_chiplet:
 #include "snitch_cluster_peripheral.h"
+% endif
 
 //===============================================================
 // Global Memory
@@ -25,7 +29,9 @@
 #define NARROW_SPM_SIZE ${narrow_spm_size}
 // Address space given to the boot ROM on the narrow lite peripheral xbar.
 #define BOOTROM_SIZE ${rom_size}
+% if nr_clusters_per_chiplet:
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
+% endif
 // Memchip SRAM size from cfg (hemaia_mem_chip[0].mem_size); 0 if absent.
 #define MEMPOOL_TOTAL_SIZE ${mempool_total_size}
 
@@ -44,6 +50,7 @@
 #define CLINT_MSIP_0_REG_OFFSET CLINT_MSIP_REG_OFFSET
 #endif
 
+% if nr_clusters_per_chiplet:
 #if OCCAMY_SOC_MAILBOX_SCRATCH_MULTIREG_COUNT == 1
 #define OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET
 #endif
@@ -53,6 +60,7 @@
 #define OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_0_REG_OFFSET OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_REG_OFFSET
 #define OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_0_REG_OFFSET OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_REG_OFFSET
 #endif
+% endif
 
 //===============================================================
 // Base addresses
@@ -63,14 +71,15 @@
 #define soc_ctrl_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_SCRATCH_0_REG_OFFSET)
 
+#define soc_ctrl_io_drive_strength_base \
+    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_IO_DRIVE_STRENGTH_REG_OFFSET)
+
+% if nr_clusters_per_chiplet:
 #define soc_ctrl_mailbox_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET)
 
 #define soc_ctrl_kernel_tab_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)
-
-#define soc_ctrl_io_drive_strength_base \
-    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_IO_DRIVE_STRENGTH_REG_OFFSET)
 
 #define quad_ctrl_arg_ptr_list_base \
     (QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_0_REG_OFFSET)
@@ -95,20 +104,21 @@
 #define cluster_hw_barrier_base              \
     (QUAD_NARROW_CLUSTER_0_PERIPH_BASE_ADDR + \
      SNITCH_CLUSTER_PERIPHERAL_HW_BARRIER_REG_OFFSET)
+% endif
 
 
 //===============================================================
 // Replicated address spaces
 //===============================================================
 
-#define cluster_offset ${cluster_offset}
-
-#define quadrant_cfg_offset 0x10000
-
 inline uintptr_t translate_address(uintptr_t address, uint32_t instance,
                                    uint32_t offset) {
     return address + instance * offset;
 }
+
+% if nr_clusters_per_chiplet:
+#define cluster_offset ${cluster_offset}
+#define quadrant_cfg_offset 0x10000
 
 inline uintptr_t translate_cluster_address(uintptr_t address,
                                            uint32_t cluster_idx) {
@@ -148,12 +158,20 @@ inline uintptr_t cluster_perf_counters_addr(uint32_t cluster_idx) {
 inline uintptr_t cluster_hw_barrier_addr(uint32_t cluster_idx) {
     return translate_cluster_address(cluster_hw_barrier_base, cluster_idx);
 }
+% endif
 
 inline uintptr_t soc_ctrl_scratch_addr(uint32_t reg_idx) {
     return soc_ctrl_scratch_base +
            (reg_idx / OCCAMY_SOC_SCRATCH_SCRATCH_FIELDS_PER_REG) * 4;
 }
 
+// Drive strength of the chip-level IO pads, one 4-bit field per peripheral
+// domain. Single register, so no index is needed.
+inline uintptr_t soc_ctrl_io_drive_strength_addr() {
+    return soc_ctrl_io_drive_strength_base;
+}
+
+% if nr_clusters_per_chiplet:
 inline uintptr_t soc_ctrl_mailbox_scratch_addr(uint32_t reg_idx) {
     return soc_ctrl_mailbox_scratch_base +
            (reg_idx / OCCAMY_SOC_SCRATCH_SCRATCH_FIELDS_PER_REG) * 4;
@@ -162,12 +180,6 @@ inline uintptr_t soc_ctrl_mailbox_scratch_addr(uint32_t reg_idx) {
 inline uintptr_t soc_ctrl_kernel_tab_scratch_addr(uint32_t reg_idx) {
     return soc_ctrl_kernel_tab_scratch_base +
            (reg_idx / OCCAMY_SOC_SCRATCH_SCRATCH_FIELDS_PER_REG) * 4;
-}
-
-// Drive strength of the chip-level IO pads, one 4-bit field per peripheral
-// domain. Single register, so no index is needed.
-inline uintptr_t soc_ctrl_io_drive_strength_addr() {
-    return soc_ctrl_io_drive_strength_base;
 }
 
 inline uintptr_t quad_ctrl_arg_ptr_addr(uint32_t reg_idx){
@@ -185,7 +197,9 @@ inline uintptr_t quad_ctrl_global_id_to_dev_id_addr(uint32_t reg_idx){
     return quad_ctrl_gid_to_dev_tid_base_addr + 
             (reg_idx / OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_FIELDS_PER_REG) * 4;
 }
+% endif
 
+% if bingo_has_cfg:
 inline uintptr_t quad_ctrl_task_desc_base_hi_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_TASK_DESC_LIST_BASE_ADDR_HI_REG_OFFSET;
 }
@@ -204,10 +218,6 @@ inline uintptr_t quad_ctrl_start_bingo_hw_manager_addr(){
 
 inline uintptr_t quad_ctrl_host_init_done_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_HOST_INIT_DONE_REG_OFFSET;
-}
-
-inline uintptr_t quad_ctrl_host_ready_done_queue_addr(){
-    return QUAD_HOST_READY_DONE_QUEUE_BASE_ADDR;
 }
 
 inline uintptr_t quad_ctrl_enable_idle_pm_addr(){
@@ -261,6 +271,13 @@ inline uintptr_t quad_ctrl_dvfs_request_addr(){
 inline uintptr_t quad_ctrl_dvfs_ack_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_DVFS_ACK_REG_OFFSET;
 }
+% endif
+
+% if bingo_enabled:
+inline uintptr_t quad_ctrl_host_ready_done_queue_addr(){
+    return QUAD_HOST_READY_DONE_QUEUE_BASE_ADDR;
+}
+% endif
 
 inline uintptr_t clint_msip_addr(uint32_t hartid) {
     return clint_msip_base + (hartid / CLINT_MSIP_P_FIELDS_PER_REG) * 4;
@@ -281,6 +298,7 @@ inline uint32_t* soc_ctrl_scratch_ptr(uint32_t reg_idx) {
     return (uint32_t*)soc_ctrl_scratch_addr(reg_idx);
 }
 
+% if nr_clusters_per_chiplet:
 inline volatile uint32_t* cluster_clint_clr_ptr(uint32_t cluster_idx) {
     return (volatile uint32_t*)cluster_clint_clr_addr(cluster_idx);
 }
@@ -296,6 +314,7 @@ inline volatile uint32_t* cluster_perf_counters_ptr(uint32_t cluster_idx) {
 inline volatile uint32_t* cluster_hw_barrier_ptr(uint32_t cluster_idx) {
     return (volatile uint32_t*)cluster_hw_barrier_addr(cluster_idx);
 }
+% endif
 
 
 inline volatile uint32_t* clint_msip_ptr(uint32_t hartid) {

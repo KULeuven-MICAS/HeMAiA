@@ -46,15 +46,25 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  num_cores_per_cluster: int,
                  is_host_as_acc: bool,
                  chiplet_ids: list[int] = None,
-                 dep_tag_width: int = 4) -> None:
+                 dep_tag_width: int = 4,
+                 *,
+                 physical_clusters_per_chiplet: dict[int, int] | None = None,
+                 chip_id_width: int = 8) -> None:
         super().__init__()
-        # HW architecture parameters
+        # Logical dimensions determine descriptor and dependency bitmap widths.
         self.num_chiplets = num_chiplets
         self.num_clusters_per_chiplet = num_clusters_per_chiplet
         self.num_cores_per_cluster = num_cores_per_cluster + 1 if is_host_as_acc else num_cores_per_cluster
         self.is_host_as_acc = is_host_as_acc
         assert num_chiplets == len(chiplet_ids) or chiplet_ids is None, "Length of chiplet_ids must match num_chiplets"
         self.chiplet_ids = chiplet_ids if chiplet_ids else list(range(num_chiplets))
+        self.chip_id_width = chip_id_width
+        # Physical cluster counts only constrain placement and device setup.
+        self.physical_clusters_per_chiplet = dict.fromkeys(self.chiplet_ids, num_clusters_per_chiplet)
+        for chip_id, count in (physical_clusters_per_chiplet or {}).items():
+            if chip_id not in self.physical_clusters_per_chiplet or not 0 <= count <= num_clusters_per_chiplet:
+                raise ValueError(f"Invalid physical cluster count {count} for chiplet 0x{chip_id:02x}")
+            self.physical_clusters_per_chiplet[chip_id] = count
         # Identity-aware dependencies. Must match the hw_manager's EnableTaggedDeps
         # / DepTagWidth parameters. When enabled, bingo_compile_dfg runs the spill +
         # per-edge tag-allocation passes; the tag bits are always present in the
@@ -69,6 +79,25 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.id = -1
         self._next_cerf_group = 0
         self._gating_cerf_mappings: dict = {}  # gating_node → {expert_idx: cerf_group_id}
+
+    @classmethod
+    def from_platform(cls, platform, *, physical_clusters_per_chiplet=None):
+        """Use the platform's Bingo wire geometry with optional per-chiplet placement limits."""
+        if not platform["bingo_enabled"]:
+            raise ValueError("Bingo hardware scheduling is disabled on this platform")
+        physical_counts = dict.fromkeys(platform["chiplet_ids"], platform["num_clusters_per_chiplet"])
+        physical_counts.update(physical_clusters_per_chiplet or {})
+        return cls(
+            num_chiplets=platform["num_chiplets"],
+            num_clusters_per_chiplet=platform["bingo_num_clusters"],
+            num_cores_per_cluster=platform["bingo_num_cores"] - 1,
+            is_host_as_acc=True,
+            chiplet_ids=platform["chiplet_ids"],
+            dep_tag_width=platform["bingo_dep_tag_width"],
+            physical_clusters_per_chiplet=physical_counts,
+            chip_id_width=platform["bingo_chip_id_width"],
+        )
+
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
 
@@ -138,14 +167,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # We will add one entry node at the beginning of the DFG
         if self.is_host_as_acc:
             entry_node = BingoNode(
-                assigned_chiplet_id=0,
+                assigned_chiplet_id=self.chiplet_ids[0],
                 assigned_cluster_id=0,
                 assigned_core_id=self.num_cores_per_cluster -1,
                 kernel_name="__host_bingo_kernel_entry"
             )
         else:
             entry_node = BingoNode(
-                assigned_chiplet_id=0,
+                assigned_chiplet_id=self.chiplet_ids[0],
                 assigned_cluster_id=0,
                 assigned_core_id=0,
                 kernel_name="__snax_bingo_kernel_entry"
@@ -183,7 +212,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             current_chiplet_exit_nodes = []
             
             # 1. Normal cores
-            for cluster_id in range(self.num_clusters_per_chiplet):
+            for cluster_id in range(self.physical_clusters_per_chiplet[chiplet_id]):
                 for core_id in range(self.num_cores_per_cluster):
                     # Skip the simd core for now
                     if self.is_host_as_acc and core_id == (self.num_cores_per_cluster -1):
@@ -1073,7 +1102,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             return math.ceil(math.log2(n)) if n > 1 else 1
 
         # Parameters
-        chip_id_width = 8
+        chip_id_width = self.chip_id_width
         task_id_width = 12
         # Use the class members for dimensions
         num_clusters = self.num_clusters_per_chiplet
@@ -1184,7 +1213,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             return math.ceil(math.log2(n)) if n > 1 else 1
 
         # Parameters
-        chip_id_width = 8
+        chip_id_width = self.chip_id_width
         task_id_width = 12
         num_clusters = self.num_clusters_per_chiplet
         num_cores = self.num_cores_per_cluster
@@ -1594,6 +1623,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Emit global_task_id_to_dev_task_id for each chiplet
         # Also need to emit num_dev_tasks for each chiplet
         for chiplet_id in chiplets_to_process:
+            if not self.physical_clusters_per_chiplet[chiplet_id]:
+                continue
             mapping_str += f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
             dev_task_counter = 0
             
@@ -1680,11 +1711,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 )
 
             if h.mem_level == "L1":
-                if h.cluster_id < 0 or h.cluster_id >= self.num_clusters_per_chiplet:
+                cluster_count = self.physical_clusters_per_chiplet[h.chip_id]
+                if not 0 <= h.cluster_id < cluster_count:
                     raise ValueError(
                         f"Memory handle '{h.name}' targets cluster_id "
                         f"{h.cluster_id}, but chiplet 0x{h.chip_id:02x} has "
-                        f"clusters 0..{self.num_clusters_per_chiplet - 1}."
+                        f"{cluster_count} physical clusters."
                     )
             elif h.cluster_id != 0:
                 raise ValueError(
@@ -1723,6 +1755,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 failures.append(
                     f"{node_label(node)} targets core {node.assigned_core_id}, "
                     f"but valid cores are 0..{self.num_cores_per_cluster - 1}."
+                )
+
+            host_lane = node.assigned_cluster_id == 0 and node.assigned_core_id == host_core_id
+            physical_clusters = self.physical_clusters_per_chiplet.get(node.assigned_chiplet_id, 0)
+            if not host_lane and not 0 <= node.assigned_cluster_id < physical_clusters:
+                failures.append(
+                    f"{node_label(node)} targets a device slot, but chiplet "
+                    f"0x{node.assigned_chiplet_id:02x} has {physical_clusters} physical clusters."
                 )
 
             kernel_name = node.kernel_name or ""
@@ -1797,7 +1837,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
     def _emit_task_desc_and_mappings(self, f, chiplet_id):
         """Emit task description and ID mapping lists."""
-        f.write(f"        uint32_t num_total_tasks = {len(self.node_list)};\n")
+        if self.physical_clusters_per_chiplet[chiplet_id]:
+            f.write(f"        uint32_t num_total_tasks = {len(self.node_list)};\n")
         f.write("        // Task Description List\n")
         task_desc_str = self.bingo_emit_task_desc_list(chiplet_id)
         indented_task_desc = "\n".join(["        " + line for line in task_desc_str.splitlines()])
@@ -1829,8 +1870,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def _emit_list_allocations(self, f, chiplet_id):
         """Emit allocations for device/host argument and kernel lists."""
         f.write(f"        // 2. Prepare device/host arg/kernel lists\n")
-        f.write(f"        uint32_t* device_arg_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
-        f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        if self.physical_clusters_per_chiplet[chiplet_id]:
+            f.write(f"        uint32_t* device_arg_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+            f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
         f.write(f"        uint64_t* host_arg_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n")
         f.write(f"        uint64_t* host_kernel_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n\n")
 
@@ -1960,13 +2002,17 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_total_tasks,\n")
-        f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+        if self.physical_clusters_per_chiplet[chiplet_id]:
+            f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
+            f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
+            f.write(f"                                num_total_tasks,\n")
+            f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+        else:
+            f.write(f"        bingo_hw_scheduler_init_host((uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+            f.write(f"                                     bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
         
         f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
@@ -2023,13 +2069,18 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
             # Step 3: Emit kernel_execution function structure
             f.write("int kernel_execution(){\n")
+            f.write("#if N_CLUSTERS_PER_CHIPLET > 0\n")
             f.write("    check_kernel_tab_ready();\n")
+            f.write("#endif\n")
             f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
             f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
             
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:
+                has_clusters = self.physical_clusters_per_chiplet[chiplet_id] > 0
+                if has_clusters:
+                    f.write("#if N_CLUSTERS_PER_CHIPLET > 0\n")
                 f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) {{\n")
                 
                 # A. Emit Task Description and Mapping Lists
@@ -2054,6 +2105,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         f.write(f"        {line}\n")
 
                 f.write("    }\n")
+                if has_clusters:
+                    f.write("#endif\n")
             
             f.write("    return 0;\n")
             f.write("}\n")

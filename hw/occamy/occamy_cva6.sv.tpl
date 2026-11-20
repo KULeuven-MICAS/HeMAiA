@@ -107,9 +107,11 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   localparam logic [63:0] DebugLength           =   64'd4096;
   // MMIO regions
   localparam logic [63:0] SoCPeriphBase         =   64'd0;
-  localparam logic [63:0] SoCPeriphLength       =   ${util.to_sv_hex(cluster_base_addr, 64)};
+  localparam logic [63:0] SoCPeriphLength       =   ${util.to_sv_hex(soc_periph_length, 64)};
+% if occamy_cfg["clusters"]:
   localparam logic [63:0] ClusterBase           =   ${util.to_sv_hex(cluster_base_addr, 64)};
   localparam logic [63:0] ClusterLength         =   ${util.to_sv_hex(cluster_base_offset, 64)};
+% endif
 
   /////////////////////////
   // CVA6 Configurations //
@@ -251,10 +253,16 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
       CLICNumInterruptSrc: unsigned'(256),
       // Memory Regions
       //    NonIdemp Region
+% if occamy_cfg["clusters"]:
       NrNonIdempotentRules: unsigned'(2),
       //                            SoC Periph;        Cluster
       NonIdempotentAddrBase: 1024'({SoCPeriphBase,    ClusterBase  }),
       NonIdempotentLength:   1024'({SoCPeriphLength,  ClusterLength}),
+% else:
+      NrNonIdempotentRules: unsigned'(1),
+      NonIdempotentAddrBase: 1024'(SoCPeriphBase),
+      NonIdempotentLength:   1024'(SoCPeriphLength),
+% endif
       //    Exe Region
       NrExecuteRegionRules: unsigned'(4),
       //                             WideSPM;       NarrowSPM;      Boot ROM;       Debug Module
