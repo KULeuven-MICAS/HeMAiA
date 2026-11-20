@@ -317,6 +317,15 @@ def main():
     # SoC Wide Xbar
     am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
+    external_memory = occamy_cfg.get("external_memory")
+    if external_memory is not None:
+        base = external_memory["address"]
+        length = external_memory["length"]
+        local_addr_width = 48 - occamy_cfg["hemaia_multichip"]["chip_id_width"]
+        if length <= 0 or base + length >= 1 << local_addr_width:
+            raise ValueError("external_memory must have positive length and a limit within the chip-local address space")
+        am_external_memory = am.new_leaf(
+            "external_memory", length, base).attach_to(am_soc_wide_xbar)
     if has_clusters:
         # Quad Wide and Narrow Xbar
         am_clusters, am_clusters_periph, am_clusters_leftover_spaces, am_clusters_xdma_ctrl_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces = occamy.am_connect_quad_wide_and_narrow_xbar(
@@ -467,6 +476,8 @@ def main():
     soc_wide_xbar.add_input("hemaia_mem")
 
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
+    if external_memory is not None:
+        soc_wide_xbar.add_output_entry("external_memory", am_external_memory)
     if has_clusters:
         # --> mask this route, forcing it through default wide xbar
         soc_wide_xbar.add_output_entry("quad",
@@ -659,6 +670,7 @@ def main():
 
     # Generate the Verilog code for occamy_pkg.sv (Only include the definition related to xbars)
     solder.render()
+    external_memory_bus = getattr(soc_wide_xbar, "out_external_memory", None)
 
     ##############################################
     # Die2Die AXI Bus For Module I/O Declaration #
@@ -698,6 +710,7 @@ def main():
                        fname="{}_top.sv".format(args.name),
                        module=solder.code_module['top_axi_lite_periph'],
                        soc_periph_xbar=soc_axi_lite_periph_xbar,
+                       external_memory_bus=external_memory_bus,
                        **top_kwargs)
     ###########################
     # SoC (fully synchronous) #
@@ -710,6 +723,7 @@ def main():
                        module=solder.code_module['soc'],
                        soc_periph_xbar=soc_axi_lite_periph_xbar,
                        bingo_axi_lite_xbar=bingo_axi_lite_xbar,
+                       external_memory_bus=external_memory_bus,
                        **soc_kwargs)
     #############
     # Quad CTRL #
@@ -794,6 +808,7 @@ def main():
             args.sim_with_verilator,
             args.sim_with_jtag_check,
             soc2router_bus, router2soc_bus, args.name)
+        testharness_kwargs["external_memory_bus"] = external_memory_bus
         # Template directory contains all .sv.tpl files
         tpl_dir = os.path.dirname(args.testharness_sv)
         # Generate testharness.sv, io_wrapper.sv, dut.sv → outdir (testharness/)
@@ -981,7 +996,7 @@ def main():
     if args.chip:
         chip_kwargs = occamy.get_chip_kwargs(
             soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
-        write_template(args.chip, outdir, **chip_kwargs)
+        write_template(args.chip, outdir, external_memory_bus=external_memory_bus, **chip_kwargs)
 
     ########
     # IO #
@@ -989,7 +1004,7 @@ def main():
     if args.io:
         io_kwargs = occamy.get_io_kwargs(
             occamy_cfg, util, args.name)
-        write_template(args.io, outdir, **io_kwargs)
+        write_template(args.io, outdir, external_memory_bus=external_memory_bus, **io_kwargs)
 
     ########
     # CTRL #

@@ -91,6 +91,12 @@ module hemaia (
     inout wire        io_i2c_sda,
     inout wire        io_i2c_scl,
 % endif
+% if external_memory_bus is not None:
+    // External AXI4 master in the SoC clock domain
+    output logic external_memory_clk_o,
+    output logic external_memory_rst_no,
+    ${external_memory_bus.emit_flat_master_port("external_memory")},
+% endif
     // `jtag` Interface (5)
     inout wire        io_jtag_trst_ni,
     inout wire        io_jtag_tck_i,
@@ -875,12 +881,42 @@ module hemaia (
   tc_core_power_supply #(.VerticalIO(1'b0)) right_core_power_supply[1:0] ();
   tc_core_power_supply #(.VerticalIO(1'b1)) bot_core_power_supply[1:0] ();
 
+% if external_memory_bus is not None:
+  ${name}_pkg::${external_memory_bus.req_type()} external_memory_req;
+  ${name}_pkg::${external_memory_bus.rsp_type()} external_memory_rsp;
+  <%
+    address_fields = ("id", "addr", "len", "size", "burst", "lock", "cache", "prot", "qos", "region", "user")
+    request_channels = {"aw": address_fields, "w": ("data", "strb", "last", "user"), "ar": address_fields}
+    response_channels = {"b": ("id", "resp", "user"), "r": ("id", "data", "resp", "last", "user")}
+  %>
+% for channel, fields in request_channels.items():
+  assign m_axi_external_memory_${channel}valid = external_memory_req.${channel}_valid;
+  assign external_memory_rsp.${channel}_ready = m_axi_external_memory_${channel}ready;
+% for field in fields:
+  assign m_axi_external_memory_${channel}${field} = external_memory_req.${channel}.${field};
+% endfor
+% endfor
+% for channel, fields in response_channels.items():
+  assign m_axi_external_memory_${channel}ready = external_memory_req.${channel}_ready;
+  assign external_memory_rsp.${channel}_valid = m_axi_external_memory_${channel}valid;
+% for field in fields:
+  assign external_memory_rsp.${channel}.${field} = m_axi_external_memory_${channel}${field};
+% endfor
+% endfor
+
+% endif
   occamy_chip i_occamy_chip (
 % if multichip_cfg["single_chip"] is False:
     .east_d2d_io         (io_east_d2d        ),
     .west_d2d_io         (io_west_d2d        ),
     .north_d2d_io        (io_north_d2d       ),
     .south_d2d_io        (io_south_d2d       ),
+% endif
+% if external_memory_bus is not None:
+    .external_memory_clk_o,
+    .external_memory_rst_no,
+    .external_memory_req_o (external_memory_req),
+    .external_memory_rsp_i (external_memory_rsp),
 % endif
     .*
     );

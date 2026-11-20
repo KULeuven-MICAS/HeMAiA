@@ -131,6 +131,10 @@ module ${name}_top
   output ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()} hemaia_d2d_link_ctrl_req_o,
   input  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp_i,
 % endif
+% if external_memory_bus is not None:
+  output ${external_memory_bus.req_type()} external_memory_req_o,
+  input  ${external_memory_bus.rsp_type()} external_memory_rsp_i,
+% endif
 
   /// HeMAiA Clk and Rst Controller
   output ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()} hemaia_clk_rst_controller_req_o,
@@ -226,6 +230,10 @@ module ${name}_top
     // Router Requst to Chiplet
     .router2soc_req_i,
     .router2soc_rsp_o,
+% endif
+% if external_memory_bus is not None:
+    .external_memory_req_o,
+    .external_memory_rsp_i,
 % endif
     .mtip_i ( mtip ),
     .msip_i ( msip ),

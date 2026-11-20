@@ -27,6 +27,9 @@
 
 #define WIDE_SPM_SIZE ${wide_spm_size}
 #define NARROW_SPM_SIZE ${narrow_spm_size}
+% if external_memory_size is not None:
+#define EXTERNAL_MEMORY_SIZE ${hex(external_memory_size)}ULL
+% endif
 // Address space given to the boot ROM on the narrow lite peripheral xbar.
 #define BOOTROM_SIZE ${rom_size}
 % if nr_clusters_per_chiplet:

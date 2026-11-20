@@ -179,5 +179,6 @@ sources:
   - target: simulation_hemaia
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
+      - target/sim/testharness/external_memory/hemaia_external_memory.sv
       - target/sim/testharness/dut.sv
       - target/sim/testharness/testharness.sv

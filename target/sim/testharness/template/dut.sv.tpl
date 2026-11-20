@@ -33,7 +33,20 @@
 //                    south boundary (offchip)
 //
 // Directions: east = +x, west = -x, south = +y, north = -y
-// This module contains ONLY wires and connections (no behavioral code).
+// Optional external-memory models terminate the exposed AXI ports.
+
+<%
+    external_memory_bus = context.get("external_memory_bus")
+    external_memory_channels = {
+        "aw": ("id", "addr", "len", "size", "burst", "lock", "cache", "prot",
+               "qos", "region", "user"),
+        "w": ("data", "strb", "last", "user"),
+        "ar": ("id", "addr", "len", "size", "burst", "lock", "cache", "prot",
+               "qos", "region", "user"),
+        "r": ("id", "data", "resp", "last", "user"),
+        "b": ("id", "resp", "user"),
+    }
+%>
 
 module dut (
 %if not sim_with_verilator:
@@ -169,6 +182,32 @@ module dut (
         cx = compute_chip.coordinate[0]
         cy = compute_chip.coordinate[1]
     %>
+    %if external_memory_bus is not None:
+    wire external_memory_clk_${cx}_${cy};
+    wire external_memory_rst_n_${cx}_${cy};
+    wire ${name}_pkg::${external_memory_bus.req_type()} external_memory_req_${cx}_${cy};
+    wire ${name}_pkg::${external_memory_bus.rsp_type()} external_memory_rsp_${cx}_${cy};
+    assign external_memory_req_${cx}_${cy}.aw.atop = '0;
+
+    hemaia_external_memory #(
+        .AddrWidth(${external_memory_bus.aw}),
+        .ChipIdWidth(${multichip_cfg["chip_id_width"]}),
+        .BaseAddr(64'h${f'{occamy_cfg["external_memory"]["address"]:x}'}),
+        .SizeBytes(64'h${f'{occamy_cfg["external_memory"]["length"]:x}'}),
+        .aw_chan_t(${name}_pkg::${external_memory_bus.aw_chan_type()}),
+        .ar_chan_t(${name}_pkg::${external_memory_bus.ar_chan_type()}),
+        .b_chan_t(${name}_pkg::${external_memory_bus.b_chan_type()}),
+        .r_chan_t(${name}_pkg::${external_memory_bus.r_chan_type()}),
+        .axi_req_t(${name}_pkg::${external_memory_bus.req_type()}),
+        .axi_rsp_t(${name}_pkg::${external_memory_bus.rsp_type()})
+    ) i_external_memory_${cx}_${cy} (
+        .clk_i(external_memory_clk_${cx}_${cy}),
+        .rst_ni(external_memory_rst_n_${cx}_${cy}),
+        .chip_id_i(chip${cx}${cy}_id_i),
+        .axi_req_i(external_memory_req_${cx}_${cy}),
+        .axi_rsp_o(external_memory_rsp_${cx}_${cy})
+    );
+    %endif
     // =============================================
     // Chiplet (${cx}, ${cy})
     // =============================================
@@ -182,6 +221,21 @@ module dut (
         .io_boot_mode_i       (const_zero),
         .io_chip_id_i         (chip${cx}${cy}_id_i),
         .io_clk_obs_o         (chip${cx}${cy}_clk_obs_o),
+    %if external_memory_bus is not None:
+        .external_memory_clk_o(external_memory_clk_${cx}_${cy}),
+        .external_memory_rst_no(external_memory_rst_n_${cx}_${cy}),
+        %for channel, fields in external_memory_channels.items():
+        <%
+            source = "req" if channel in ("aw", "w", "ar") else "rsp"
+            sink = "rsp" if source == "req" else "req"
+        %>
+        .m_axi_external_memory_${channel}valid(external_memory_${source}_${cx}_${cy}.${channel}_valid),
+        .m_axi_external_memory_${channel}ready(external_memory_${sink}_${cx}_${cy}.${channel}_ready),
+        %for field in fields:
+        .m_axi_external_memory_${channel}${field}(external_memory_${source}_${cx}_${cy}.${channel}.${field}),
+        %endfor
+        %endfor
+    %endif
         // PLL
         .io_pll_bypass_i      (chip${cx}${cy}_pll_bypass_i),
         .io_pll_en_i          (chip${cx}${cy}_pll_en_i),

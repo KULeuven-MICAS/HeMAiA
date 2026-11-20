@@ -350,6 +350,10 @@
         "wide_zero_mem": {
             "$ref": "http://pulp-platform.org/occamy/address_range.schema.json"
         },
+        "external_memory": {
+            "description": "Chip-local address range exported as a 512-bit AXI4 master when present.",
+            "$ref": "http://pulp-platform.org/occamy/address_range.schema.json"
+        },
         "peripherals": {
             "$ref": "http://pulp-platform.org/occamy/peripherals.schema.json"
         },

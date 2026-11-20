@@ -1147,6 +1147,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "clog2_nr_cores_per_cluster": clog2(max(1, nr_cores_per_cluster)),
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
+        "external_memory_size": occamy_cfg.get("external_memory", {}).get("length"),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,

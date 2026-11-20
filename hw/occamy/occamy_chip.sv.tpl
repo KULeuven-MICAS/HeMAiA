@@ -159,6 +159,12 @@ import ${name}_pkg::*;
 % if i2c_present:
   output logic [3:0] pad_drv_i2c_o,
 % endif
+% if external_memory_bus is not None:
+  output logic external_memory_clk_o,
+  output logic external_memory_rst_no,
+  output ${external_memory_bus.req_type()} external_memory_req_o,
+  input  ${external_memory_bus.rsp_type()} external_memory_rsp_i,
+% endif
   output logic [3:0] pad_drv_jtag_o
 );
 
@@ -253,6 +259,10 @@ import ${name}_pkg::*;
 % endif
 
   assign rst_host_n = rst_n_vec[0];
+% if external_memory_bus is not None:
+  assign external_memory_clk_o = clk_host;
+  assign external_memory_rst_no = rst_host_n;
+% endif
 % if num_acc_clk_domain:
   assign rst_acc_n = rst_n_vec[1 +: ${num_acc_clk_domain}];
 % endif
@@ -380,6 +390,10 @@ import ${name}_pkg::*;
     .rtc_i              ('0),
     .test_mode_i        (test_mode_i),
     .chip_id_i          (chip_id),
+% if external_memory_bus is not None:
+    .external_memory_req_o,
+    .external_memory_rsp_i,
+% endif
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
     // Control registers
     .hemaia_d2d_link_ctrl_req_o   (hemaia_d2d_link_ctrl_req),

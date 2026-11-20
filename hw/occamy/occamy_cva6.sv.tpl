@@ -112,6 +112,10 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   localparam logic [63:0] ClusterBase           =   ${util.to_sv_hex(cluster_base_addr, 64)};
   localparam logic [63:0] ClusterLength         =   ${util.to_sv_hex(cluster_base_offset, 64)};
 % endif
+% if "external_memory" in occamy_cfg:
+  localparam logic [63:0] ExternalMemoryBase    =   ${util.to_sv_hex(occamy_cfg["external_memory"]["address"], 64)};
+  localparam logic [63:0] ExternalMemoryLength  =   ${util.to_sv_hex(occamy_cfg["external_memory"]["length"], 64)};
+% endif
 
   /////////////////////////
   // CVA6 Configurations //
@@ -253,7 +257,20 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
       CLICNumInterruptSrc: unsigned'(256),
       // Memory Regions
       //    NonIdemp Region
-% if occamy_cfg["clusters"]:
+% if "external_memory" in occamy_cfg:
+  <%
+    region_bases = ["SoCPeriphBase"]
+    region_lengths = ["SoCPeriphLength"]
+    if occamy_cfg["clusters"]:
+        region_bases.append("ClusterBase")
+        region_lengths.append("ClusterLength")
+    region_bases.append("ExternalMemoryBase")
+    region_lengths.append("ExternalMemoryLength")
+  %>
+      NrNonIdempotentRules: unsigned'(${len(region_bases)}),
+      NonIdempotentAddrBase: 1024'({${", ".join(region_bases)}}),
+      NonIdempotentLength:   1024'({${", ".join(region_lengths)}}),
+% elif occamy_cfg["clusters"]:
       NrNonIdempotentRules: unsigned'(2),
       //                            SoC Periph;        Cluster
       NonIdempotentAddrBase: 1024'({SoCPeriphBase,    ClusterBase  }),

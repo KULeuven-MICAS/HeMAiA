@@ -67,6 +67,7 @@ include $(SIM_MKFILE_DIR)/sim.mk
 
 BIN_DIR              ?= bin
 UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
+EXTMEM_DPI_SRC       := $(SIM_MKFILE_DIR)testharness/external_memory/hemaia_external_memory.cc
 
 #####################
 # Simulator options #
@@ -90,6 +91,7 @@ SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 BENDER_TARGETS_FILE := $(ROOT)/target/rtl/src/bender_targets.tmp
 BENDER_TARGETS      := $(shell cat $(BENDER_TARGETS_FILE) 2>/dev/null)
 SIM_COMPILE_SCRIPT_INPUTS := $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock $(SIM_CFG)
+SIM_COMPILE_SCRIPT_INPUTS += $(SIM_MKFILE_DIR)Makefile $(SIM_MKFILE_DIR)sim.mk
 
 VSIM_BENDER += $(BENDER_TARGETS)
 VLT_BENDER  += $(BENDER_TARGETS)
@@ -278,13 +280,14 @@ VLT_FLAGS += -Itestharness  # Include path for testharness utility files
 # C testbench #
 ###############
 
-TB_CC_SOURCES += $(UART_DPI_DIR)/uartdpi.c
+TB_CC_SOURCES += $(UART_DPI_DIR)/uartdpi.c $(EXTMEM_DPI_SRC)
 
 TB_CC_FLAGS  = -std=c++17
 TB_CC_FLAGS +=-I$(UART_DPI_DIR)
 
 # Required C sources for the verilator TB that are linked against the verilated model
 VLT_COBJ += $(VLT_BUILDDIR)/test/uartdpi/uartdpi.o
+VLT_COBJ += $(VLT_BUILDDIR)/test/external_memory/hemaia_external_memory.o
 # Sources from verilator root
 VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated.o
 VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated_dpi.o
@@ -420,6 +423,10 @@ $(VLT_BUILDDIR)/test/uartdpi/uartdpi.o: $(UART_DPI_DIR)/uartdpi.c
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(VLT_CFLAGS) -c $< -o $@
 
+$(VLT_BUILDDIR)/test/external_memory/hemaia_external_memory.o: $(EXTMEM_DPI_SRC)
+	mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
+
 # Link verilated archive wich $(VLT_COBJ)
 $(BIN_DIR)/$(TARGET).vlt: $(VLT_AR) $(VLT_COBJ)
 	mkdir -p $(dir $@)
@@ -522,7 +529,7 @@ $(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
 # $(VCS_SOURCES) is the RTL file list bender resolves for these targets. It is a
 # prerequisite so that editing any .sv -- or regenerating target/rtl/src -- rebuilds
 # the simulation binary.
-$(BIN_DIR)/occamy_chip.vcs: $(VCS_COMPILE_INPUT) $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(VCS_TESTHARNESS_PREREQUISITES)
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_COMPILE_INPUT) $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(VCS_TESTHARNESS_PREREQUISITES) $(TB_CC_SOURCES)
 	bash $(VCS_COMPILE_INPUT) | tee $(VCS_BUILDDIR)/vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \

@@ -85,6 +85,10 @@ module ${name}_soc
   input  ${router2soc_bus.req_type()} router2soc_req_i,
   output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
 % endif
+% if external_memory_bus is not None:
+  output ${external_memory_bus.req_type()} external_memory_req_o,
+  input  ${external_memory_bus.rsp_type()} external_memory_rsp_i,
+% endif
 
   // Interrupts and debug requests
   input  logic [${nr_ipi_targets-1}:0] mtip_i,
@@ -103,6 +107,11 @@ module ${name}_soc
 
   ${module}
 
+% if external_memory_bus is not None:
+  assign external_memory_req_o = ${external_memory_bus.req_name()};
+  assign ${external_memory_bus.rsp_name()} = external_memory_rsp_i;
+
+% endif
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   ///////////////////////////////////////
   // Connections between SoC to Router //
