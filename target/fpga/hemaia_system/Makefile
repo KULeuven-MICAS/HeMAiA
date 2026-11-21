@@ -13,25 +13,30 @@ EXT_JTAG    ?= 1
 
 VIVADO ?= vivado
 
-BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
+BENDER_TARGETS_FILE := $(MKFILE_DIR)../../rtl/src/bender_targets.tmp
+BENDER_TARGETS = $(shell cat $(BENDER_TARGETS_FILE))
 BENDER_TARGETS += -t hemaia
-TARGET_PLATFORM?= vcu128
+TARGET_PLATFORM ?= vpk180
 BENDER_TARGETS += -t $(TARGET_PLATFORM)
+ifeq ($(TARGET_PLATFORM),vpk180)
+	BENDER_TARGETS += -t nod2dphy -t exclude_d2d_link_phy
+endif
 
 default: all
-all: hemaia_system_vcu128
+all: hemaia_system
 
 include $(ROOT)/target/fpga/Makefrag
 
-../hemaia_chip/hemaia_chip:
-	${MAKE} -C ../hemaia_chip hemaia_chip
+CHIP_RECIPE := ../hemaia_chip
+.PHONY: chip_package hemaia_system
+chip_package:
+	$(MAKE) -C $(CHIP_RECIPE) hemaia_chip TARGET_PLATFORM=$(TARGET_PLATFORM) EXT_JTAG=$(EXT_JTAG)
 
-.PHONY: hemaia_system_vcu128
-
-hemaia_system: ../hemaia_chip/hemaia_chip define_defines_includes_no_simset.tcl
+hemaia_system: chip_package define_defines_includes_no_simset.tcl \
+                    hemaia_system_$(TARGET_PLATFORM).tcl hemaia_system_$(TARGET_PLATFORM)_impl.xdc
 	${VIVADO} -mode batch -source hemaia_system_${TARGET_PLATFORM}.tcl -tclargs $(DEBUG) $(EXT_JTAG)
 
-define_defines_includes_no_simset.tcl:
+define_defines_includes_no_simset.tcl: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock $(MKFILE_PATH)
 	${BENDER} script vivado $(BENDER_TARGETS) --only-defines --only-includes --no-simset > $@
 
 clean:

@@ -13,6 +13,9 @@
 `include "apb/typedef.svh"
 
 package ${name}_pkg;
+  // Make the package dependency in APB_TYPEDEF_REQ_T visible to Vivado's source ordering.
+  import apb_pkg::prot_t;
+
   localparam int unsigned MaxTransaction = 16;
 
   // Re-exports
@@ -150,6 +153,14 @@ package ${name}_pkg;
 % endif
 
   ${package}
+
+% if external_memory_bus is not None:
+  localparam addr_t ExternalMemoryBase = ${addr_width}'h${format(external_memory["address"], "x")};
+  localparam addr_t ExternalMemorySize = ${addr_width}'h${format(external_memory["length"], "x")};
+  typedef logic [${external_memory_bus.iw - 1}:0] external_memory_id_t;
+  typedef ${external_memory_bus.req_type()} external_memory_req_t;
+  typedef ${external_memory_bus.rsp_type()} external_memory_resp_t;
+% endif
 
 endpackage
 // verilog_lint: waive-off line-length

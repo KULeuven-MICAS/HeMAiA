@@ -21,18 +21,17 @@ BENDER_TARGETS += -t $(TARGET_PLATFORM)
 BENDER_TARGETS += -t westonly
 
 default: all
-all: hemaia_system_vcu128
+all: hemaia_system_west
 
 include $(ROOT)/target/fpga/Makefrag
 
-../hemaia_chip_west_io/hemaia_chip_west: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock
-	${MAKE} -C ../hemaia_chip_west_io hemaia_chip_west
+CHIP_RECIPE := ../hemaia_chip_west_io
+.PHONY: chip_package hemaia_system_west
+chip_package:
+	$(MAKE) -C $(CHIP_RECIPE) hemaia_chip_west TARGET_PLATFORM=$(TARGET_PLATFORM) EXT_JTAG=$(EXT_JTAG)
 
-.PHONY: hemaia_system_vcu128
-
-hemaia_system_west: ../hemaia_chip_west_io/hemaia_chip_west define_defines_includes_no_simset.tcl \
-                    hemaia_system_$(TARGET_PLATFORM).tcl hemaia_system_$(TARGET_PLATFORM)_impl.xdc \
-                    ../hemaia_d2d_clock_constraints.tcl
+hemaia_system_west: chip_package define_defines_includes_no_simset.tcl \
+                    hemaia_system_$(TARGET_PLATFORM).tcl hemaia_system_$(TARGET_PLATFORM)_impl.xdc ../hemaia_d2d_clock_constraints.tcl
 	${VIVADO} -mode batch -source hemaia_system_${TARGET_PLATFORM}.tcl -tclargs $(DEBUG) $(EXT_JTAG)
 
 define_defines_includes_no_simset.tcl: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock

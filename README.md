@@ -149,7 +149,7 @@ make hemaia_system_vcs
 
 ### Perform FPGA Prototype
 
-HeMAiA now only provides the support for AMD Versal VPK180 board. Vivado 2023.2 is required.
+HeMAiA now only provides the support for AMD Versal VPK180 board. The VPK180 recipes use Vivado 2025.2. See the [DRAM configuration and build instructions](target/fpga/common/README.md).
 
 - Prepare the compilation script for Vivado inside the container:
 

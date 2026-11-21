@@ -1,3 +1,6 @@
 /hemaia_chip
 /xgui
 /define-sources.tcl
+/.Xil/
+/component.xml
+/dram_bridge/

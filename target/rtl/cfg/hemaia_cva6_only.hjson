@@ -178,7 +178,7 @@
     },
     external_memory: {
       address: 137438953472, // 0x20_0000_0000
-      length: 17179869184,  // 16 GiB, exclusive end 0x24_0000_0000
+      length: 12884901888,  // 12 GiB, exclusive end 0x23_0000_0000
     },
     sys_idma_cfg: {
       address: 83886080, // 0x0500_0000

@@ -762,7 +762,9 @@ def main():
     if args.pkg_sv:
         pkg_kwargs = occamy.get_pkg_kwargs(occamy_cfg, cluster_generators, util, args.name)
         write_template(args.pkg_sv, outdir, **pkg_kwargs,
-                       package=solder.code_package)
+                       package=solder.code_package,
+                       external_memory_bus=external_memory_bus,
+                       external_memory=external_memory)
 
     ################
     # CVA6 Wrapper #

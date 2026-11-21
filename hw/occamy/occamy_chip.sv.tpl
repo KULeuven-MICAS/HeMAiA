@@ -22,7 +22,12 @@
   use_vendor_pll = 1 if pll_present else 0
 %>
 
-`ifdef TARGET_NORTHONLY
+`ifdef TARGET_NOD2DPHY
+`define NORTH_IO (0)
+`define EAST_IO (0)
+`define WEST_IO (0)
+`define SOUTH_IO (0)
+`elsif TARGET_NORTHONLY
 `define NORTH_IO (1)
 `define EAST_IO (0)
 `define WEST_IO (0)

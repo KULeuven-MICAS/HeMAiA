@@ -36,6 +36,8 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
    return 1
 }
 
+source [file join $script_folder .. common hemaia_vpk180_dram.tcl]
+
 ################################################################
 # START
 ################################################################
@@ -441,8 +443,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net west_test_being_requested_i_0_1  [get_bd_ports west_test_being_requested_i_0] \
   [get_bd_pins ilvector_logic_1/Op2]
 
-  # Create address segments
-
+  hemaia_connect_dram $occamy_chip $versal_cips_0 [get_bd_pins ilvector_logic_0/Res]
 
   # Restore current instance
   current_bd_instance $oldCurInst

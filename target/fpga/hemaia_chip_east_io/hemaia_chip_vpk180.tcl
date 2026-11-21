@@ -25,7 +25,7 @@ if {[llength $locked_ips] > 0} {
     upgrade_ip $locked_ips
 }
 
-# synth_ip $adder_ip
+# Elaborating the mixed-language D2D PHY needs the adder checkpoint.
 generate_target all [get_ips c_adder_256]
 create_ip_run [get_ips c_adder_256]
 launch_runs c_adder_256_synth_1
@@ -53,7 +53,10 @@ update_compile_order -fileset sources_1
 wait_on_run c_adder_256_synth_1
 synth_design -rtl -name rtl_1
 
+source ../common/hemaia_fpga_ip_ports.tcl
+set dram_ports [hemaia_elaborated_port_widths {external_memory_req_o external_memory_rsp_i}]
 ipx::package_project -root_dir . -vendor MICAS_KUL -library user -taxonomy /UserIP -set_current true
+hemaia_apply_packaged_port_widths [ipx::current_core] $dram_ports
 
 # Clock interface
 ipx::infer_bus_interface clk_i xilinx.com:signal:clock_rtl:1.0 [ipx::current_core]
@@ -68,3 +71,5 @@ ipx::update_checksums [ipx::current_core]
 ipx::save_core [ipx::current_core]
 ipx::check_integrity [ipx::current_core]
 ipx::save_core [ipx::current_core]
+
+source ../common/hemaia_package_vpk180_dram.tcl

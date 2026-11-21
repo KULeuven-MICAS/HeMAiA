@@ -18,10 +18,19 @@ set nproc [exec nproc]
 set project hemaia_system_east
 
 create_project $project ./$project -force -part xcvp1802-lsvc4072-2MP-e-S
+if {[info exists ::env(HEMAIA_VIVADO_IP_CACHE)] && $::env(HEMAIA_VIVADO_IP_CACHE) ne ""} {
+    config_ip_cache -use_cache_location [file normalize $::env(HEMAIA_VIVADO_IP_CACHE)]
+}
 set_property board_part xilinx.com:vpk180:part0:1.2 [current_project]
 set_property XPM_LIBRARIES XPM_MEMORY [current_project]
 
-set_property ip_repo_paths ../hemaia_chip_east_io [current_project]
+set chip_repo [file normalize ../hemaia_chip_east_io]
+set ip_repos [list $chip_repo]
+set dram_repo [file join $chip_repo dram_bridge]
+if {[file exists [file join $dram_repo component.xml]]} {
+    lappend ip_repos $dram_repo
+}
+set_property ip_repo_paths $ip_repos [current_project]
 update_ip_catalog
 
 # Create block design
@@ -56,11 +65,19 @@ generate_target all [get_files ./hemaia_system_east/hemaia_system_east.srcs/sour
 export_ip_user_files -of_objects [get_files ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -no_script -sync -force -quiet
 create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
 
-# Re-add hemaia chip includes
+# Restore the Bender include paths in the generated IP synthesis file sets.
 set build hemaia_system_east
 
 export_ip_user_files -of_objects [get_ips occamy_chip] -no_script -sync -force -quiet
-eval [exec sed {s/current_fileset/get_filesets hemaia_system_occamy_chip_0/} define_defines_includes_no_simset.tcl]
+set bender_config_file [open define_defines_includes_no_simset.tcl r]
+set bender_config [read $bender_config_file]
+close $bender_config_file
+foreach ip {occamy_chip dram_bridge} {
+    set ip_sources [get_filesets -quiet hemaia_system_${ip}_0]
+    if {[llength $ip_sources]} {
+        eval [string map [list current_fileset "get_filesets $ip_sources"] $bender_config]
+    }
+}
 
 # Do NOT insert BUFGs on high-fanout nets (e.g. reset). This will backfire during placement.
 set_param logicopt.enableBUFGinsertHFN no

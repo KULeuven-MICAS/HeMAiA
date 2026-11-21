@@ -33,30 +33,6 @@ set_property PULLUP TRUE [get_ports uart_cts_ni]
 set_property PACKAGE_PIN CD50 [get_ports uart_rts_no]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no]
 
-# Six-wires SPIx4 (Slave)
-# J1.39 - LA09_N - CD46
-set_property PACKAGE_PIN CD46 [get_ports spis_sd_io[0]]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[0]]
-# J1.37 - LA09_P - CC45
-set_property PACKAGE_PIN CC45 [get_ports spis_sd_io[1]]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[1]]
-# J1.35 - LA08_N - BY50
-set_property PACKAGE_PIN BY50 [get_ports spis_sd_io[2]]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[2]]
-# J1.33 - LA08_P - BY49
-set_property PACKAGE_PIN BY49 [get_ports spis_sd_io[3]]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[3]]
-# J1.31 - LA07_N - CC50
-set_property PACKAGE_PIN CC50 [get_ports spis_csb_i]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_csb_i]
-# J1.29 - LA07_P - CB49
-set_property PACKAGE_PIN CB49 [get_ports spis_sck_i]
-set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
-
-create_clock -period 50.0 -name spi_s_sck [get_ports spis_sck_i]
-set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets spis_sck_i_IBUF]
-set_property CLOCK_DEDICATED_ROUTE ANY_CMT_REGION [get_nets spis_sck_i_IBUF_BUFGCE]
-
 # Four-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]
 set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[0]]
@@ -73,9 +49,6 @@ set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[3]]
 set_false_path -from [get_ports reset] -to [all_registers]
 set_property PACKAGE_PIN BT48 [get_ports reset]
 set_property IOSTANDARD LVCMOS15 [get_ports reset]
-
-# Set RTC as false path
-set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
 
 ################################################################################
 # Clock Domains
@@ -98,20 +71,6 @@ create_generated_clock \
     -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
     -divide_by 6 \
     [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o]
-
-create_generated_clock \
-    -name clk_acc \
-    -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
-    -divide_by 6 \
-    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o]
-
-set_clock_groups -asynchronous \
-    -group {clk_pl_0 clk_main} \
-    -group {clk_core} \
-    -group {clk_acc} \
-    -group {clk_pl_1} \
-    -group {clk_pl_2 clk_peri} \
-    -group {spi_s_sck}
 
 # CDC 2phase clearable of DM: i_cdc_resp/i_cdc_req
 # CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req, async_ack, async_data.
